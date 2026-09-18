@@ -97,9 +97,9 @@ fn write_workspace(workspace: &Path) {
 }
 
 #[test]
-fn complete_v2_flow_preserves_source_and_journal() {
-    let root = temporary("v2-store");
-    let repo = temporary("v2-repo");
+fn complete_flow_preserves_source_and_journal() {
+    let root = temporary("store");
+    let repo = temporary("repo");
     git(&repo, &["init"]);
     git(&repo, &["config", "user.email", "test@example.com"]);
     git(&repo, &["config", "user.name", "Test"]);
@@ -166,10 +166,6 @@ fn complete_v2_flow_preserves_source_and_journal() {
         );
         refs.push(reference(&finalized, "artifact"));
     }
-    let mut support = BTreeMap::new();
-    support.insert("a".into(), vec!["R-1".into()]);
-    support.insert("b".into(), vec!["R-1".into()]);
-    support.insert("c".into(), vec!["R-1".into()]);
     let proposal = ConsensusProposal {
         requirements: vec![ConsensusRequirement {
             requirement: Requirement {
@@ -179,7 +175,8 @@ fn complete_v2_flow_preserves_source_and_journal() {
                 condition: None,
                 governing: false,
             },
-            support,
+            supporters: vec!["a".into(), "b".into(), "c".into()],
+            source_refs: BTreeMap::new(),
         }],
         comparison_md: "# Comparison\n\nAll slots agree.\n".into(),
         selection_rationale: "coherent".into(),
@@ -254,15 +251,16 @@ fn complete_v2_flow_preserves_source_and_journal() {
                 state: CoverageState::Pass,
                 rationale: "tested".into(),
                 evidence: vec!["test".into()],
+                correction: String::new(),
             },
             Coverage {
                 requirement_id: "GOV-1".into(),
                 state: CoverageState::NotApplicable,
                 rationale: "already preserved by scope".into(),
                 evidence: vec![],
+                correction: String::new(),
             },
         ],
-        findings: vec![],
         assessor_context: "fresh".into(),
     };
     let assessment_path = root.join("assessment.json");
@@ -322,13 +320,9 @@ fn audit_coverage_controls_verdict() {
                 condition: None,
                 governing: false,
             },
-            support: BTreeMap::new(),
+            supporters: vec!["a".into(), "b".into()],
+            source_refs: BTreeMap::new(),
         }],
-        exclusions: vec![],
-        implementation_latitude: vec![],
-        verification_expectations: vec![],
-        common_supporters: vec!["a".into(), "b".into()],
-        dissent: vec![],
     };
     let reference = |kind: ArtifactKind, id: &str| ArtifactRef {
         kind,
@@ -344,8 +338,8 @@ fn audit_coverage_controls_verdict() {
             state: CoverageState::Fail,
             rationale: "broken".into(),
             evidence: vec![],
+            correction: "fix it".into(),
         }],
-        findings: vec![],
         assessor_context: "fresh".into(),
     };
     assert_eq!(

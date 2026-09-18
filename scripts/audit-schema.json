@@ -1,10 +1,9 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["coverage", "findings", "assessor_context"],
+  "required": ["coverage", "assessor_context"],
   "properties": {
-    "coverage": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["requirement_id", "state", "rationale", "evidence"], "properties": {"requirement_id": {"type": "string"}, "state": {"type": "string", "enum": ["pass", "fail", "unknown", "not_applicable"]}, "rationale": {"type": "string"}, "evidence": {"type": "array", "items": {"type": "string"}}}}},
-    "findings": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["kind", "requirement_id", "evidence", "consequence", "bounded_correction"], "properties": {"kind": {"type": "string", "enum": ["implementation_defect", "verification_gap", "authority_defect", "optional_observation"]}, "requirement_id": {"type": ["string", "null"]}, "evidence": {"type": "string"}, "consequence": {"type": "string"}, "bounded_correction": {"type": "string"}}}},
+    "coverage": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["requirement_id", "state", "rationale", "evidence", "correction"], "properties": {"requirement_id": {"type": "string"}, "state": {"type": "string", "enum": ["pass", "fail", "unknown", "not_applicable"]}, "rationale": {"type": "string"}, "evidence": {"type": "array", "items": {"type": "string"}}, "correction": {"type": "string"}}}},
     "assessor_context": {"type": "string"}
   }
 }

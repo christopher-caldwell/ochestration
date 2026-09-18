@@ -2,12 +2,12 @@
 
 use anyhow::{Context, Result, bail, ensure};
 use orchestrate_contracts::{
-    Agreement, AgreementRequirement, ArtifactKind, ArtifactRef, ConsensusProposal, EvidenceNode,
-    Provenance, Requirement, validate_agreement, validate_requirement,
+    Agreement, AgreementRequirement, ArtifactKind, ArtifactRef, ConsensusProposal, Provenance,
+    Requirement, validate_agreement, validate_requirement,
 };
 use orchestrate_core::{Effort, Store, invoke_provider_json};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Comparison {
@@ -24,7 +24,6 @@ pub struct ConsensusResult {
 
 pub fn mandatory_package_support(
     proposal: &ConsensusProposal,
-    nodes_by_slot: &HashMap<String, Vec<EvidenceNode>>,
 ) -> Result<(Vec<AgreementRequirement>, HashSet<String>)> {
     let mut ids = HashSet::new();
     let mut common: Option<HashSet<String>> = None;
@@ -40,29 +39,23 @@ pub fn mandatory_package_support(
             "duplicate Consensus requirement id {}",
             item.requirement.id
         );
-        let supporters: HashSet<_> = item.support.keys().cloned().collect();
+        let supporters: HashSet<_> = item.supporters.iter().cloned().collect();
         ensure!(
             supporters.len() >= 2,
             "Consensus requirement {} lacks two supporting slots",
             item.requirement.id
         );
-        for (slot, ids) in &item.support {
+        for slot in &supporters {
             ensure!(
                 matches!(slot.as_str(), "a" | "b" | "c"),
                 "unknown supporter slot {slot}"
             );
-            let nodes = nodes_by_slot
-                .get(slot)
-                .context("supporter slot lacks Discovery nodes")?;
-            for id in ids {
-                let node = nodes.iter().find(|node| node.id == *id).ok_or_else(|| {
-                    anyhow::anyhow!("support reference {id} does not exist in slot {slot}")
-                })?;
-                ensure!(
-                    matches!(node.status, orchestrate_contracts::EvidenceStatus::Accepted),
-                    "support reference {id} in slot {slot} is not accepted"
-                );
-            }
+        }
+        for slot in item.source_refs.keys() {
+            ensure!(
+                supporters.contains(slot),
+                "source references for {slot} lack a corresponding supporter"
+            );
         }
         common = Some(match common {
             Some(current) => current.intersection(&supporters).cloned().collect(),
@@ -70,7 +63,8 @@ pub fn mandatory_package_support(
         });
         requirements.push(AgreementRequirement {
             requirement: item.requirement.clone(),
-            support: item.support.clone(),
+            supporters: item.supporters.clone(),
+            source_refs: item.source_refs.clone(),
         });
     }
     Ok((requirements, common.unwrap_or_default()))
@@ -90,14 +84,13 @@ pub fn finalize(
         serde_json::json!({"inputs":refs.iter().map(|r|&r.artifact_id).collect::<Vec<_>>()}),
     )?;
     let mut opinions = BTreeMap::new();
-    let mut nodes_by_slot = HashMap::new();
     let mut public_specs = Vec::new();
     for reference in &refs {
         ensure!(
             reference.kind == ArtifactKind::Discovery,
             "consensus needs Discovery artifacts"
         );
-        let (envelope, summary, nodes) =
+        let (envelope, summary, _) =
             orchestrate_discovery::load_discovery(store, effort, reference)?;
         ensure!(
             envelope.outcome == "IMPLEMENTATION_READY" && summary.outcome == "IMPLEMENTATION_READY",
@@ -115,7 +108,6 @@ pub fn finalize(
         {
             bail!("duplicate Discovery slot");
         }
-        nodes_by_slot.insert(summary.slot.clone(), nodes);
         public_specs.push(summary.slot);
     }
     ensure!(
@@ -126,7 +118,7 @@ pub fn finalize(
         "all three distinct eligible slots are required"
     );
     let outcome = (|| -> Result<ConsensusResult> {
-        let (mut requirements, common) = mandatory_package_support(&proposal, &nodes_by_slot)?;
+        let (mut requirements, common) = mandatory_package_support(&proposal)?;
         let eligible =
             !proposal.counterexample_blocks && !requirements.is_empty() && common.len() >= 2;
         let reason = if proposal.counterexample_blocks {
@@ -185,7 +177,8 @@ pub fn finalize(
                     condition: None,
                     governing: true,
                 },
-                support: BTreeMap::new(),
+                supporters: vec![],
+                source_refs: BTreeMap::new(),
             });
         }
         let agreement_id = format!("agreement-{}", suffix());
@@ -196,15 +189,6 @@ pub fn finalize(
             baseline_commit: effort.cohort.baseline_commit.clone(),
             goal: effort.context.request.clone(),
             requirements,
-            exclusions: vec!["No minority-only scope is mandatory.".into()],
-            implementation_latitude: vec![
-                "Choose ordinary technical details consistent with the Agreement.".into(),
-            ],
-            verification_expectations: vec![
-                "Audit every stable requirement ID with attributable evidence.".into(),
-            ],
-            common_supporters: common.into_iter().collect(),
-            dissent: proposal.dissent.clone(),
         };
         validate_agreement(&agreement)?;
         let mut agreement_files = BTreeMap::new();
@@ -238,7 +222,7 @@ pub fn finalize(
         Err(error) => {
             let _ = store.append_journal(
                 effort,
-                "consensus_rejected",
+                "finalization_rejected",
                 None,
                 serde_json::json!({"reason":error.to_string()}),
             );
@@ -311,10 +295,6 @@ fn render_agreement(agreement: &Agreement) -> String {
         if item.requirement.governing {
             out.push_str("\n_Governing user requirement._\n");
         }
-    }
-    out.push_str("\n## Dissent\n");
-    for dissent in &agreement.dissent {
-        out.push_str(&format!("\n- {dissent}"));
     }
     out.push('\n');
     out

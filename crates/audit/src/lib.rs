@@ -3,7 +3,7 @@
 use anyhow::{Result, ensure};
 use orchestrate_contracts::{
     Adoption, Agreement, ArtifactKind, ArtifactRef, AuditAssessment, AuditReport, Coverage,
-    Finding, Implementation, ImplementationStatus, Provenance, Verdict, derive_verdict,
+    Implementation, ImplementationStatus, Provenance, Verdict, derive_verdict,
 };
 use orchestrate_core::{Effort, Store, invoke_provider_json, now_ms};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,6 @@ use std::{collections::BTreeMap, path::Path, process::Command};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AuditProposal {
     pub coverage: Vec<Coverage>,
-    pub findings: Vec<Finding>,
     pub assessor_context: String,
 }
 
@@ -107,9 +106,6 @@ pub fn register_implementation(
         target_tree: snapshot.tree,
         producer_declaration: declaration,
         status,
-        declared_checks: vec![],
-        deviations: vec![],
-        unresolved_questions: vec![],
     };
     let mut files = BTreeMap::new();
     files.insert(
@@ -266,7 +262,6 @@ pub fn run_provider(
             adoption: adoption_ref,
             implementation: implementation_ref,
             coverage: response.value.coverage,
-            findings: response.value.findings,
             assessor_context: response.value.assessor_context,
         },
         provenance,

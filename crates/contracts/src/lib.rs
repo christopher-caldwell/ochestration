@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 use sha2::{Digest, Sha256};
 
-pub const SCHEMA_VERSION: u32 = 2;
-pub const STORE_FORMAT_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
+pub const STORE_FORMAT_VERSION: u32 = 3;
 pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -38,19 +38,16 @@ pub struct PayloadDigest {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Provenance {
     pub host: String,
-    pub execution_provider: Option<String>,
-    pub requested_model: Option<String>,
-    pub observed_model: Option<String>,
-    pub requested_effort: Option<String>,
-    pub observed_effort: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
     pub guide_digest: String,
     pub independence: Independence,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Independence {
-    InputExcludedCooperative,
-    AccessEnforced,
+    InputExcluded,
     Compromised,
     Unknown,
 }
@@ -141,7 +138,9 @@ pub struct DiscoverySubmission {
 pub struct ConsensusRequirement {
     pub requirement: Requirement,
     #[serde(default)]
-    pub support: BTreeMap<String, Vec<String>>,
+    pub supporters: Vec<String>,
+    #[serde(default)]
+    pub source_refs: BTreeMap<String, Vec<String>>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ConsensusProposal {
@@ -156,7 +155,9 @@ pub struct ConsensusProposal {
 pub struct AgreementRequirement {
     pub requirement: Requirement,
     #[serde(default)]
-    pub support: BTreeMap<String, Vec<String>>,
+    pub supporters: Vec<String>,
+    #[serde(default)]
+    pub source_refs: BTreeMap<String, Vec<String>>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Agreement {
@@ -166,11 +167,6 @@ pub struct Agreement {
     pub baseline_commit: String,
     pub goal: String,
     pub requirements: Vec<AgreementRequirement>,
-    pub exclusions: Vec<String>,
-    pub implementation_latitude: Vec<String>,
-    pub verification_expectations: Vec<String>,
-    pub common_supporters: Vec<String>,
-    pub dissent: Vec<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Adoption {
@@ -194,12 +190,6 @@ pub struct Implementation {
     pub target_tree: String,
     pub producer_declaration: String,
     pub status: ImplementationStatus,
-    #[serde(default)]
-    pub declared_checks: Vec<String>,
-    #[serde(default)]
-    pub deviations: Vec<String>,
-    #[serde(default)]
-    pub unresolved_questions: Vec<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -215,22 +205,7 @@ pub struct Coverage {
     pub state: CoverageState,
     pub rationale: String,
     pub evidence: Vec<String>,
-}
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum FindingKind {
-    ImplementationDefect,
-    VerificationGap,
-    AuthorityDefect,
-    OptionalObservation,
-}
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Finding {
-    pub kind: FindingKind,
-    pub requirement_id: Option<String>,
-    pub evidence: String,
-    pub consequence: String,
-    pub bounded_correction: String,
+    pub correction: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AuditAssessment {
@@ -238,7 +213,6 @@ pub struct AuditAssessment {
     pub adoption: ArtifactRef,
     pub implementation: ArtifactRef,
     pub coverage: Vec<Coverage>,
-    pub findings: Vec<Finding>,
     pub assessor_context: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -375,10 +349,6 @@ pub fn validate_agreement(agreement: &Agreement) -> Result<()> {
             item.requirement.id
         );
     }
-    ensure!(
-        agreement.common_supporters.len() >= 2,
-        "agreement lacks a strict common majority"
-    );
     Ok(())
 }
 pub fn derive_verdict(
@@ -491,8 +461,134 @@ fn reject_duplicate_json_keys(bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn agreement() -> Agreement {
+        Agreement {
+            agreement_id: "agreement".into(),
+            context_id: "context".into(),
+            cohort_id: "cohort".into(),
+            baseline_commit: "baseline".into(),
+            goal: "goal".into(),
+            requirements: vec!["R-1", "R-2"]
+                .into_iter()
+                .map(|id| AgreementRequirement {
+                    requirement: Requirement {
+                        id: id.into(),
+                        text: "required behavior".into(),
+                        acceptance: "proof".into(),
+                        condition: None,
+                        governing: false,
+                    },
+                    supporters: vec!["a".into(), "b".into()],
+                    source_refs: BTreeMap::new(),
+                })
+                .collect(),
+        }
+    }
+
+    fn assessment(coverage: Vec<Coverage>) -> AuditAssessment {
+        let reference = |kind: ArtifactKind, id: &str| ArtifactRef {
+            kind,
+            artifact_id: id.into(),
+            digest: "d".repeat(64),
+        };
+        AuditAssessment {
+            agreement: reference(ArtifactKind::Agreement, "agreement"),
+            adoption: reference(ArtifactKind::Adoption, "adoption"),
+            implementation: reference(ArtifactKind::Implementation, "implementation"),
+            coverage,
+            assessor_context: "test".into(),
+        }
+    }
+
+    fn row(id: &str, state: CoverageState) -> Coverage {
+        Coverage {
+            requirement_id: id.into(),
+            state,
+            rationale: "assessed".into(),
+            evidence: vec!["test".into()],
+            correction: String::new(),
+        }
+    }
+
     #[test]
     fn duplicate_keys_fail() {
         assert!(decode::<serde_json::Value>(br#"{\"x\":1,\"x\":2}"#).is_err());
+    }
+
+    #[test]
+    fn failed_requirement_cannot_pass() {
+        assert_eq!(
+            derive_verdict(
+                &agreement(),
+                &assessment(vec![
+                    row("R-1", CoverageState::Fail),
+                    row("R-2", CoverageState::Pass)
+                ]),
+                &ImplementationStatus::Submitted,
+            )
+            .unwrap(),
+            Verdict::ChangesRequired
+        );
+    }
+
+    #[test]
+    fn unknown_requirement_cannot_pass() {
+        assert_eq!(
+            derive_verdict(
+                &agreement(),
+                &assessment(vec![
+                    row("R-1", CoverageState::Unknown),
+                    row("R-2", CoverageState::Pass)
+                ]),
+                &ImplementationStatus::Submitted,
+            )
+            .unwrap(),
+            Verdict::Blocked
+        );
+    }
+
+    #[test]
+    fn missing_coverage_cannot_pass() {
+        assert_eq!(
+            derive_verdict(
+                &agreement(),
+                &assessment(vec![row("R-1", CoverageState::Pass)]),
+                &ImplementationStatus::Submitted,
+            )
+            .unwrap(),
+            Verdict::Blocked
+        );
+    }
+
+    #[test]
+    fn partial_implementation_cannot_pass() {
+        assert_eq!(
+            derive_verdict(
+                &agreement(),
+                &assessment(vec![
+                    row("R-1", CoverageState::Pass),
+                    row("R-2", CoverageState::Pass)
+                ]),
+                &ImplementationStatus::Partial,
+            )
+            .unwrap(),
+            Verdict::Blocked
+        );
+    }
+
+    #[test]
+    fn passed_and_justified_not_applicable_requirements_can_pass() {
+        let mut not_applicable = row("R-2", CoverageState::NotApplicable);
+        not_applicable.rationale = "requirement does not apply to this target".into();
+        assert_eq!(
+            derive_verdict(
+                &agreement(),
+                &assessment(vec![row("R-1", CoverageState::Pass), not_applicable]),
+                &ImplementationStatus::Submitted,
+            )
+            .unwrap(),
+            Verdict::Pass
+        );
     }
 }

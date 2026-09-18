@@ -211,17 +211,13 @@ enum Skills {
 struct ProvenanceArgs {
     #[arg(long, default_value = "operator")]
     host: String,
-    #[arg(long = "execution-provider")]
-    execution_provider: Option<String>,
     #[arg(long)]
-    requested_model: Option<String>,
+    provider: Option<String>,
     #[arg(long)]
-    observed_model: Option<String>,
-    #[arg(long)]
-    requested_effort: Option<String>,
-    #[arg(long)]
-    observed_effort: Option<String>,
-    #[arg(long,default_value="input_excluded_cooperative",value_parser=parse_independence)]
+    model: Option<String>,
+    #[arg(long = "model-effort")]
+    model_effort: Option<String>,
+    #[arg(long,default_value="input_excluded",value_parser=parse_independence)]
     independence: orchestrate_contracts::Independence,
 }
 
@@ -609,11 +605,9 @@ impl ProvenanceArgs {
     fn for_guide(self, guide: &str) -> Provenance {
         Provenance {
             host: self.host,
-            execution_provider: self.execution_provider,
-            requested_model: self.requested_model,
-            observed_model: self.observed_model,
-            requested_effort: self.requested_effort,
-            observed_effort: self.observed_effort,
+            provider: self.provider,
+            model: self.model,
+            effort: self.model_effort,
             guide_digest: orchestrate_contracts::digest_bytes(guide.as_bytes()),
             independence: self.independence,
         }
@@ -623,15 +617,10 @@ fn parse_independence(
     value: &str,
 ) -> std::result::Result<orchestrate_contracts::Independence, String> {
     match value {
-        "input_excluded_cooperative" => {
-            Ok(orchestrate_contracts::Independence::InputExcludedCooperative)
-        }
-        "access_enforced" => Ok(orchestrate_contracts::Independence::AccessEnforced),
+        "input_excluded" => Ok(orchestrate_contracts::Independence::InputExcluded),
         "compromised" => Ok(orchestrate_contracts::Independence::Compromised),
         "unknown" => Ok(orchestrate_contracts::Independence::Unknown),
-        _ => Err(
-            "expected input_excluded_cooperative, access_enforced, compromised, or unknown".into(),
-        ),
+        _ => Err("expected input_excluded, compromised, or unknown".into()),
     }
 }
 fn parse_status(value: &str) -> Result<ImplementationStatus> {

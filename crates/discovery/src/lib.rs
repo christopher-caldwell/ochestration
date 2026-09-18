@@ -139,12 +139,6 @@ pub fn finalize(
     outcome: Option<&str>,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
-    store.append_journal(
-        effort,
-        "discovery_finalization_started",
-        Some(run_id),
-        serde_json::json!({}),
-    )?;
     let validated = match validate(store, effort, run_id, outcome) {
         Ok(value) => value,
         Err(error) => {
@@ -317,25 +311,6 @@ fn parse_node(input: &str) -> Result<EvidenceNode> {
 }
 fn validate_technical_spec(spec: &str) -> Result<()> {
     ensure!(!spec.trim().is_empty(), "technical-spec.md is empty");
-    let lower = spec.to_ascii_lowercase();
-    for heading in [
-        "interpreted request",
-        "current behavior",
-        "recommendation",
-        "required changes",
-        "unchanged behavior",
-        "decisions",
-        "requirements",
-        "conditions",
-        "alternatives",
-        "limitations",
-        "verification",
-    ] {
-        ensure!(
-            lower.contains(heading),
-            "technical-spec.md lacks required section: {heading}"
-        );
-    }
     Ok(())
 }
 fn validate_graph(nodes: &[EvidenceNode]) -> Result<()> {
@@ -348,6 +323,14 @@ fn validate_graph(nodes: &[EvidenceNode]) -> Result<()> {
         );
     }
     for node in nodes {
+        validate_evidence_node(node)?;
+        ensure!(
+            node.kind != EvidenceKind::Finding
+                || node.status != EvidenceStatus::Accepted
+                || node.sources.iter().any(|source| !source.trim().is_empty()),
+            "accepted finding {} needs at least one source reference",
+            node.id
+        );
         for dep in &node.depends_on {
             ensure!(
                 map.contains_key(dep.as_str()),
@@ -395,6 +378,17 @@ fn validate_ready(nodes: &[EvidenceNode]) -> Result<()> {
                 "required question {} lacks a final disposition",
                 node.id
             );
+            if node.status == EvidenceStatus::Resolved {
+                ensure!(
+                    nodes.iter().any(|candidate| {
+                        candidate.kind == EvidenceKind::Finding
+                            && candidate.status == EvidenceStatus::Accepted
+                            && candidate.depends_on.iter().any(|id| id == &node.id)
+                    }),
+                    "resolved required question {} lacks a downstream accepted finding",
+                    node.id
+                );
+            }
         }
     }
     let mut memo = HashMap::new();
@@ -480,4 +474,46 @@ fn suffix() -> String {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos())
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: &str, kind: EvidenceKind, status: EvidenceStatus) -> EvidenceNode {
+        EvidenceNode {
+            id: id.into(),
+            kind,
+            status,
+            depends_on: vec![],
+            sources: vec!["src/lib.rs:1".into()],
+            required: false,
+            mandatory: false,
+            title: id.into(),
+            body: "evidence".into(),
+        }
+    }
+
+    #[test]
+    fn technical_spec_needs_content_not_prescribed_headings() {
+        assert!(validate_technical_spec("A useful technical specification.").is_ok());
+    }
+
+    #[test]
+    fn accepted_findings_need_a_nonempty_source() {
+        let mut finding = node("F-1", EvidenceKind::Finding, EvidenceStatus::Accepted);
+        finding.sources = vec![" ".into()];
+        assert!(validate_graph(&[finding]).is_err());
+    }
+
+    #[test]
+    fn resolved_required_question_needs_an_accepted_finding() {
+        let mut question = node("Q-1", EvidenceKind::Question, EvidenceStatus::Resolved);
+        question.required = true;
+        assert!(validate_ready(&[question.clone()]).is_err());
+
+        let mut finding = node("F-1", EvidenceKind::Finding, EvidenceStatus::Accepted);
+        finding.depends_on = vec![question.id.clone()];
+        assert!(validate_ready(&[question, finding]).is_ok());
+    }
 }

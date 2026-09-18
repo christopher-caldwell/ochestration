@@ -28,7 +28,7 @@ orchestrate skills install --prefix /absolute/path
 
 The machine-readable result always separates `operation_status` from `semantic_outcome`. `build` is deliberately not a CLI phase or installed skill: the v0.1 boundary is `implementation register`.
 
-Artifacts use schema v2. Existing v1 stores are intentionally rejected rather than migrated. `manifest.json` hashes every public file; the journal is diagnostic only and may be absent after a hard crash without invalidating authority.
+Artifacts use schema v3. Existing stores use an intentionally incompatible format and are rejected rather than migrated. `manifest.json` hashes every public file; the journal is diagnostic only and may be absent after a hard crash without invalidating authority.
 
 ## Qualification
 

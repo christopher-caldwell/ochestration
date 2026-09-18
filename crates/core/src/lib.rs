@@ -686,7 +686,7 @@ impl Store {
     }
 }
 
-pub const TECHNICAL_SPEC_TEMPLATE: &str = "# Technical specification\n\n## Interpreted request\n\n## Current behavior\n\n## Recommendation\n\n## Required changes\n\n## Unchanged behavior\n\n## Decisions and rationale\n\n## Requirements and acceptance criteria\n\n## Conditions\n\n## Alternatives or disagreement\n\n## Limitations\n\n## Verification\n";
+pub const TECHNICAL_SPEC_TEMPLATE: &str = "# Technical specification\n\n";
 pub fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
