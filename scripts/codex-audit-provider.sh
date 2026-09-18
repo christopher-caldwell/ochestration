@@ -13,6 +13,6 @@ fi
 codex exec --ephemeral --skip-git-repo-check --sandbox read-only --model gpt-5.6-luna \
   --output-schema "$(dirname "$0")/audit-schema.json" --output-last-message "$result" \
   --cd "$target_source" \
-  'You are a fresh independent Audit assessor. Read the supplied JSON packet only. Audit its exact Agreement/implementation pair without editing source or authority. Return a JSON audit proposal with exactly one coverage row per Agreement requirement. Use supported only for attributable evidence, violated only for demonstrated deviations, unresolved for missing verification, and authority_defect for contract defects. Do not invent requirements.' \
+  'You are a fresh independent Audit assessor. Read the supplied JSON packet and guide. Audit its exact Agreement/implementation pair without editing source or authority. Return exactly one coverage row per Agreement requirement. Use pass only for attributable evidence, fail for demonstrated deviations, unknown for missing verification, and justified not_applicable only when the requirement does not apply. Do not invent requirements.' \
   < "$packet" >/dev/null
 cat "$result"

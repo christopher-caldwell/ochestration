@@ -17,6 +17,6 @@ fi
 codex exec --ephemeral --skip-git-repo-check --sandbox read-only --model gpt-5.6-luna \
   --output-schema "$(dirname "$0")/opinion-schema.json" --output-last-message "$result" \
   --cd "$source_path" \
-  'You are one independent Discovery investigator. Read the JSON packet provided on stdin and inspect only its frozen source workspace. Do not inspect parent directories, user homes, peer records, or unrelated files. Return only a JSON Opinion matching the schema. Address all six mandatory check categories: intent, current_behavior, contracts, edge_cases, verification, and risks. If a consequential product decision is missing, state it in blockers; otherwise provide a substantive scoped recommendation and adversarial review.' \
+  'You are one independent Discovery investigator. Read the JSON packet and its guide, and inspect only its frozen source workspace. Do not inspect parent directories, user homes, peer records, or unrelated files. Return only a DiscoverySubmission matching the schema: a standalone technical specification and evidence nodes. Record source references and dependencies. Mark a required question blocked only for a genuine product blocker.' \
   < "$packet" >/dev/null
 cat "$result"

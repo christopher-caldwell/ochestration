@@ -1,13 +1,13 @@
-//! External implementation registration and independent Audit contract validation.
+//! Explicit Agreement adoption, external implementation registration, and Audit validation.
 
 use anyhow::{Result, ensure};
 use orchestrate_contracts::{
     Adoption, Agreement, ArtifactKind, ArtifactRef, AuditAssessment, AuditReport, Coverage,
-    Finding, Implementation, Provenance, artifact_ref, derive_verdict,
+    Finding, Implementation, ImplementationStatus, Provenance, Verdict, derive_verdict,
 };
-use orchestrate_core::{Effort, Store, invoke_provider_json};
+use orchestrate_core::{Effort, Store, invoke_provider_json, now_ms};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
+use std::{collections::BTreeMap, path::Path, process::Command};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AuditProposal {
@@ -20,64 +20,66 @@ pub fn adopt(
     store: &Store,
     effort: &Effort,
     agreement_ref: ArtifactRef,
-    authorized_by: String,
-    scope: String,
+    authorization_label: String,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
     ensure!(
         agreement_ref.kind == ArtifactKind::Agreement,
         "only an Agreement can be adopted"
     );
-    ensure!(
-        store
-            .lineage_invalidation(effort, &agreement_ref)?
-            .is_none(),
-        "Agreement authority has an invalidated lineage"
-    );
-    let (envelope, _agreement): (_, Agreement) = store.load_artifact(effort, &agreement_ref)?;
+    let (envelope, _): (_, Agreement) =
+        store.load_json(effort, &agreement_ref, "agreement.json")?;
     ensure!(
         envelope.outcome == "ELIGIBLE_CANDIDATE",
         "Agreement is not eligible for adoption"
     );
     let adoption = Adoption {
         agreement: agreement_ref.clone(),
-        authorized_by,
-        execution_scope: scope,
+        authorization_label,
+        adopted_at_ms: now_ms(),
     };
-    store.publish(
+    let mut files = BTreeMap::new();
+    files.insert(
+        "adoption.json".into(),
+        orchestrate_contracts::encode(&adoption)?,
+    );
+    let reference = store.publish_bundle(
         effort,
         "agreement",
         ArtifactKind::Adoption,
-        format!("adoption-{}", suffix()),
-        "ADOPTED".to_owned(),
+        format!("adoption-{}", now_ms()),
+        "ADOPTED".into(),
         vec![agreement_ref],
         provenance,
-        &adoption,
-    )
+        files,
+    )?;
+    store.append_journal(
+        effort,
+        "agreement_adopted",
+        None,
+        serde_json::json!({"artifact":reference.artifact_id}),
+    )?;
+    Ok(reference)
 }
 
-#[allow(clippy::too_many_arguments)] // This is the explicit external Build handoff contract.
+#[allow(clippy::too_many_arguments)]
 pub fn register_implementation(
     store: &Store,
     effort: &Effort,
     adoption_ref: ArtifactRef,
-    repo: &std::path::Path,
+    repo: &Path,
     commit: &str,
     declaration: String,
-    status: String,
+    status: ImplementationStatus,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
     ensure!(
         adoption_ref.kind == ArtifactKind::Adoption,
         "implementation needs an adoption receipt"
     );
-    ensure!(
-        store.lineage_invalidation(effort, &adoption_ref)?.is_none(),
-        "adoption authority has an invalidated lineage"
-    );
-    let (_adoption_envelope, adoption): (_, Adoption) =
-        store.load_artifact(effort, &adoption_ref)?;
-    let (_, agreement): (_, Agreement) = store.load_artifact(effort, &adoption.agreement)?;
+    let (_, adoption): (_, Adoption) = store.load_json(effort, &adoption_ref, "adoption.json")?;
+    let (_, agreement): (_, Agreement) =
+        store.load_json(effort, &adoption.agreement, "agreement.json")?;
     let project = store.project_for(effort)?;
     ensure!(
         std::fs::canonicalize(repo)? == project.canonical_locator,
@@ -105,20 +107,32 @@ pub fn register_implementation(
         target_tree: snapshot.tree,
         producer_declaration: declaration,
         status,
-        declared_checks: Vec::new(),
-        deviations: Vec::new(),
-        unresolved_questions: Vec::new(),
+        declared_checks: vec![],
+        deviations: vec![],
+        unresolved_questions: vec![],
     };
-    store.publish(
+    let mut files = BTreeMap::new();
+    files.insert(
+        "implementation.json".into(),
+        orchestrate_contracts::encode(&implementation)?,
+    );
+    let reference = store.publish_bundle(
         effort,
         "build",
         ArtifactKind::Implementation,
-        format!("implementation-{}", suffix()),
-        "REGISTERED_EXTERNAL".to_owned(),
+        format!("implementation-{}", now_ms()),
+        "REGISTERED_EXTERNAL".into(),
         vec![adoption_ref],
         provenance,
-        &implementation,
-    )
+        files,
+    )?;
+    store.append_journal(
+        effort,
+        "implementation_registered",
+        None,
+        serde_json::json!({"artifact":reference.artifact_id,"commit":implementation.target_commit}),
+    )?;
+    Ok(reference)
 }
 
 pub fn finalize_audit(
@@ -133,82 +147,77 @@ pub fn finalize_audit(
             && assessment.implementation.kind == ArtifactKind::Implementation,
         "audit parent kinds are invalid"
     );
-    for parent in [
-        &assessment.agreement,
-        &assessment.adoption,
-        &assessment.implementation,
-    ] {
-        ensure!(
-            store.lineage_invalidation(effort, parent)?.is_none(),
-            "audit authority has an invalidated lineage"
-        );
-    }
-    let (_, agreement): (_, Agreement) = store.load_artifact(effort, &assessment.agreement)?;
-    let (_, adoption): (_, Adoption) = store.load_artifact(effort, &assessment.adoption)?;
+    let (_, agreement): (_, Agreement) =
+        store.load_json(effort, &assessment.agreement, "agreement.json")?;
+    let (_, adoption): (_, Adoption) =
+        store.load_json(effort, &assessment.adoption, "adoption.json")?;
     ensure!(
         adoption.agreement == assessment.agreement,
         "audit adoption is for another Agreement"
     );
     let (_, implementation): (_, Implementation) =
-        store.load_artifact(effort, &assessment.implementation)?;
+        store.load_json(effort, &assessment.implementation, "implementation.json")?;
     ensure!(
         implementation.adoption == assessment.adoption
             && implementation.agreement == assessment.agreement,
         "audit implementation is for another authority"
     );
-    let verdict = derive_verdict(&agreement, &assessment)?;
+    let verdict = derive_verdict(&agreement, &assessment, &implementation.status)?;
     let report = AuditReport {
         assessment,
         verdict: verdict.clone(),
     };
     let outcome = match verdict {
-        orchestrate_contracts::Verdict::Pass => "PASS",
-        orchestrate_contracts::Verdict::ChangesRequired => "CHANGES_REQUIRED",
-        orchestrate_contracts::Verdict::Blocked => "BLOCKED",
+        Verdict::Pass => "PASS",
+        Verdict::ChangesRequired => "CHANGES_REQUIRED",
+        Verdict::Blocked => "BLOCKED",
     };
-    store.publish(
+    let mut files = BTreeMap::new();
+    files.insert("audit.json".into(), orchestrate_contracts::encode(&report)?);
+    let reference = store.publish_bundle(
         effort,
         "audit",
         ArtifactKind::Audit,
-        format!("audit-{}", suffix()),
-        outcome.to_owned(),
+        format!("audit-{}", now_ms()),
+        outcome.into(),
         vec![
             report.assessment.agreement.clone(),
             report.assessment.adoption.clone(),
             report.assessment.implementation.clone(),
         ],
         provenance,
-        &report,
-    )
+        files,
+    )?;
+    store.append_journal(
+        effort,
+        "audit_finalized",
+        None,
+        serde_json::json!({"artifact":reference.artifact_id,"outcome":outcome}),
+    )?;
+    Ok(reference)
 }
 
-/// Runs a fresh assessor over immutable public authority and implementation contracts only.
+#[allow(clippy::too_many_arguments)]
 pub fn run_provider(
     store: &Store,
     effort: &Effort,
     agreement_ref: ArtifactRef,
     adoption_ref: ArtifactRef,
     implementation_ref: ArtifactRef,
-    provider: &std::path::Path,
+    provider: &Path,
+    guide: &str,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
-    for parent in [&agreement_ref, &adoption_ref, &implementation_ref] {
-        ensure!(
-            store.lineage_invalidation(effort, parent)?.is_none(),
-            "audit authority has an invalidated lineage"
-        );
-    }
-    let (_, agreement): (_, Agreement) = store.load_artifact(effort, &agreement_ref)?;
-    let (_, adoption): (_, Adoption) = store.load_artifact(effort, &adoption_ref)?;
+    let (_, agreement): (_, Agreement) =
+        store.load_json(effort, &agreement_ref, "agreement.json")?;
+    let (_, adoption): (_, Adoption) = store.load_json(effort, &adoption_ref, "adoption.json")?;
     let (_, implementation): (_, Implementation) =
-        store.load_artifact(effort, &implementation_ref)?;
+        store.load_json(effort, &implementation_ref, "implementation.json")?;
     ensure!(
-        adoption.agreement == agreement_ref,
-        "adoption is for another Agreement"
-    );
-    ensure!(
-        implementation.adoption == adoption_ref && implementation.agreement == agreement_ref,
-        "implementation is for another authority"
+        adoption.agreement == agreement_ref
+            && implementation.adoption == adoption_ref
+            && implementation.agreement == agreement_ref,
+        "audit authority chain is inconsistent"
     );
     let target_source = store
         .root()
@@ -219,8 +228,32 @@ pub fn run_provider(
         target_source.exists(),
         "retained exact implementation source is missing"
     );
-    let packet = serde_json::json!({"phase":"audit", "agreement_ref":agreement_ref, "adoption_ref":adoption_ref, "implementation_ref":implementation_ref, "agreement":agreement, "implementation":implementation, "target_source":target_source});
-    let response = invoke_provider_json::<_, AuditProposal>(provider, &packet, 1_048_576)?;
+    store.append_journal(
+        effort,
+        "provider_started",
+        None,
+        serde_json::json!({"phase":"audit"}),
+    )?;
+    let packet = serde_json::json!({"phase":"audit","agreement_ref":agreement_ref,"adoption_ref":adoption_ref,"implementation_ref":implementation_ref,"agreement":agreement,"implementation":implementation,"target_source":target_source,"guide":guide});
+    let response = invoke_provider_json::<_, AuditProposal>(provider, &packet, 1_048_576);
+    let response = match response {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = store.append_journal(
+                effort,
+                "provider_failed",
+                None,
+                serde_json::json!({"reason":e.to_string()}),
+            );
+            return Err(e);
+        }
+    };
+    store.append_journal(
+        effort,
+        "provider_completed",
+        None,
+        serde_json::json!({"phase":"audit"}),
+    )?;
     let agreement_ref: ArtifactRef = serde_json::from_value(packet["agreement_ref"].clone())?;
     let adoption_ref: ArtifactRef = serde_json::from_value(packet["adoption_ref"].clone())?;
     let implementation_ref: ArtifactRef =
@@ -238,15 +271,4 @@ pub fn run_provider(
         },
         provenance,
     )
-}
-
-pub fn ref_from_manifest(envelope: &orchestrate_contracts::Envelope, bytes: &[u8]) -> ArtifactRef {
-    artifact_ref(envelope, bytes)
-}
-fn suffix() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos())
-        .to_string()
 }

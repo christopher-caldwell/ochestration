@@ -1,12 +1,11 @@
 {
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["positions", "adopted_requirement_ids", "selection_rationale", "dissent", "counterexample_blocks"],
+  "type": "object", "additionalProperties": false,
+  "required": ["requirements", "comparison_md", "selection_rationale", "dissent", "counterexample_blocks"],
   "properties": {
-    "positions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["requirement", "positions"], "properties": {"requirement": {"type": "object", "additionalProperties": false, "required": ["id", "text", "acceptance", "condition", "governing"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "acceptance": {"type": "string"}, "condition": {"type": ["string", "null"]}, "governing": {"type": "boolean"}}}, "positions": {"type": "object", "additionalProperties": false, "required": ["a", "b", "c"], "properties": {"a": {"type": "string", "enum": ["supports", "contradicts", "related", "not_observed"]}, "b": {"type": "string", "enum": ["supports", "contradicts", "related", "not_observed"]}, "c": {"type": "string", "enum": ["supports", "contradicts", "related", "not_observed"]}}}}}},
-    "adopted_requirement_ids": {"type": "array", "items": {"type": "string"}},
-    "selection_rationale": {"type": "string"},
-    "dissent": {"type": "array", "items": {"type": "string"}},
-    "counterexample_blocks": {"type": "boolean"}
+    "requirements": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["requirement", "support"], "properties": {
+      "requirement": {"type": "object", "additionalProperties": false, "required": ["id", "text", "acceptance", "condition", "governing"], "properties": {"id":{"type":"string"},"text":{"type":"string"},"acceptance":{"type":"string"},"condition":{"type":["string","null"]},"governing":{"type":"boolean"}}},
+      "support": {"type":"object", "additionalProperties": false, "properties": {"a":{"type":"array","items":{"type":"string"}},"b":{"type":"array","items":{"type":"string"}},"c":{"type":"array","items":{"type":"string"}}}}
+    }}},
+    "comparison_md": {"type":"string"}, "selection_rationale":{"type":"string"}, "dissent":{"type":"array","items":{"type":"string"}}, "counterexample_blocks":{"type":"boolean"}
   }
 }

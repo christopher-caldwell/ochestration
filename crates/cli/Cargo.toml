@@ -20,6 +20,8 @@ serde_json.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+serde_yaml.workspace = true
+
 orchestrate-core = { path = "../core" }
 
 [lints]

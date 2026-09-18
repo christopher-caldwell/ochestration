@@ -1,15 +1,13 @@
+use anyhow::{Context, Result, bail, ensure};
+use clap::{Args, Parser, Subcommand};
+use orchestrate_contracts::{
+    ArtifactRef, AuditAssessment, ConsensusProposal, ImplementationStatus, Provenance,
+};
+use orchestrate_core::Store;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
-use anyhow::{Context, Result, bail, ensure};
-use clap::{Args, Parser, Subcommand};
-use orchestrate_contracts::{
-    ArtifactKind, ArtifactRef, AuditAssessment, ConsensusProposal, Invalidation, Opinion,
-    Provenance,
-};
-use orchestrate_core::Store;
 
 const DISCOVERY_GUIDE: &str = include_str!("../resources/guides/discovery.md");
 const CONSENSUS_GUIDE: &str = include_str!("../resources/guides/consensus.md");
@@ -22,7 +20,6 @@ const AUDIT_GUIDE: &str = include_str!("../resources/guides/audit.md");
     about = "Inspectable Discovery → Consensus → external Build → Audit"
 )]
 struct Cli {
-    /// External orchestration root. Defaults to ~/.orchestration.
     #[arg(long, global = true)]
     root: Option<PathBuf>,
     #[command(subcommand)]
@@ -51,7 +48,7 @@ enum Command {
         #[command(subcommand)]
         command: AuditCommand,
     },
-    Invalidate(Invalidate),
+    Journal(SelectEffort),
     Status(SelectEffort),
     Inspect(Inspect),
     Lineage(Inspect),
@@ -86,19 +83,6 @@ struct Inspect {
     #[arg(long)]
     artifact: String,
 }
-#[derive(Args)]
-struct Invalidate {
-    #[arg(long)]
-    effort: String,
-    #[arg(long)]
-    artifact: String,
-    #[arg(long)]
-    reason: String,
-    #[arg(long)]
-    declared_by: String,
-    #[command(flatten)]
-    provenance: ProvenanceArgs,
-}
 #[derive(Subcommand)]
 enum Discovery {
     Prepare {
@@ -106,6 +90,14 @@ enum Discovery {
         effort: String,
         #[arg(long)]
         slot: String,
+    },
+    Validate {
+        #[arg(long)]
+        effort: String,
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        outcome: Option<String>,
     },
     Run {
         #[arg(long)]
@@ -121,7 +113,9 @@ enum Discovery {
         #[arg(long)]
         effort: String,
         #[arg(long)]
-        opinion: PathBuf,
+        run: String,
+        #[arg(long)]
+        outcome: Option<String>,
         #[command(flatten)]
         provenance: ProvenanceArgs,
     },
@@ -144,7 +138,7 @@ enum Consensus {
         #[arg(long = "opinion")]
         opinions: Vec<String>,
         #[arg(long)]
-        proposal: PathBuf,
+        bundle: PathBuf,
         #[command(flatten)]
         provenance: ProvenanceArgs,
     },
@@ -157,9 +151,7 @@ enum AgreementCommand {
         #[arg(long)]
         agreement: String,
         #[arg(long)]
-        authorized_by: String,
-        #[arg(long, default_value = "external implementation registration")]
-        scope: String,
+        authorization_label: String,
         #[command(flatten)]
         provenance: ProvenanceArgs,
     },
@@ -203,7 +195,7 @@ enum AuditCommand {
         #[arg(long)]
         effort: String,
         #[arg(long)]
-        assessment: PathBuf,
+        bundle: PathBuf,
         #[command(flatten)]
         provenance: ProvenanceArgs,
     },
@@ -229,15 +221,14 @@ struct ProvenanceArgs {
     requested_effort: Option<String>,
     #[arg(long)]
     observed_effort: Option<String>,
-    #[arg(long, default_value = "input_excluded_cooperative")]
-    #[arg(value_parser = parse_independence)]
+    #[arg(long,default_value="input_excluded_cooperative",value_parser=parse_independence)]
     independence: orchestrate_contracts::Independence,
 }
 
 fn main() {
     if let Err(error) = run() {
         eprintln!("orchestrate: {error:#}");
-        std::process::exit(2);
+        std::process::exit(2)
     }
 }
 fn run() -> Result<()> {
@@ -256,18 +247,35 @@ fn execute(store: Store, command: Command) -> Result<()> {
             output(
                 "SUCCESS",
                 "COHORT_CREATED",
-                serde_json::json!({"effort": effort.id, "cohort": effort.cohort.id, "baseline": effort.cohort.baseline_commit}),
+                serde_json::json!({"effort":effort.id,"cohort":effort.cohort.id,"baseline":effort.cohort.baseline_commit}),
             );
         }
         Command::Discovery {
             command: Discovery::Prepare { effort, slot },
         } => {
             let effort = store.load_effort(&effort)?;
-            let (run_id, source) = orchestrate_discovery::prepare(&store, &effort, &slot)?;
+            let (run, workspace) = orchestrate_discovery::prepare(&store, &effort, &slot)?;
             output(
                 "SUCCESS",
                 "PREPARED",
-                serde_json::json!({"run": run_id, "frozen_source": source}),
+                serde_json::json!({"run":run,"workspace":workspace,"frozen_source":workspace.join("source")}),
+            );
+        }
+        Command::Discovery {
+            command:
+                Discovery::Validate {
+                    effort,
+                    run,
+                    outcome,
+                },
+        } => {
+            let effort = store.load_effort(&effort)?;
+            let result =
+                orchestrate_discovery::validate(&store, &effort, &run, outcome.as_deref())?;
+            output(
+                "SUCCESS",
+                "VALID",
+                serde_json::json!({"summary":result.summary,"nodes":result.nodes.len()}),
             );
         }
         Command::Discovery {
@@ -285,30 +293,36 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 &effort,
                 &slot,
                 &provider,
-                provenance.into(),
+                DISCOVERY_GUIDE,
+                provenance.for_guide(DISCOVERY_GUIDE),
             )?;
             output(
                 "SUCCESS",
                 "FINALIZED",
-                serde_json::json!({"artifact": reference}),
+                serde_json::json!({"artifact":reference}),
             );
         }
         Command::Discovery {
             command:
                 Discovery::Finalize {
                     effort,
-                    opinion,
+                    run,
+                    outcome,
                     provenance,
                 },
         } => {
             let effort = store.load_effort(&effort)?;
-            let opinion: Opinion = json_file(&opinion)?;
-            let reference =
-                orchestrate_discovery::finalize(&store, &effort, opinion, provenance.into())?;
+            let reference = orchestrate_discovery::finalize(
+                &store,
+                &effort,
+                &run,
+                outcome.as_deref(),
+                provenance.for_guide(DISCOVERY_GUIDE),
+            )?;
             output(
                 "SUCCESS",
                 "FINALIZED",
-                serde_json::json!({"artifact": reference}),
+                serde_json::json!({"artifact":reference}),
             );
         }
         Command::Consensus {
@@ -320,24 +334,15 @@ fn execute(store: Store, command: Command) -> Result<()> {
                     provenance,
                 },
         } => {
-            ensure!(
-                opinions.len() == 3,
-                "exactly three --opinion selectors are required"
-            );
             let effort = store.load_effort(&effort)?;
-            let refs: Vec<_> = opinions
-                .iter()
-                .map(|id| store.find_artifact_ref(&effort, id))
-                .collect::<Result<_>>()?;
-            let refs: [ArtifactRef; 3] = refs
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("three opinions required"))?;
+            let refs = three_refs(&store, &effort, opinions)?;
             let result = orchestrate_consensus::run_provider(
                 &store,
                 &effort,
                 refs,
                 &provider,
-                provenance.into(),
+                CONSENSUS_GUIDE,
+                provenance.for_guide(CONSENSUS_GUIDE),
             )?;
             output(
                 "SUCCESS",
@@ -346,7 +351,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 } else {
                     "NO_CONSENSUS"
                 },
-                serde_json::json!({"comparison": result.comparison, "agreement": result.agreement}),
+                serde_json::json!({"comparison":result.comparison,"agreement":result.agreement}),
             );
         }
         Command::Consensus {
@@ -354,29 +359,19 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 Consensus::Finalize {
                     effort,
                     opinions,
-                    proposal,
+                    bundle,
                     provenance,
                 },
         } => {
-            ensure!(
-                opinions.len() == 3,
-                "exactly three --opinion selectors are required"
-            );
             let effort = store.load_effort(&effort)?;
-            let refs: Vec<_> = opinions
-                .iter()
-                .map(|id| store.find_artifact_ref(&effort, id))
-                .collect::<Result<_>>()?;
-            let refs: [ArtifactRef; 3] = refs
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("three opinions required"))?;
-            let proposal: ConsensusProposal = json_file(&proposal)?;
+            let refs = three_refs(&store, &effort, opinions)?;
+            let proposal: ConsensusProposal = json_file(&bundle_file(&bundle, "proposal.json"))?;
             let result = orchestrate_consensus::finalize(
                 &store,
                 &effort,
                 refs,
                 proposal,
-                provenance.into(),
+                provenance.for_guide(CONSENSUS_GUIDE),
             )?;
             output(
                 "SUCCESS",
@@ -385,7 +380,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 } else {
                     "NO_CONSENSUS"
                 },
-                serde_json::json!({"comparison": result.comparison, "agreement": result.agreement}),
+                serde_json::json!({"comparison":result.comparison,"agreement":result.agreement}),
             );
         }
         Command::Agreement {
@@ -393,8 +388,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 AgreementCommand::Adopt {
                     effort,
                     agreement,
-                    authorized_by,
-                    scope,
+                    authorization_label,
                     provenance,
                 },
         } => {
@@ -403,14 +397,13 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 &store,
                 &effort,
                 store.find_artifact_ref(&effort, &agreement)?,
-                authorized_by,
-                scope,
-                provenance.into(),
+                authorization_label,
+                provenance.for_guide(CONSENSUS_GUIDE),
             )?;
             output(
                 "SUCCESS",
                 "ADOPTED",
-                serde_json::json!({"adoption": reference}),
+                serde_json::json!({"adoption":reference}),
             );
         }
         Command::Implementation {
@@ -426,6 +419,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 },
         } => {
             let effort = store.load_effort(&effort)?;
+            let status = parse_status(&status)?;
             let reference = orchestrate_audit::register_implementation(
                 &store,
                 &effort,
@@ -434,12 +428,12 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 &commit,
                 declaration,
                 status,
-                provenance.into(),
+                provenance.for_guide(CONSENSUS_GUIDE),
             )?;
             output(
                 "SUCCESS",
                 "REGISTERED_EXTERNAL",
-                serde_json::json!({"implementation": reference, "build": "DEFERRED_EXTERNAL_ONLY"}),
+                serde_json::json!({"implementation":reference}),
             );
         }
         Command::Audit {
@@ -461,54 +455,43 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 store.find_artifact_ref(&effort, &adoption)?,
                 store.find_artifact_ref(&effort, &implementation)?,
                 &provider,
-                provenance.into(),
+                AUDIT_GUIDE,
+                provenance.for_guide(AUDIT_GUIDE),
             )?;
             output(
                 "SUCCESS",
                 "ASSESSMENT_FINALIZED",
-                serde_json::json!({"audit": reference}),
-            );
-        }
-        Command::Invalidate(args) => {
-            let effort = store.load_effort(&args.effort)?;
-            let target = store.find_artifact_ref(&effort, &args.artifact)?;
-            let notice = Invalidation {
-                target: target.clone(),
-                reason: args.reason,
-                declared_by: args.declared_by,
-            };
-            let reference = store.publish(
-                &effort,
-                "invalidation",
-                ArtifactKind::Invalidation,
-                format!("invalidation-{}", timestamp_suffix()),
-                "INVALIDATED".to_owned(),
-                vec![target],
-                args.provenance.into(),
-                &notice,
-            )?;
-            output(
-                "SUCCESS",
-                "INVALIDATED",
-                serde_json::json!({"notice": reference}),
+                serde_json::json!({"audit":reference}),
             );
         }
         Command::Audit {
             command:
                 AuditCommand::Finalize {
                     effort,
-                    assessment,
+                    bundle,
                     provenance,
                 },
         } => {
             let effort = store.load_effort(&effort)?;
-            let assessment: AuditAssessment = json_file(&assessment)?;
-            let reference =
-                orchestrate_audit::finalize_audit(&store, &effort, assessment, provenance.into())?;
+            let assessment: AuditAssessment = json_file(&bundle_file(&bundle, "assessment.json"))?;
+            let reference = orchestrate_audit::finalize_audit(
+                &store,
+                &effort,
+                assessment,
+                provenance.for_guide(AUDIT_GUIDE),
+            )?;
             output(
                 "SUCCESS",
                 "ASSESSMENT_FINALIZED",
-                serde_json::json!({"audit": reference}),
+                serde_json::json!({"audit":reference}),
+            );
+        }
+        Command::Journal(args) => {
+            let effort = store.load_effort(&args.effort)?;
+            output(
+                "SUCCESS",
+                "READ_ONLY",
+                serde_json::to_value(store.read_journal(&effort)?)?,
             );
         }
         Command::Status(args) => {
@@ -516,16 +499,17 @@ fn execute(store: Store, command: Command) -> Result<()> {
             output(
                 "SUCCESS",
                 "READ_ONLY",
-                serde_json::json!({"effort": effort, "artifacts": store.list_artifacts(&effort)?}),
+                serde_json::json!({"effort":effort,"artifacts":store.list_artifacts(&effort)?}),
             );
         }
         Command::Inspect(args) => {
             let effort = store.load_effort(&args.effort)?;
             let reference = store.find_artifact_ref(&effort, &args.artifact)?;
+            let (envelope, files) = store.load_bundle(&effort, &reference)?;
             output(
                 "SUCCESS",
                 "READ_ONLY",
-                serde_json::to_value(store.load_envelope(&effort, &reference)?)?,
+                serde_json::json!({"manifest":envelope,"files":files.keys().collect::<Vec<_>>() }),
             );
         }
         Command::Lineage(args) => {
@@ -534,14 +518,28 @@ fn execute(store: Store, command: Command) -> Result<()> {
             output(
                 "SUCCESS",
                 "READ_ONLY",
-                serde_json::json!({"artifact": reference, "nodes": store.reconstruct_lineage(&effort, &reference)?}),
+                serde_json::json!({"artifact":reference,"nodes":store.reconstruct_lineage(&effort,&reference)?}),
             );
         }
-        Command::Guide { .. } | Command::Skills { .. } => {
-            unreachable!("handled before store setup")
-        }
+        Command::Guide { .. } | Command::Skills { .. } => unreachable!(),
     }
     Ok(())
+}
+fn three_refs(
+    store: &Store,
+    effort: &orchestrate_core::Effort,
+    opinions: Vec<String>,
+) -> Result<[ArtifactRef; 3]> {
+    ensure!(
+        opinions.len() == 3,
+        "exactly three --opinion selectors are required"
+    );
+    opinions
+        .iter()
+        .map(|id| store.find_artifact_ref(effort, id))
+        .collect::<Result<Vec<_>>>()?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("three opinions required"))
 }
 fn store(root: Option<PathBuf>) -> Result<Store> {
     Store::open(root.unwrap_or_else(default_root))
@@ -557,11 +555,18 @@ fn json_file<T: for<'a> serde::Deserialize<'a>>(path: &Path) -> Result<T> {
         &fs::read(path).with_context(|| format!("cannot read {}", path.display()))?,
     )
 }
+fn bundle_file(bundle: &Path, filename: &str) -> PathBuf {
+    if bundle.is_dir() {
+        bundle.join(filename)
+    } else {
+        bundle.to_owned()
+    }
+}
 fn output(operation_status: &str, semantic_outcome: &str, details: serde_json::Value) {
     println!(
         "{}",
-        serde_json::json!({"operation_status": operation_status, "semantic_outcome": semantic_outcome, "details": details})
-    );
+        serde_json::json!({"operation_status":operation_status,"semantic_outcome":semantic_outcome,"details":details})
+    )
 }
 fn guide(phase: Option<String>) -> Result<()> {
     match phase.as_deref() {
@@ -584,41 +589,36 @@ fn skills(command: Skills) -> Result<()> {
             ] {
                 let dir = prefix.join(name);
                 fs::create_dir_all(&dir)?;
-                let marker = dir.join(".orchestrate-owned");
-                let skill = dir.join("SKILL.md");
-                let content = format!(
-                    "---\nname: {name}\ndisable-model-invocation: true\n---\n\nRun `orchestrate guide {phase}` and follow only that fixed phase.\n"
-                );
-                if skill.exists() && fs::read_to_string(&skill)? != content && !marker.exists() {
-                    bail!("refusing to overwrite unowned skill {}", skill.display());
-                }
-                fs::write(&skill, content)?;
-                fs::write(marker, "orchestrate 0.1\n")?;
+                fs::write(
+                    dir.join("SKILL.md"),
+                    format!(
+                        "---\nname: {name}\ndisable-model-invocation: true\n---\n\nRun `orchestrate guide {phase}` and follow that phase boundary.\n"
+                    ),
+                )?;
             }
             output(
                 "SUCCESS",
                 "SKILLS_INSTALLED",
-                serde_json::json!({"prefix": prefix}),
+                serde_json::json!({"prefix":prefix}),
             );
         }
-    };
+    }
     Ok(())
 }
-impl From<ProvenanceArgs> for Provenance {
-    fn from(value: ProvenanceArgs) -> Self {
-        Self {
-            host: value.host,
-            execution_provider: value.execution_provider,
-            requested_model: value.requested_model,
-            observed_model: value.observed_model,
-            requested_effort: value.requested_effort,
-            observed_effort: value.observed_effort,
-            guide_digest: orchestrate_contracts::digest_bytes(b"orchestrate-guides-v0.1"),
-            independence: value.independence,
+impl ProvenanceArgs {
+    fn for_guide(self, guide: &str) -> Provenance {
+        Provenance {
+            host: self.host,
+            execution_provider: self.execution_provider,
+            requested_model: self.requested_model,
+            observed_model: self.observed_model,
+            requested_effort: self.requested_effort,
+            observed_effort: self.observed_effort,
+            guide_digest: orchestrate_contracts::digest_bytes(guide.as_bytes()),
+            independence: self.independence,
         }
     }
 }
-
 fn parse_independence(
     value: &str,
 ) -> std::result::Result<orchestrate_contracts::Independence, String> {
@@ -630,16 +630,15 @@ fn parse_independence(
         "compromised" => Ok(orchestrate_contracts::Independence::Compromised),
         "unknown" => Ok(orchestrate_contracts::Independence::Unknown),
         _ => Err(
-            "expected input_excluded_cooperative, access_enforced, compromised, or unknown"
-                .to_owned(),
+            "expected input_excluded_cooperative, access_enforced, compromised, or unknown".into(),
         ),
     }
 }
-
-fn timestamp_suffix() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos())
-        .to_string()
+fn parse_status(value: &str) -> Result<ImplementationStatus> {
+    match value {
+        "submitted" => Ok(ImplementationStatus::Submitted),
+        "partial" => Ok(ImplementationStatus::Partial),
+        "blocked" => Ok(ImplementationStatus::Blocked),
+        _ => bail!("implementation status must be submitted, partial, or blocked"),
+    }
 }
