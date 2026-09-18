@@ -481,6 +481,86 @@ fn discovery_workspace_is_self_describing_git_checkout_and_preserves_blockers() 
 }
 
 #[test]
+fn optional_blocked_question_blocks_discovery_and_is_reported() {
+    let root = temporary("optional-blocked-question-store");
+    let repo = temporary("optional-blocked-question-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let init = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "optional-blocked-question",
+            "--request",
+            "change fixture",
+        ],
+    );
+    let effort_id = init["details"]["effort"].as_str().unwrap().to_owned();
+    let prepared = command(
+        &root,
+        &[
+            "discovery",
+            "prepare",
+            "--effort",
+            &effort_id,
+            "--slot",
+            "a",
+        ],
+    );
+    let run = prepared["details"]["run"].as_str().unwrap().to_owned();
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    fs::write(workspace.join("technical-spec.md"), spec()).unwrap();
+    let question = node(
+        "Q-optional-blocked",
+        EvidenceKind::Question,
+        EvidenceStatus::Blocked,
+        vec![],
+        false,
+    );
+    assert!(!question.required);
+    write_node(&workspace, &question);
+
+    let validation = command(
+        &root,
+        &[
+            "discovery",
+            "validate",
+            "--effort",
+            &effort_id,
+            "--run",
+            &run,
+        ],
+    );
+    assert_eq!(validation["semantic_outcome"], "BLOCKED");
+    assert_eq!(validation["details"]["questions"][0]["id"], question.id);
+
+    assert!(
+        command_error(
+            &root,
+            &[
+                "discovery",
+                "validate",
+                "--effort",
+                &effort_id,
+                "--run",
+                &run,
+                "--outcome",
+                "IMPLEMENTATION_READY",
+            ],
+        )
+        .contains("implementation-ready Discovery cannot have a blocked question")
+    );
+}
+
+#[test]
 fn complete_flow_preserves_source_and_journal() {
     let root = temporary("store");
     let repo = temporary("repo");

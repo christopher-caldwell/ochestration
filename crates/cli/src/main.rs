@@ -314,7 +314,6 @@ fn execute(store: Store, command: Command) -> Result<()> {
                     .iter()
                     .filter(|node| {
                         node.kind == EvidenceKind::Question
-                            && node.required
                             && node.status == EvidenceStatus::Blocked
                     })
                     .map(|node| {

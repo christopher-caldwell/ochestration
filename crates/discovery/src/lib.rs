@@ -142,20 +142,23 @@ pub fn validate(
         nodes.push(node);
     }
     validate_graph(&nodes)?;
-    let blocked = nodes.iter().any(|n| {
-        n.kind == EvidenceKind::Question && n.required && n.status == EvidenceStatus::Blocked
-    });
+    let blocked = nodes
+        .iter()
+        .any(|n| n.kind == EvidenceKind::Question && n.status == EvidenceStatus::Blocked);
     let outcome = requested_outcome.unwrap_or(if blocked {
         "BLOCKED"
     } else {
         "IMPLEMENTATION_READY"
     });
     match outcome {
-        "IMPLEMENTATION_READY" => validate_ready(&nodes)?,
-        "BLOCKED" => ensure!(
-            blocked,
-            "blocked Discovery needs a required blocked question"
-        ),
+        "IMPLEMENTATION_READY" => {
+            ensure!(
+                !blocked,
+                "implementation-ready Discovery cannot have a blocked question"
+            );
+            validate_ready(&nodes)?;
+        }
+        "BLOCKED" => ensure!(blocked, "blocked Discovery needs a blocked question"),
         _ => bail!("Discovery outcome must be IMPLEMENTATION_READY or BLOCKED"),
     }
     let summary = DiscoverySummary {
