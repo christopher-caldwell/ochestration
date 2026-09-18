@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/contracts",
+  "crates/core",
+  "crates/discovery",
+  "crates/consensus",
+  "crates/audit",
+  "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Orchestrate contributors"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+wait-timeout = "0.2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

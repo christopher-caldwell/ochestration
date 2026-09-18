@@ -1,0 +1,26 @@
+[package]
+name = "orchestrate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "orchestrate"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+orchestrate-audit = { path = "../audit" }
+orchestrate-consensus = { path = "../consensus" }
+orchestrate-contracts = { path = "../contracts" }
+orchestrate-core = { path = "../core" }
+orchestrate-discovery = { path = "../discovery" }
+serde_json.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+orchestrate-core = { path = "../core" }
+
+[lints]
+workspace = true

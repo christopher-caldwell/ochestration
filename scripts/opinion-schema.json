@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["context_id", "baseline_commit", "slot", "recommendation", "observed_behavior", "requirements", "checks", "blockers", "limitations", "adversarial_review", "review_current"],
+  "properties": {
+    "context_id": {"type": "string"},
+    "baseline_commit": {"type": "string"},
+    "slot": {"type": "string", "enum": ["a", "b", "c"]},
+    "recommendation": {"type": "string"},
+    "observed_behavior": {"type": "string"},
+    "requirements": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["id", "text", "acceptance", "condition", "governing"], "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "acceptance": {"type": "string"}, "condition": {"type": ["string", "null"]}, "governing": {"type": "boolean"}}}},
+    "checks": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["category", "disposition", "rationale", "evidence"], "properties": {"category": {"type": "string"}, "disposition": {"type": "string", "enum": ["completed", "not_applicable", "unavailable", "inaccessible", "pending"]}, "rationale": {"type": "string"}, "evidence": {"type": "array", "items": {"type": "string"}}}}},
+    "blockers": {"type": "array", "items": {"type": "string"}},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "adversarial_review": {"type": "string"},
+    "review_current": {"type": "boolean"}
+  }
+}
