@@ -337,7 +337,7 @@ fn audit_coverage_controls_verdict() {
             requirement_id: "R1".into(),
             state: CoverageState::Fail,
             rationale: "broken".into(),
-            evidence: vec![],
+            evidence: vec!["src/lib.rs:1".into()],
             correction: "fix it".into(),
         }],
         assessor_context: "fresh".into(),

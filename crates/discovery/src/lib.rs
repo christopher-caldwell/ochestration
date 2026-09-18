@@ -367,6 +367,10 @@ fn visit<'a>(
     Ok(())
 }
 fn validate_ready(nodes: &[EvidenceNode]) -> Result<()> {
+    ensure!(
+        !nodes.is_empty(),
+        "implementation-ready Discovery needs at least one evidence node"
+    );
     let map: HashMap<_, _> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     for node in nodes {
         if node.kind == EvidenceKind::Question && node.required {
@@ -504,6 +508,11 @@ mod tests {
         let mut finding = node("F-1", EvidenceKind::Finding, EvidenceStatus::Accepted);
         finding.sources = vec![" ".into()];
         assert!(validate_graph(&[finding]).is_err());
+    }
+
+    #[test]
+    fn implementation_ready_discovery_needs_evidence() {
+        assert!(validate_ready(&[]).is_err());
     }
 
     #[test]

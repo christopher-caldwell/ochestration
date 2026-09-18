@@ -372,7 +372,25 @@ pub fn derive_verdict(
             row.requirement_id
         );
         match row.state {
-            CoverageState::Fail => failed = true,
+            CoverageState::Pass => ensure!(
+                row.evidence
+                    .iter()
+                    .any(|reference| !reference.trim().is_empty()),
+                "pass coverage needs at least one evidence reference"
+            ),
+            CoverageState::Fail => {
+                ensure!(
+                    row.evidence
+                        .iter()
+                        .any(|reference| !reference.trim().is_empty()),
+                    "fail coverage needs at least one evidence reference"
+                );
+                ensure!(
+                    !row.correction.trim().is_empty(),
+                    "fail coverage needs a correction"
+                );
+                failed = true;
+            }
             CoverageState::Unknown => blocked = true,
             CoverageState::NotApplicable if row.rationale.trim().is_empty() => {
                 bail!("not-applicable coverage needs a justification")
@@ -518,17 +536,58 @@ mod tests {
 
     #[test]
     fn failed_requirement_cannot_pass() {
+        let mut failed = row("R-1", CoverageState::Fail);
+        failed.correction = "Fix the required behavior.".into();
         assert_eq!(
             derive_verdict(
                 &agreement(),
-                &assessment(vec![
-                    row("R-1", CoverageState::Fail),
-                    row("R-2", CoverageState::Pass)
-                ]),
+                &assessment(vec![failed, row("R-2", CoverageState::Pass)]),
                 &ImplementationStatus::Submitted,
             )
             .unwrap(),
             Verdict::ChangesRequired
+        );
+    }
+
+    #[test]
+    fn passed_coverage_needs_evidence() {
+        let mut passed = row("R-1", CoverageState::Pass);
+        passed.evidence = vec![" ".into()];
+        assert!(
+            derive_verdict(
+                &agreement(),
+                &assessment(vec![passed, row("R-2", CoverageState::Pass)]),
+                &ImplementationStatus::Submitted,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn failed_coverage_needs_evidence() {
+        let mut failed = row("R-1", CoverageState::Fail);
+        failed.evidence = vec![];
+        failed.correction = "Fix the requirement.".into();
+        assert!(
+            derive_verdict(
+                &agreement(),
+                &assessment(vec![failed, row("R-2", CoverageState::Pass)]),
+                &ImplementationStatus::Submitted,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn failed_coverage_needs_a_correction() {
+        let failed = row("R-1", CoverageState::Fail);
+        assert!(
+            derive_verdict(
+                &agreement(),
+                &assessment(vec![failed, row("R-2", CoverageState::Pass)]),
+                &ImplementationStatus::Submitted,
+            )
+            .is_err()
         );
     }
 

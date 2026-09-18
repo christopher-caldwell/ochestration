@@ -306,3 +306,43 @@ fn suffix() -> String {
         .map_or(0, |d| d.as_nanos())
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orchestrate_contracts::ConsensusRequirement;
+
+    fn requirement(id: &str, supporters: &[&str]) -> ConsensusRequirement {
+        ConsensusRequirement {
+            requirement: Requirement {
+                id: id.into(),
+                text: "required behavior".into(),
+                acceptance: "proof".into(),
+                condition: None,
+                governing: false,
+            },
+            supporters: supporters.iter().map(|slot| (*slot).into()).collect(),
+            source_refs: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn rotating_majorities_do_not_form_an_eligible_package() {
+        let proposal = ConsensusProposal {
+            requirements: vec![
+                requirement("R1", &["a", "b"]),
+                requirement("R2", &["b", "c"]),
+            ],
+            comparison_md: "comparison".into(),
+            selection_rationale: "selection".into(),
+            dissent: vec![],
+            counterexample_blocks: false,
+        };
+
+        let (requirements, common) = mandatory_package_support(&proposal).unwrap();
+        assert_eq!(common, HashSet::from(["b".to_owned()]));
+        let eligible =
+            !proposal.counterexample_blocks && !requirements.is_empty() && common.len() >= 2;
+        assert!(!eligible);
+    }
+}

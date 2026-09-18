@@ -12,7 +12,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
-wait-timeout.workspace = true
 
 [lints]
 workspace = true

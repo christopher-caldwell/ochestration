@@ -7,7 +7,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -16,7 +16,6 @@ use orchestrate_contracts::{
     artifact_ref, decode, digest_bytes, encode, safe_relative_path, validate_envelope,
 };
 use serde::{Deserialize, Serialize};
-use wait_timeout::ChildExt;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProviderObservation<T> {
@@ -45,11 +44,7 @@ pub fn invoke_provider_json<I: Serialize, O: for<'a> Deserialize<'a>>(
         .as_mut()
         .context("provider stdin unavailable")?
         .write_all(&encode(input)?)?;
-    if child.wait_timeout(Duration::from_secs(60))?.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-        bail!("provider exceeded the 60-second execution limit");
-    }
+    drop(child.stdin.take());
     let output = child.wait_with_output()?;
     ensure!(
         output.stdout.len() <= max_output_bytes,
