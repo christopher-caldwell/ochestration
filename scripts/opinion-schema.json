@@ -6,7 +6,7 @@
     "technical_spec": {"type": "string"},
     "nodes": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["id", "kind", "status", "depends_on", "sources", "required", "mandatory", "title", "body"], "properties": {
       "id": {"type": "string"}, "kind": {"type": "string", "enum": ["question", "finding", "decision", "requirement"]},
-      "status": {"type": "string", "enum": ["open", "resolved", "no_change", "blocked", "accepted", "rejected", "invalidated"]},
+      "status": {"type": "string", "enum": ["open", "answered", "no_change", "blocked", "accepted", "rejected", "invalidated"]},
       "depends_on": {"type": "array", "items": {"type": "string"}}, "sources": {"type": "array", "items": {"type": "string"}},
       "required": {"type": "boolean"}, "mandatory": {"type": "boolean"}, "title": {"type": "string"}, "body": {"type": "string"}
     }}}

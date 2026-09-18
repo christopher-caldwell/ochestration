@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand};
 use orchestrate_contracts::{
-    ArtifactRef, AuditAssessment, ConsensusProposal, ImplementationStatus, Provenance,
+    ArtifactRef, AuditAssessment, ConsensusProposal, EvidenceKind, EvidenceStatus,
+    ImplementationStatus, Provenance, RequestKind,
 };
 use orchestrate_core::Store;
 use std::{
@@ -66,8 +67,12 @@ struct Init {
     project: PathBuf,
     #[arg(long)]
     effort: String,
-    #[arg(long)]
-    request: String,
+    #[arg(long, conflicts_with = "request_file")]
+    request: Option<String>,
+    #[arg(long, conflicts_with = "request")]
+    request_file: Option<PathBuf>,
+    #[arg(long, value_parser = parse_request_kind)]
+    request_kind: Option<RequestKind>,
     #[arg(long = "constraint")]
     constraints: Vec<String>,
 }
@@ -90,6 +95,8 @@ enum Discovery {
         effort: String,
         #[arg(long)]
         slot: String,
+        #[command(flatten)]
+        provenance: ProvenanceArgs,
     },
     Validate {
         #[arg(long)]
@@ -104,8 +111,8 @@ enum Discovery {
         effort: String,
         #[arg(long)]
         slot: String,
-        #[arg(long)]
-        provider: PathBuf,
+        #[arg(long = "provider-command")]
+        provider_command: PathBuf,
         #[command(flatten)]
         provenance: ProvenanceArgs,
     },
@@ -116,8 +123,6 @@ enum Discovery {
         run: String,
         #[arg(long)]
         outcome: Option<String>,
-        #[command(flatten)]
-        provenance: ProvenanceArgs,
     },
 }
 #[derive(Subcommand)]
@@ -238,8 +243,33 @@ fn run() -> Result<()> {
 fn execute(store: Store, command: Command) -> Result<()> {
     match command {
         Command::Init(args) => {
-            let effort =
-                store.init_effort(&args.project, &args.effort, args.request, args.constraints)?;
+            let (request_kind, request) = match (args.request, args.request_file) {
+                (Some(request), None) => {
+                    (args.request_kind.unwrap_or(RequestKind::Freeform), request)
+                }
+                (None, Some(path)) => {
+                    let request_kind = args
+                        .request_kind
+                        .context("--request-file requires --request-kind")?;
+                    let bytes = fs::read(&path)
+                        .with_context(|| format!("cannot read request file {}", path.display()))?;
+                    let request = String::from_utf8(bytes).with_context(|| {
+                        format!("request file {} is not valid UTF-8", path.display())
+                    })?;
+                    (request_kind, request)
+                }
+                (None, None) => bail!("provide exactly one of --request or --request-file"),
+                (Some(_), Some(_)) => {
+                    unreachable!("Clap enforces mutually exclusive request inputs")
+                }
+            };
+            let effort = store.init_effort(
+                &args.project,
+                &args.effort,
+                request_kind,
+                request,
+                args.constraints,
+            )?;
             output(
                 "SUCCESS",
                 "COHORT_CREATED",
@@ -247,10 +277,20 @@ fn execute(store: Store, command: Command) -> Result<()> {
             );
         }
         Command::Discovery {
-            command: Discovery::Prepare { effort, slot },
+            command:
+                Discovery::Prepare {
+                    effort,
+                    slot,
+                    provenance,
+                },
         } => {
             let effort = store.load_effort(&effort)?;
-            let (run, workspace) = orchestrate_discovery::prepare(&store, &effort, &slot)?;
+            let (run, workspace) = orchestrate_discovery::prepare(
+                &store,
+                &effort,
+                &slot,
+                provenance.for_guide(DISCOVERY_GUIDE),
+            )?;
             output(
                 "SUCCESS",
                 "PREPARED",
@@ -268,18 +308,31 @@ fn execute(store: Store, command: Command) -> Result<()> {
             let effort = store.load_effort(&effort)?;
             let result =
                 orchestrate_discovery::validate(&store, &effort, &run, outcome.as_deref())?;
-            output(
-                "SUCCESS",
-                "VALID",
-                serde_json::json!({"summary":result.summary,"nodes":result.nodes.len()}),
-            );
+            let details = if result.summary.outcome == "BLOCKED" {
+                let questions: Vec<_> = result
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        node.kind == EvidenceKind::Question
+                            && node.required
+                            && node.status == EvidenceStatus::Blocked
+                    })
+                    .map(|node| {
+                        serde_json::json!({"id":node.id,"title":node.title,"body":node.body})
+                    })
+                    .collect();
+                serde_json::json!({"run":run,"questions":questions,"summary":result.summary,"nodes":result.nodes.len()})
+            } else {
+                serde_json::json!({"run":run,"summary":result.summary,"nodes":result.nodes.len()})
+            };
+            output("SUCCESS", &result.summary.outcome, details);
         }
         Command::Discovery {
             command:
                 Discovery::Run {
                     effort,
                     slot,
-                    provider,
+                    provider_command,
                     provenance,
                 },
         } => {
@@ -288,7 +341,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 &store,
                 &effort,
                 &slot,
-                &provider,
+                &provider_command,
                 DISCOVERY_GUIDE,
                 provenance.for_guide(DISCOVERY_GUIDE),
             )?;
@@ -304,17 +357,11 @@ fn execute(store: Store, command: Command) -> Result<()> {
                     effort,
                     run,
                     outcome,
-                    provenance,
                 },
         } => {
             let effort = store.load_effort(&effort)?;
-            let reference = orchestrate_discovery::finalize(
-                &store,
-                &effort,
-                &run,
-                outcome.as_deref(),
-                provenance.for_guide(DISCOVERY_GUIDE),
-            )?;
+            let reference =
+                orchestrate_discovery::finalize(&store, &effort, &run, outcome.as_deref())?;
             output(
                 "SUCCESS",
                 "FINALIZED",
@@ -607,10 +654,17 @@ impl ProvenanceArgs {
             host: self.host,
             provider: self.provider,
             model: self.model,
-            effort: self.model_effort,
+            model_effort: self.model_effort,
             guide_digest: orchestrate_contracts::digest_bytes(guide.as_bytes()),
             independence: self.independence,
         }
+    }
+}
+fn parse_request_kind(value: &str) -> std::result::Result<RequestKind, String> {
+    match value {
+        "ticket" => Ok(RequestKind::Ticket),
+        "freeform" => Ok(RequestKind::Freeform),
+        _ => Err("request kind must be ticket or freeform".into()),
     }
 }
 fn parse_independence(

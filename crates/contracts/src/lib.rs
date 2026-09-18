@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 use sha2::{Digest, Sha256};
 
-pub const SCHEMA_VERSION: u32 = 3;
-pub const STORE_FORMAT_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
+pub const STORE_FORMAT_VERSION: u32 = 4;
 pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -40,7 +40,7 @@ pub struct Provenance {
     pub host: String,
     pub provider: Option<String>,
     pub model: Option<String>,
-    pub effort: Option<String>,
+    pub model_effort: Option<String>,
     pub guide_digest: String,
     pub independence: Independence,
 }
@@ -50,6 +50,45 @@ pub enum Independence {
     InputExcluded,
     Compromised,
     Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestKind {
+    Ticket,
+    Freeform,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DiscoveryRun {
+    pub run_id: String,
+    pub phase: String,
+    pub slot: String,
+    pub effort_id: String,
+    pub cohort_id: String,
+    pub context_id: String,
+    pub request_kind: RequestKind,
+    pub baseline_commit: String,
+    pub baseline_tree: String,
+    pub host: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub model_effort: Option<String>,
+    pub independence: Independence,
+    pub guide_digest: String,
+}
+
+impl DiscoveryRun {
+    pub fn provenance(&self) -> Provenance {
+        Provenance {
+            host: self.host.clone(),
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            model_effort: self.model_effort.clone(),
+            guide_digest: self.guide_digest.clone(),
+            independence: self.independence.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -93,7 +132,7 @@ pub enum EvidenceKind {
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceStatus {
     Open,
-    Resolved,
+    Answered,
     NoChange,
     Blocked,
     Accepted,
@@ -302,7 +341,7 @@ pub fn validate_evidence_node(node: &EvidenceNode) -> Result<()> {
         (
             EvidenceKind::Question,
             EvidenceStatus::Open
-                | EvidenceStatus::Resolved
+                | EvidenceStatus::Answered
                 | EvidenceStatus::NoChange
                 | EvidenceStatus::Blocked
         ) | (
@@ -532,6 +571,15 @@ mod tests {
     #[test]
     fn duplicate_keys_fail() {
         assert!(decode::<serde_json::Value>(br#"{\"x\":1,\"x\":2}"#).is_err());
+    }
+
+    #[test]
+    fn legacy_resolved_question_status_is_rejected() {
+        assert!(serde_json::from_str::<EvidenceStatus>("\"resolved\"").is_err());
+        assert_eq!(
+            serde_json::from_str::<EvidenceStatus>("\"answered\"").unwrap(),
+            EvidenceStatus::Answered
+        );
     }
 
     #[test]

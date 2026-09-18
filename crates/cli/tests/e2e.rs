@@ -45,6 +45,33 @@ fn command(root: &Path, args: &[&str]) -> serde_json::Value {
     );
     serde_json::from_slice(&output.stdout).unwrap()
 }
+fn command_error(root: &Path, args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "command unexpectedly succeeded: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+fn git_output(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
 fn reference(value: &serde_json::Value, key: &str) -> ArtifactRef {
     serde_json::from_value(value["details"][key].clone()).unwrap()
 }
@@ -70,6 +97,23 @@ fn node(
         body: "evidence".into(),
     }
 }
+fn write_node(workspace: &Path, n: &EvidenceNode) {
+    let front = serde_yaml::to_string(&serde_json::json!({
+        "id":n.id,
+        "kind":n.kind,
+        "status":n.status,
+        "depends_on":n.depends_on,
+        "sources":n.sources,
+        "required":n.required,
+        "mandatory":n.mandatory
+    }))
+    .unwrap();
+    fs::write(
+        workspace.join("graph").join(format!("{}.md", n.id)),
+        format!("---\n{front}---\n\n# {}\n\n{}\n", n.title, n.body),
+    )
+    .unwrap();
+}
 fn write_workspace(workspace: &Path) {
     fs::write(workspace.join("technical-spec.md"), spec()).unwrap();
     let f = node(
@@ -86,14 +130,354 @@ fn write_workspace(workspace: &Path) {
         vec!["F-1"],
         true,
     );
-    for n in [f, r] {
-        let front=serde_yaml::to_string(&serde_json::json!({"id":n.id,"kind":n.kind,"status":n.status,"depends_on":n.depends_on,"sources":n.sources,"mandatory":n.mandatory})).unwrap();
-        fs::write(
-            workspace.join("graph").join(format!("{}.md", n.id)),
-            format!("---\n{front}---\n\n# {}\n\n{}\n", n.title, n.body),
-        )
-        .unwrap();
+    for n in [&f, &r] {
+        write_node(workspace, n);
     }
+}
+
+#[test]
+fn typed_request_intake_changes_context_identity() {
+    let root = temporary("typed-intake-store");
+    let repo = temporary("typed-intake-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+    let ticket = temporary("typed-intake-request").join("AGE-377.md");
+    fs::write(
+        &ticket,
+        "Investigate exact behavior.\n\nDo not summarize.\n",
+    )
+    .unwrap();
+
+    let inline = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "inline",
+            "--request",
+            "Investigate exact behavior.\n\nDo not summarize.\n",
+        ],
+    );
+    let ticket_effort = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "ticket",
+            "--request-file",
+            ticket.to_str().unwrap(),
+            "--request-kind",
+            "ticket",
+        ],
+    );
+    let changed_request = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "changed-request",
+            "--request",
+            "Different request",
+        ],
+    );
+    let changed_constraint = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "changed-constraint",
+            "--request",
+            "Investigate exact behavior.\n\nDo not summarize.\n",
+            "--constraint",
+            "Explicit clarification",
+        ],
+    );
+    let store = Store::open(&root).unwrap();
+    let inline_effort = store
+        .load_effort(inline["details"]["effort"].as_str().unwrap())
+        .unwrap();
+    let ticket_effort = store
+        .load_effort(ticket_effort["details"]["effort"].as_str().unwrap())
+        .unwrap();
+    let changed_request_effort = store
+        .load_effort(changed_request["details"]["effort"].as_str().unwrap())
+        .unwrap();
+    let changed_constraint_effort = store
+        .load_effort(changed_constraint["details"]["effort"].as_str().unwrap())
+        .unwrap();
+
+    assert_eq!(
+        inline_effort.context.request_kind,
+        orchestrate_contracts::RequestKind::Freeform
+    );
+    assert_eq!(
+        ticket_effort.context.request_kind,
+        orchestrate_contracts::RequestKind::Ticket
+    );
+    assert_eq!(
+        fs::read_to_string(
+            store
+                .effort_dir(&ticket_effort.project_id, &ticket_effort.id)
+                .join("request.md")
+        )
+        .unwrap(),
+        "Investigate exact behavior.\n\nDo not summarize.\n"
+    );
+    assert_ne!(inline_effort.context.id, ticket_effort.context.id);
+    assert_ne!(inline_effort.context.id, changed_request_effort.context.id);
+    assert_ne!(
+        inline_effort.context.id,
+        changed_constraint_effort.context.id
+    );
+}
+
+#[test]
+fn request_file_requires_kind_and_valid_utf8() {
+    let root = temporary("invalid-intake-store");
+    let repo = temporary("invalid-intake-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+    let request = temporary("invalid-intake-request").join("request.md");
+    fs::write(&request, "request\n").unwrap();
+    let invalid = temporary("invalid-intake-request").join("invalid.md");
+    fs::write(&invalid, [0xff, 0xfe]).unwrap();
+
+    assert!(
+        command_error(
+            &root,
+            &[
+                "init",
+                "--project",
+                repo.to_str().unwrap(),
+                "--effort",
+                "missing-kind",
+                "--request-file",
+                request.to_str().unwrap(),
+            ],
+        )
+        .contains("--request-file requires --request-kind")
+    );
+    assert!(
+        command_error(
+            &root,
+            &[
+                "init",
+                "--project",
+                repo.to_str().unwrap(),
+                "--effort",
+                "invalid-utf8",
+                "--request-file",
+                invalid.to_str().unwrap(),
+                "--request-kind",
+                "ticket",
+            ],
+        )
+        .contains("not valid UTF-8")
+    );
+    assert!(
+        command_error(
+            &root,
+            &[
+                "init",
+                "--project",
+                repo.to_str().unwrap(),
+                "--effort",
+                "conflict",
+                "--request",
+                "inline",
+                "--request-file",
+                request.to_str().unwrap(),
+            ],
+        )
+        .contains("cannot be used with")
+    );
+}
+
+#[test]
+fn discovery_workspace_is_self_describing_git_checkout_and_preserves_blockers() {
+    let root = temporary("discovery-run-store");
+    let repo = temporary("discovery-run-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("history.txt"), "first\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "first"]);
+    fs::write(repo.join("history.txt"), "second\n").unwrap();
+    git(&repo, &["commit", "-am", "second"]);
+    let baseline = git_output(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    fs::write(repo.join("history.txt"), "dirty\n").unwrap();
+    fs::write(repo.join("untracked.txt"), "private\n").unwrap();
+    let ticket = temporary("discovery-run-request").join("AGE-377.md");
+    fs::write(&ticket, "Investigate the behavior exactly.\n").unwrap();
+    let init = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "age-377",
+            "--request-file",
+            ticket.to_str().unwrap(),
+            "--request-kind",
+            "ticket",
+        ],
+    );
+    let effort_id = init["details"]["effort"].as_str().unwrap().to_owned();
+    let prepared = command(
+        &root,
+        &[
+            "discovery",
+            "prepare",
+            "--effort",
+            &effort_id,
+            "--slot",
+            "a",
+            "--host",
+            "claude-code",
+            "--provider",
+            "anthropic",
+            "--model",
+            "opus-5",
+            "--model-effort",
+            "high",
+        ],
+    );
+    let run = prepared["details"]["run"].as_str().unwrap();
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    let run_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(workspace.join("run.json")).unwrap()).unwrap();
+    assert_eq!(run_json["run_id"], run);
+    assert_eq!(run_json["phase"], "discovery");
+    assert_eq!(run_json["slot"], "a");
+    assert_eq!(run_json["effort_id"], effort_id);
+    assert_eq!(run_json["request_kind"], "ticket");
+    assert_eq!(run_json["baseline_commit"], baseline);
+    assert_eq!(run_json["host"], "claude-code");
+    assert_eq!(run_json["provider"], "anthropic");
+    assert_eq!(run_json["model"], "opus-5");
+    assert_eq!(run_json["model_effort"], "high");
+    assert_eq!(
+        fs::read_to_string(workspace.join("request.md")).unwrap(),
+        "Investigate the behavior exactly.\n"
+    );
+    let source = workspace.join("source");
+    assert_eq!(git_output(&source, &["rev-parse", "HEAD"]).trim(), baseline);
+    assert_eq!(
+        fs::read_to_string(source.join("history.txt")).unwrap(),
+        "second\n"
+    );
+    assert!(!source.join("untracked.txt").exists());
+    assert!(git_output(&source, &["log", "--oneline"]).lines().count() >= 2);
+    assert_eq!(
+        git_output(&source, &["show", "HEAD^:history.txt"]),
+        "first\n"
+    );
+    assert!(!git_output(&source, &["blame", "--", "history.txt"]).is_empty());
+    assert_eq!(
+        fs::read_to_string(repo.join("history.txt")).unwrap(),
+        "dirty\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("untracked.txt")).unwrap(),
+        "private\n"
+    );
+
+    write_workspace(&workspace);
+    let finalized = command(
+        &root,
+        &[
+            "discovery",
+            "finalize",
+            "--effort",
+            &effort_id,
+            "--run",
+            run,
+        ],
+    );
+    let discovery_reference = reference(&finalized, "artifact");
+    let store = Store::open(&root).unwrap();
+    let effort = store.load_effort(&effort_id).unwrap();
+    let (manifest, files) = store.load_bundle(&effort, &discovery_reference).unwrap();
+    assert!(files.contains_key("run.json"));
+    assert_eq!(manifest.provenance.host, "claude-code");
+    assert_eq!(manifest.provenance.provider.as_deref(), Some("anthropic"));
+    assert_eq!(manifest.provenance.model.as_deref(), Some("opus-5"));
+    assert_eq!(manifest.provenance.model_effort.as_deref(), Some("high"));
+
+    let blocked = command(
+        &root,
+        &[
+            "discovery",
+            "prepare",
+            "--effort",
+            &effort_id,
+            "--slot",
+            "b",
+        ],
+    );
+    let blocked_run = blocked["details"]["run"].as_str().unwrap();
+    let blocked_workspace = PathBuf::from(blocked["details"]["workspace"].as_str().unwrap());
+    fs::write(blocked_workspace.join("technical-spec.md"), spec()).unwrap();
+    let mut question = node(
+        "Q-008",
+        EvidenceKind::Question,
+        EvidenceStatus::Blocked,
+        vec![],
+        false,
+    );
+    question.required = true;
+    question.title = "What does the vendor do?".into();
+    question.body = "The answer changes the local validation contract.".into();
+    write_node(&blocked_workspace, &question);
+    let validation = command(
+        &root,
+        &[
+            "discovery",
+            "validate",
+            "--effort",
+            &effort_id,
+            "--run",
+            blocked_run,
+        ],
+    );
+    assert_eq!(validation["semantic_outcome"], "BLOCKED");
+    assert_eq!(validation["details"]["run"], blocked_run);
+    assert_eq!(validation["details"]["questions"][0]["id"], "Q-008");
+    assert_eq!(
+        validation["details"]["questions"][0]["body"],
+        "The answer changes the local validation contract."
+    );
+    let blocked_finalized = command(
+        &root,
+        &[
+            "discovery",
+            "finalize",
+            "--effort",
+            &effort_id,
+            "--run",
+            blocked_run,
+        ],
+    );
+    let blocked_reference = reference(&blocked_finalized, "artifact");
+    assert_eq!(blocked_reference.kind, ArtifactKind::Discovery);
 }
 
 #[test]

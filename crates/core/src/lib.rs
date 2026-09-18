@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::Write,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -12,8 +12,9 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use orchestrate_contracts::{
-    ArtifactKind, ArtifactRef, Envelope, PayloadDigest, Provenance, STORE_FORMAT_VERSION,
-    artifact_ref, decode, digest_bytes, encode, safe_relative_path, validate_envelope,
+    ArtifactKind, ArtifactRef, DiscoveryRun, Envelope, PayloadDigest, Provenance, RequestKind,
+    STORE_FORMAT_VERSION, artifact_ref, decode, digest_bytes, encode, safe_relative_path,
+    validate_envelope,
 };
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +77,7 @@ pub struct Project {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ContextRevision {
     pub id: String,
+    pub request_kind: RequestKind,
     pub request: String,
     pub constraints: Vec<String>,
     pub digest: String,
@@ -104,6 +106,7 @@ struct StoreMarker {
 }
 #[derive(Clone, Debug, Serialize)]
 struct ContextFingerprint<'a> {
+    request_kind: &'a RequestKind,
     request: &'a str,
     constraints: &'a [String],
 }
@@ -165,7 +168,7 @@ impl Store {
             );
         } else if fs::read_dir(&root)?.next().is_some() {
             bail!(
-                "legacy orchestration store at {}; v0.1 schema 2 does not migrate prior stores",
+                "legacy orchestration store at {}; this version does not migrate prior stores",
                 root.display()
             );
         } else {
@@ -185,6 +188,7 @@ impl Store {
         &self,
         repo: &Path,
         slug: &str,
+        request_kind: RequestKind,
         request: String,
         constraints: Vec<String>,
     ) -> Result<Effort> {
@@ -207,12 +211,14 @@ impl Store {
             canonical_locator: canonical_repo.clone(),
         };
         let context_bytes = encode(&ContextFingerprint {
+            request_kind: &request_kind,
             request: &request,
             constraints: &constraints,
         })?;
         let context_digest = digest_bytes(&context_bytes);
         let context = ContextRevision {
             id: format!("ctx-{}", &context_digest[..16]),
+            request_kind,
             request,
             constraints,
             digest: context_digest,
@@ -243,6 +249,7 @@ impl Store {
         fs::create_dir_all(&dir)?;
         write_json_atomic(&dir.join("project.json"), &project)?;
         write_json_atomic(&dir.join("effort.json"), &effort)?;
+        write_bytes_sync(&dir.join("request.md"), effort.context.request.as_bytes())?;
         self.materialize_snapshot(&canonical_repo, &effort.cohort.baseline_commit)?;
         self.append_journal(&effort, "cohort_created", None, serde_json::json!({"commit": effort.cohort.baseline_commit, "tree": effort.cohort.baseline_tree}))?;
         Ok(effort)
@@ -367,39 +374,75 @@ impl Store {
             path: destination,
         })
     }
-    pub fn discovery_workspace(
-        &self,
-        effort: &Effort,
-        run_id: &str,
-        slot: &str,
-    ) -> Result<PathBuf> {
-        validate_id(run_id)?;
-        ensure!(matches!(slot, "a" | "b" | "c"), "slot must be a, b, or c");
-        let root = self.phase_dir(effort, "discovery")?.join(run_id);
-        let source = self
-            .root
-            .join("snapshots")
-            .join(&effort.cohort.baseline_commit)
-            .join("source");
-        ensure!(source.exists(), "frozen source snapshot is missing");
-        if !root.join("source").exists() {
-            copy_tree(&source, &root.join("source"))?;
-            write_json_atomic(
-                &root.join("context.json"),
-                &serde_json::json!({"cohort_id": effort.cohort.id, "context_id": effort.context.id, "request": effort.context.request, "constraints": effort.context.constraints, "slot": slot, "baseline_commit": effort.cohort.baseline_commit, "baseline_tree": effort.cohort.baseline_tree}),
-            )?;
-            write_bytes_sync(
-                &root.join("technical-spec.md"),
-                TECHNICAL_SPEC_TEMPLATE.as_bytes(),
-            )?;
-            fs::create_dir_all(root.join("graph"))?;
-            self.append_journal(
-                effort,
-                "discovery_workspace_prepared",
-                Some(run_id),
-                serde_json::json!({"slot":slot}),
-            )?;
-        }
+    pub fn discovery_workspace(&self, effort: &Effort, run: &DiscoveryRun) -> Result<PathBuf> {
+        validate_id(&run.run_id)?;
+        ensure!(run.phase == "discovery", "run phase must be discovery");
+        ensure!(
+            matches!(run.slot.as_str(), "a" | "b" | "c"),
+            "slot must be a, b, or c"
+        );
+        ensure!(
+            run.effort_id == effort.id
+                && run.cohort_id == effort.cohort.id
+                && run.context_id == effort.context.id
+                && run.request_kind == effort.context.request_kind
+                && run.baseline_commit == effort.cohort.baseline_commit
+                && run.baseline_tree == effort.cohort.baseline_tree,
+            "Discovery run belongs to another effort, cohort, context, or baseline"
+        );
+        let root = self.phase_dir(effort, "discovery")?.join(&run.run_id);
+        ensure!(
+            !root.exists(),
+            "Discovery run already exists: {}",
+            run.run_id
+        );
+        let source = root.join("source");
+        let project = self.project_for(effort)?;
+        fs::create_dir_all(&root)?;
+        let cloned = Command::new("git")
+            .args(["clone", "--shared", "--no-checkout"])
+            .arg(&project.canonical_locator)
+            .arg(&source)
+            .output()?;
+        ensure!(
+            cloned.status.success(),
+            "git clone failed: {}",
+            String::from_utf8_lossy(&cloned.stderr)
+        );
+        let checkout = Command::new("git")
+            .args(["checkout", "--detach", &run.baseline_commit])
+            .current_dir(&source)
+            .output()?;
+        ensure!(
+            checkout.status.success(),
+            "git checkout failed: {}",
+            String::from_utf8_lossy(&checkout.stderr)
+        );
+        ensure!(
+            git(&source, ["rev-parse", "HEAD"])? == run.baseline_commit,
+            "Discovery source checkout does not match cohort baseline"
+        );
+        ensure!(
+            git(&source, ["status", "--porcelain"])?.is_empty(),
+            "Discovery source checkout is not clean"
+        );
+        write_json_atomic(&root.join("run.json"), run)?;
+        write_bytes_sync(&root.join("request.md"), effort.context.request.as_bytes())?;
+        write_json_atomic(
+            &root.join("context.json"),
+            &serde_json::json!({"cohort_id": effort.cohort.id, "context_id": effort.context.id, "request_kind": effort.context.request_kind, "request": effort.context.request, "constraints": effort.context.constraints, "slot": run.slot, "baseline_commit": effort.cohort.baseline_commit, "baseline_tree": effort.cohort.baseline_tree}),
+        )?;
+        write_bytes_sync(
+            &root.join("technical-spec.md"),
+            TECHNICAL_SPEC_TEMPLATE.as_bytes(),
+        )?;
+        fs::create_dir_all(root.join("graph"))?;
+        self.append_journal(
+            effort,
+            "discovery_workspace_prepared",
+            Some(&run.run_id),
+            serde_json::json!({"slot":run.slot}),
+        )?;
         Ok(root)
     }
     #[allow(clippy::too_many_arguments)]
@@ -795,50 +838,4 @@ pub fn write_bytes_sync(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 fn sync_dir(path: &Path) -> Result<()> {
     File::open(path)?.sync_all().map_err(Into::into)
-}
-fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = destination.join(entry.file_name());
-        let m = fs::symlink_metadata(&from)?;
-        if m.file_type().is_symlink() {
-            let target = fs::read_link(&from)?;
-            ensure!(
-                !target.is_absolute()
-                    && !target
-                        .components()
-                        .any(|p| matches!(p, Component::ParentDir)),
-                "unsafe source symlink"
-            );
-            copy_symlink(&target, &to, false)?;
-        } else if m.is_dir() {
-            copy_tree(&from, &to)?;
-        } else if m.is_file() {
-            fs::copy(&from, &to)?;
-            fs::set_permissions(&to, m.permissions())?;
-        } else {
-            bail!("unsupported source file type");
-        }
-    }
-    Ok(())
-}
-#[cfg(unix)]
-fn copy_symlink(target: &Path, dest: &Path, _: bool) -> Result<()> {
-    std::os::unix::fs::symlink(target, dest)?;
-    Ok(())
-}
-#[cfg(windows)]
-fn copy_symlink(target: &Path, dest: &Path, directory: bool) -> Result<()> {
-    if directory {
-        std::os::windows::fs::symlink_dir(target, dest)?;
-    } else {
-        std::os::windows::fs::symlink_file(target, dest)?;
-    }
-    Ok(())
-}
-#[cfg(not(any(unix, windows)))]
-fn copy_symlink(_: &Path, _: &Path, _: bool) -> Result<()> {
-    bail!("this platform cannot materialize committed symlinks")
 }

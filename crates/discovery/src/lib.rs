@@ -8,8 +8,8 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use orchestrate_contracts::{
-    ArtifactKind, ArtifactRef, DiscoverySubmission, DiscoverySummary, EvidenceKind, EvidenceNode,
-    EvidenceStatus, Independence, Provenance, validate_evidence_node,
+    ArtifactKind, ArtifactRef, DiscoveryRun, DiscoverySubmission, DiscoverySummary, EvidenceKind,
+    EvidenceNode, EvidenceStatus, Independence, Provenance, RequestKind, validate_evidence_node,
 };
 use orchestrate_core::{Effort, Store, invoke_provider_json, write_bytes_sync};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 struct WorkspaceContext {
     cohort_id: String,
     context_id: String,
+    request_kind: RequestKind,
     slot: String,
     baseline_commit: String,
     baseline_tree: String,
@@ -38,16 +39,39 @@ struct Frontmatter {
 }
 #[derive(Clone, Debug)]
 pub struct ValidatedDiscovery {
+    pub run: DiscoveryRun,
     pub summary: DiscoverySummary,
     pub technical_spec: String,
     pub nodes: Vec<EvidenceNode>,
     pub files: BTreeMap<String, Vec<u8>>,
 }
 
-pub fn prepare(store: &Store, effort: &Effort, slot: &str) -> Result<(String, std::path::PathBuf)> {
+pub fn prepare(
+    store: &Store,
+    effort: &Effort,
+    slot: &str,
+    provenance: Provenance,
+) -> Result<(String, std::path::PathBuf)> {
     ensure!(matches!(slot, "a" | "b" | "c"), "slot must be a, b, or c");
     let run_id = format!("discovery-{}-{}", slot, suffix());
-    let workspace = store.discovery_workspace(effort, &run_id, slot)?;
+    let run = DiscoveryRun {
+        run_id: run_id.clone(),
+        phase: "discovery".into(),
+        slot: slot.into(),
+        effort_id: effort.id.clone(),
+        cohort_id: effort.cohort.id.clone(),
+        context_id: effort.context.id.clone(),
+        request_kind: effort.context.request_kind.clone(),
+        baseline_commit: effort.cohort.baseline_commit.clone(),
+        baseline_tree: effort.cohort.baseline_tree.clone(),
+        host: provenance.host,
+        provider: provenance.provider,
+        model: provenance.model,
+        model_effort: provenance.model_effort,
+        independence: provenance.independence,
+        guide_digest: provenance.guide_digest,
+    };
+    let workspace = store.discovery_workspace(effort, &run)?;
     Ok((run_id, workspace))
 }
 
@@ -58,12 +82,28 @@ pub fn validate(
     requested_outcome: Option<&str>,
 ) -> Result<ValidatedDiscovery> {
     let root = store.phase_dir(effort, "discovery")?.join(run_id);
+    let run_bytes =
+        fs::read(root.join("run.json")).context("Discovery workspace lacks run.json")?;
+    let run: DiscoveryRun = orchestrate_contracts::decode(&run_bytes)?;
+    ensure!(
+        run.run_id == run_id
+            && run.phase == "discovery"
+            && matches!(run.slot.as_str(), "a" | "b" | "c")
+            && run.effort_id == effort.id
+            && run.cohort_id == effort.cohort.id
+            && run.context_id == effort.context.id
+            && run.request_kind == effort.context.request_kind
+            && run.baseline_commit == effort.cohort.baseline_commit
+            && run.baseline_tree == effort.cohort.baseline_tree,
+        "Discovery run belongs to another effort, cohort, context, or baseline"
+    );
     let context: WorkspaceContext = orchestrate_contracts::decode(
         &fs::read(root.join("context.json")).context("Discovery workspace lacks context.json")?,
     )?;
     ensure!(
         context.cohort_id == effort.cohort.id
             && context.context_id == effort.context.id
+            && context.request_kind == effort.context.request_kind
             && context.baseline_commit == effort.cohort.baseline_commit
             && context.baseline_tree == effort.cohort.baseline_tree,
         "Discovery workspace belongs to another cohort or baseline"
@@ -75,6 +115,13 @@ pub fn validate(
     validate_technical_spec(&technical_spec)?;
     let mut nodes = Vec::new();
     let mut files = BTreeMap::new();
+    let request =
+        fs::read(root.join("request.md")).context("Discovery workspace lacks request.md")?;
+    ensure!(
+        request == effort.context.request.as_bytes(),
+        "Discovery workspace request differs from the effort request"
+    );
+    files.insert("run.json".into(), run_bytes);
     files.insert("technical-spec.md".into(), technical_bytes);
     let graph = root.join("graph");
     ensure!(graph.is_dir(), "Discovery workspace lacks graph directory");
@@ -125,6 +172,7 @@ pub fn validate(
         orchestrate_contracts::encode(&summary)?,
     );
     Ok(ValidatedDiscovery {
+        run,
         summary,
         technical_spec,
         nodes,
@@ -137,7 +185,6 @@ pub fn finalize(
     effort: &Effort,
     run_id: &str,
     outcome: Option<&str>,
-    provenance: Provenance,
 ) -> Result<ArtifactRef> {
     let validated = match validate(store, effort, run_id, outcome) {
         Ok(value) => value,
@@ -151,6 +198,7 @@ pub fn finalize(
             return Err(error);
         }
     };
+    let provenance = validated.run.provenance();
     ensure!(
         !matches!(provenance.independence, Independence::Compromised),
         "known-compromised Discovery cannot finalize"
@@ -173,19 +221,20 @@ pub fn run_provider(
     store: &Store,
     effort: &Effort,
     slot: &str,
-    provider: &Path,
+    provider_command: &Path,
     guide: &str,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
-    let (run_id, workspace) = prepare(store, effort, slot)?;
+    let (run_id, workspace) = prepare(store, effort, slot, provenance)?;
     store.append_journal(
         effort,
         "provider_started",
         Some(&run_id),
         serde_json::json!({"phase":"discovery"}),
     )?;
-    let packet = serde_json::json!({"phase":"discovery", "run_id":run_id, "slot":slot, "request":effort.context.request, "constraints":effort.context.constraints, "context_id":effort.context.id, "baseline_commit":effort.cohort.baseline_commit, "frozen_source":workspace.join("source"), "guide":guide});
-    let response = invoke_provider_json::<_, DiscoverySubmission>(provider, &packet, 1_048_576);
+    let packet = serde_json::json!({"phase":"discovery", "run_id":run_id, "slot":slot, "request_kind":effort.context.request_kind, "request":effort.context.request, "constraints":effort.context.constraints, "context_id":effort.context.id, "baseline_commit":effort.cohort.baseline_commit, "frozen_source":workspace.join("source"), "guide":guide});
+    let response =
+        invoke_provider_json::<_, DiscoverySubmission>(provider_command, &packet, 1_048_576);
     let response = match response {
         Ok(v) => v,
         Err(e) => {
@@ -205,7 +254,7 @@ pub fn run_provider(
         Some(&run_id),
         serde_json::json!({"phase":"discovery"}),
     )?;
-    finalize(store, effort, &run_id, None, provenance)
+    finalize(store, effort, &run_id, None)
 }
 
 pub fn load_discovery(
@@ -377,19 +426,19 @@ fn validate_ready(nodes: &[EvidenceNode]) -> Result<()> {
             ensure!(
                 matches!(
                     node.status,
-                    EvidenceStatus::Resolved | EvidenceStatus::NoChange
+                    EvidenceStatus::Answered | EvidenceStatus::NoChange
                 ),
                 "required question {} lacks a final disposition",
                 node.id
             );
-            if node.status == EvidenceStatus::Resolved {
+            if node.status == EvidenceStatus::Answered {
                 ensure!(
                     nodes.iter().any(|candidate| {
                         candidate.kind == EvidenceKind::Finding
                             && candidate.status == EvidenceStatus::Accepted
                             && candidate.depends_on.iter().any(|id| id == &node.id)
                     }),
-                    "resolved required question {} lacks a downstream accepted finding",
+                    "answered required question {} lacks a downstream accepted finding",
                     node.id
                 );
             }
@@ -516,13 +565,28 @@ mod tests {
     }
 
     #[test]
-    fn resolved_required_question_needs_an_accepted_finding() {
-        let mut question = node("Q-1", EvidenceKind::Question, EvidenceStatus::Resolved);
+    fn answered_required_question_needs_an_accepted_finding() {
+        let mut question = node("Q-1", EvidenceKind::Question, EvidenceStatus::Answered);
         question.required = true;
         assert!(validate_ready(&[question.clone()]).is_err());
 
         let mut finding = node("F-1", EvidenceKind::Finding, EvidenceStatus::Accepted);
         finding.depends_on = vec![question.id.clone()];
         assert!(validate_ready(&[question, finding]).is_ok());
+    }
+
+    #[test]
+    fn no_change_is_terminal_but_open_and_blocked_are_not_ready() {
+        let mut no_change = node("Q-1", EvidenceKind::Question, EvidenceStatus::NoChange);
+        no_change.required = true;
+        assert!(validate_ready(&[no_change]).is_ok());
+
+        let mut open = node("Q-2", EvidenceKind::Question, EvidenceStatus::Open);
+        open.required = true;
+        assert!(validate_ready(&[open]).is_err());
+
+        let mut blocked = node("Q-3", EvidenceKind::Question, EvidenceStatus::Blocked);
+        blocked.required = true;
+        assert!(validate_ready(&[blocked]).is_err());
     }
 }

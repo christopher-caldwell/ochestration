@@ -14,6 +14,7 @@ It stores pipeline state outside the source project (default: `~/.orchestration`
 
 ```text
 orchestrate init --project /path/to/repo --effort name --request "..."
+orchestrate init --project /path/to/repo --effort name --request-file ./TICKET.md --request-kind ticket
 orchestrate discovery prepare|validate|run|finalize ...
 orchestrate consensus finalize ...
 orchestrate agreement adopt ...
@@ -24,11 +25,13 @@ orchestrate guide [discovery|consensus|audit]
 orchestrate skills install --prefix /absolute/path
 ```
 
-`discovery prepare` creates a run workspace containing `context.json`, committed `source/`, a technical-spec template, and Markdown/frontmatter evidence nodes under `graph/`. `discovery run` uses one explicitly selected absolute-path provider command; its JSON protocol is internal and it produces the same workspace bundle.
+`--request-file` preserves the exact UTF-8 request and requires `--request-kind ticket|freeform`; inline requests default to `freeform`. `--constraint` is an explicit user clarification or governing instruction, not a derived ticket interpretation.
+
+`discovery prepare` creates a self-describing run workspace containing `run.json`, `request.md`, `context.json`, a clean detached Git `source/` checkout at the frozen baseline, a technical-spec template, and Markdown/frontmatter evidence nodes under `graph/`. `discovery run` uses `--provider-command` for one explicitly selected absolute-path provider executable and records its host/provider/model provenance during preparation.
 
 The machine-readable result always separates `operation_status` from `semantic_outcome`. `build` is deliberately not a CLI phase or installed skill: the v0.1 boundary is `implementation register`.
 
-Artifacts use schema v3. Existing stores use an intentionally incompatible format and are rejected rather than migrated. `manifest.json` hashes every public file; the journal is diagnostic only and may be absent after a hard crash without invalidating authority.
+Artifacts use schema v4. Existing stores use an intentionally incompatible format and are rejected rather than migrated. `manifest.json` hashes every public file; the journal is diagnostic only and may be absent after a hard crash without invalidating authority.
 
 ## Qualification
 
