@@ -18,9 +18,9 @@ orchestrate-core = { path = "../core" }
 orchestrate-discovery = { path = "../discovery" }
 serde_json.workspace = true
 serde.workspace = true
+serde_yaml.workspace = true
 
 [dev-dependencies]
-serde_yaml.workspace = true
 
 orchestrate-core = { path = "../core" }
 

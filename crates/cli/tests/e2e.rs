@@ -59,6 +59,30 @@ fn command_error(root: &Path, args: &[&str]) -> String {
     );
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
+fn command_without_root(args: &[&str]) -> serde_json::Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+fn command_error_without_root(args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "command unexpectedly succeeded: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
 fn git_output(repo: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)
@@ -306,6 +330,216 @@ fn request_file_requires_kind_and_valid_utf8() {
             ],
         )
         .contains("cannot be used with")
+    );
+
+    let raw_yamlish = temporary("raw-yamlish-request").join("raw.md");
+    let raw_yamlish_body = "---\nroot: not-a-prepared-file\n---\nThis remains raw.\n";
+    fs::write(&raw_yamlish, raw_yamlish_body).unwrap();
+    let result = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "raw-yamlish",
+            "--request-file",
+            raw_yamlish.to_str().unwrap(),
+            "--request-kind",
+            "freeform",
+        ],
+    );
+    let store = Store::open(&root).unwrap();
+    let effort = store
+        .load_effort(result["details"]["effort"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(effort.context.request, raw_yamlish_body);
+}
+
+#[test]
+fn prepared_file_init_uses_its_values_and_preserves_body_bytes() {
+    let root = temporary("prepared-store");
+    let repo = temporary("prepared-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+    let body = "# Discovery Request\r\n\r\nUnicode: 😀  \r\n```text\r\n---\r\n```\r\n";
+    let prepared = temporary("prepared-file").join("request.prepared.md");
+    fs::write(
+        &prepared,
+        format!(
+            "---\r\nroot: {}\r\nproject: {}\r\neffort: age-377\r\nrequest_kind: freeform\r\nconstraints:\r\n  - Keep exact wording\r\n---\r\n{body}",
+            root.display(),
+            repo.display()
+        ),
+    )
+    .unwrap();
+
+    let result = command_without_root(&["init", "--from-file", prepared.to_str().unwrap()]);
+    let store = Store::open(&root).unwrap();
+    let effort = store
+        .load_effort(result["details"]["effort"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(effort.slug, "age-377");
+    assert_eq!(
+        effort.context.request_kind,
+        orchestrate_contracts::RequestKind::Freeform
+    );
+    assert_eq!(effort.context.constraints, ["Keep exact wording"]);
+    assert_eq!(
+        fs::read(
+            store
+                .effort_dir(&effort.project_id, &effort.id)
+                .join("request.md")
+        )
+        .unwrap(),
+        body.as_bytes()
+    );
+}
+
+#[test]
+fn prepared_file_rejects_conflicts_and_invalid_input_before_opening_a_store() {
+    let parent = temporary("prepared-invalid-parent");
+    let root = parent.join("unopened-store");
+    let valid = parent.join("valid.md");
+    fs::write(
+        &valid,
+        format!(
+            "---\nroot: {}\nproject: /absolute/project\neffort: effort\nrequest_kind: freeform\n---\nrequest\n",
+            root.display()
+        ),
+    )
+    .unwrap();
+    let error = command_error_without_root(&[
+        "--root",
+        root.to_str().unwrap(),
+        "init",
+        "--from-file",
+        valid.to_str().unwrap(),
+    ]);
+    assert!(error.contains("--from-file cannot be combined"));
+    assert!(!root.exists());
+
+    for (name, contents, expected) in [
+        (
+            "unknown",
+            format!(
+                "---\nroot: {}\nproject: /absolute/project\neffort: effort\nrequest_kind: freeform\nextra: no\n---\nrequest\n",
+                root.display()
+            ),
+            "frontmatter is invalid",
+        ),
+        (
+            "relative",
+            "---\nroot: relative\nproject: /absolute/project\neffort: effort\nrequest_kind: freeform\n---\nrequest\n".into(),
+            "root must be an absolute path",
+        ),
+        (
+            "invalid-kind",
+            format!(
+                "---\nroot: {}\nproject: /absolute/project\neffort: effort\nrequest_kind: other\n---\nrequest\n",
+                root.display()
+            ),
+            "frontmatter is invalid",
+        ),
+        (
+            "duplicate",
+            format!(
+                "---\nroot: {}\nroot: /another/root\nproject: /absolute/project\neffort: effort\nrequest_kind: freeform\n---\nrequest\n",
+                root.display()
+            ),
+            "frontmatter is invalid",
+        ),
+        (
+            "unclosed",
+            format!(
+                "---\nroot: {}\nproject: /absolute/project\neffort: effort\nrequest_kind: freeform\n",
+                root.display()
+            ),
+            "missing a closing frontmatter delimiter",
+        ),
+        (
+            "placeholder",
+            format!(
+                "---\nroot: {}\nproject: /absolute/project\neffort: effort\nrequest_kind: ticket\n---\n<!-- PASTE ORIGINAL TICKET VERBATIM HERE -->\n",
+                root.display()
+            ),
+            "replace the original ticket placeholder",
+        ),
+        (
+            "empty-body",
+            format!(
+                "---\nroot: {}\nproject: /absolute/project\neffort: effort\nrequest_kind: freeform\n---\n \n",
+                root.display()
+            ),
+            "body must not be whitespace only",
+        ),
+    ] {
+        let path = parent.join(format!("{name}.md"));
+        fs::write(&path, contents).unwrap();
+        let error = command_error_without_root(&["init", "--from-file", path.to_str().unwrap()]);
+        assert!(error.contains(expected), "{error}");
+        assert!(!root.exists());
+    }
+    let invalid_utf8 = parent.join("invalid-utf8.md");
+    fs::write(&invalid_utf8, [0xff, 0xfe]).unwrap();
+    assert!(
+        command_error_without_root(&["init", "--from-file", invalid_utf8.to_str().unwrap(),])
+            .contains("not valid UTF-8")
+    );
+    assert!(!root.exists());
+}
+
+#[test]
+fn prepared_ticket_requires_replacement_then_uses_default_constraints() {
+    let root = temporary("prepared-ticket-store");
+    let repo = temporary("prepared-ticket-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+    let prepared = temporary("prepared-ticket-file").join("request.prepared.md");
+    let frontmatter = format!(
+        "---\nroot: {}\nproject: {}\neffort: ticket-input\nrequest_kind: ticket\n---\n",
+        root.display(),
+        repo.display()
+    );
+    fs::write(
+        &prepared,
+        format!("{frontmatter}<!-- PASTE ORIGINAL TICKET VERBATIM HERE -->\n"),
+    )
+    .unwrap();
+    assert!(
+        command_error_without_root(&["init", "--from-file", prepared.to_str().unwrap()])
+            .contains("replace the original ticket placeholder")
+    );
+    assert!(!root.join("store.json").exists());
+
+    let ticket = "# Original ticket\n\nPreserve this text exactly.  \n";
+    fs::write(&prepared, format!("{frontmatter}{ticket}")).unwrap();
+    let result = command_without_root(&["init", "--from-file", prepared.to_str().unwrap()]);
+    let store = Store::open(&root).unwrap();
+    let effort = store
+        .load_effort(result["details"]["effort"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        effort.context.request_kind,
+        orchestrate_contracts::RequestKind::Ticket
+    );
+    assert!(effort.context.constraints.is_empty());
+    assert_eq!(
+        fs::read(
+            store
+                .effort_dir(&effort.project_id, &effort.id)
+                .join("request.md")
+        )
+        .unwrap(),
+        ticket.as_bytes()
     );
 }
 

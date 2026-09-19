@@ -10,6 +10,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod prepared_request;
+
 const DISCOVERY_GUIDE: &str = include_str!("../resources/guides/discovery.md");
 const CONSENSUS_GUIDE: &str = include_str!("../resources/guides/consensus.md");
 const AUDIT_GUIDE: &str = include_str!("../resources/guides/audit.md");
@@ -64,9 +66,11 @@ enum Command {
 #[derive(Args)]
 struct Init {
     #[arg(long)]
-    project: PathBuf,
+    project: Option<PathBuf>,
     #[arg(long)]
-    effort: String,
+    effort: Option<String>,
+    #[arg(long)]
+    from_file: Option<PathBuf>,
     #[arg(long, conflicts_with = "request_file")]
     request: Option<String>,
     #[arg(long, conflicts_with = "request")]
@@ -233,49 +237,97 @@ fn main() {
     }
 }
 fn run() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.command {
+    let Cli { root, command } = Cli::parse();
+    match command {
         Command::Guide { phase } => guide(phase),
         Command::Skills { command } => skills(command),
-        command => execute(store(cli.root)?, command),
+        Command::Init(args) => {
+            let input = resolve_init_input(root, args)?;
+            let store = Store::open(&input.root)?;
+            initialize(&store, input)
+        }
+        command => execute(store(root)?, command),
     }
+}
+struct InitInput {
+    root: PathBuf,
+    project: PathBuf,
+    effort: String,
+    request_kind: RequestKind,
+    request: String,
+    constraints: Vec<String>,
+}
+fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
+    if let Some(path) = args.from_file {
+        ensure!(
+            root.is_none()
+                && args.project.is_none()
+                && args.effort.is_none()
+                && args.request.is_none()
+                && args.request_file.is_none()
+                && args.request_kind.is_none()
+                && args.constraints.is_empty(),
+            "--from-file cannot be combined with --root, --project, --effort, --request, --request-file, --request-kind, or --constraint"
+        );
+        let prepared = prepared_request::read(&path)?;
+        return Ok(InitInput {
+            root: prepared.root,
+            project: prepared.project,
+            effort: prepared.effort,
+            request_kind: prepared.request_kind,
+            request: prepared.body,
+            constraints: prepared.constraints,
+        });
+    }
+
+    let project = args
+        .project
+        .context("--project is required unless --from-file is used")?;
+    let effort = args
+        .effort
+        .context("--effort is required unless --from-file is used")?;
+    let (request_kind, request) = match (args.request, args.request_file) {
+        (Some(request), None) => (args.request_kind.unwrap_or(RequestKind::Freeform), request),
+        (None, Some(path)) => {
+            let request_kind = args
+                .request_kind
+                .context("--request-file requires --request-kind")?;
+            let bytes = fs::read(&path)
+                .with_context(|| format!("cannot read request file {}", path.display()))?;
+            let request = String::from_utf8(bytes)
+                .with_context(|| format!("request file {} is not valid UTF-8", path.display()))?;
+            (request_kind, request)
+        }
+        (None, None) => bail!("provide exactly one of --request or --request-file"),
+        (Some(_), Some(_)) => unreachable!("Clap enforces mutually exclusive request inputs"),
+    };
+    Ok(InitInput {
+        root: root.unwrap_or_else(default_root),
+        project,
+        effort,
+        request_kind,
+        request,
+        constraints: args.constraints,
+    })
+}
+fn initialize(store: &Store, input: InitInput) -> Result<()> {
+    let effort = store.init_effort(
+        &input.project,
+        &input.effort,
+        input.request_kind,
+        input.request,
+        input.constraints,
+    )?;
+    output(
+        "SUCCESS",
+        "COHORT_CREATED",
+        serde_json::json!({"effort":effort.id,"cohort":effort.cohort.id,"baseline":effort.cohort.baseline_commit}),
+    );
+    Ok(())
 }
 fn execute(store: Store, command: Command) -> Result<()> {
     match command {
-        Command::Init(args) => {
-            let (request_kind, request) = match (args.request, args.request_file) {
-                (Some(request), None) => {
-                    (args.request_kind.unwrap_or(RequestKind::Freeform), request)
-                }
-                (None, Some(path)) => {
-                    let request_kind = args
-                        .request_kind
-                        .context("--request-file requires --request-kind")?;
-                    let bytes = fs::read(&path)
-                        .with_context(|| format!("cannot read request file {}", path.display()))?;
-                    let request = String::from_utf8(bytes).with_context(|| {
-                        format!("request file {} is not valid UTF-8", path.display())
-                    })?;
-                    (request_kind, request)
-                }
-                (None, None) => bail!("provide exactly one of --request or --request-file"),
-                (Some(_), Some(_)) => {
-                    unreachable!("Clap enforces mutually exclusive request inputs")
-                }
-            };
-            let effort = store.init_effort(
-                &args.project,
-                &args.effort,
-                request_kind,
-                request,
-                args.constraints,
-            )?;
-            output(
-                "SUCCESS",
-                "COHORT_CREATED",
-                serde_json::json!({"effort":effort.id,"cohort":effort.cohort.id,"baseline":effort.cohort.baseline_commit}),
-            );
-        }
+        Command::Init(_) => unreachable!("init is resolved before the store is opened"),
         Command::Discovery {
             command:
                 Discovery::Prepare {
