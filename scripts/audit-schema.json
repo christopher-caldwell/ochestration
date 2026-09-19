@@ -1,9 +1,0 @@
-{
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["coverage", "assessor_context"],
-  "properties": {
-    "coverage": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["requirement_id", "state", "rationale", "evidence", "correction"], "properties": {"requirement_id": {"type": "string"}, "state": {"type": "string", "enum": ["pass", "fail", "unknown", "not_applicable"]}, "rationale": {"type": "string"}, "evidence": {"type": "array", "items": {"type": "string"}}, "correction": {"type": "string"}}}},
-    "assessor_context": {"type": "string"}
-  }
-}
