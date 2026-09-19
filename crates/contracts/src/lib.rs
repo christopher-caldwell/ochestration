@@ -167,11 +167,6 @@ pub struct DiscoverySummary {
     pub outcome: String,
     pub node_ids: Vec<String>,
 }
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct DiscoverySubmission {
-    pub technical_spec: String,
-    pub nodes: Vec<EvidenceNode>,
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ConsensusRequirement {

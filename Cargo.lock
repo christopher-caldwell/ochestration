@@ -277,7 +277,6 @@ dependencies = [
  "anyhow",
  "orchestrate-contracts",
  "orchestrate-core",
- "serde",
  "serde_json",
 ]
 

@@ -324,19 +324,19 @@ snapshots/
     source-manifest.json
 ```
 
-The journal records operational events such as workspace preparation, provider execution, finalization, adoption, implementation registration, and Audit completion.
+The journal records operational events such as workspace preparation, finalization, adoption, implementation registration, and Audit completion.
 
 The journal is deliberately **not authoritative**. Deleting or losing the journal does not invalidate finalized artifacts or change the authority chain.
 
 Run identity belongs in `run.json`; authority belongs in finalized artifacts and their lineage.
 
-## 12. Manual and provider-command operation
+## 12. Interactive phase operation
 
-Orchestrate exposes provider-command execution paths, but the workflow can also be operated manually.
+Phase work happens in an interactive provider session. The installed phase skills (`orchestrate-discovery`, `orchestrate-consensus`, `orchestrate-audit`) drive the normal lifecycle: they run the deterministic CLI commands while the model investigates, reasons, and asks the user questions in the host conversation.
 
-The manual path is especially useful while dogfooding because the user can interact naturally with each model, answer material questions, and inspect the artifacts before advancing.
+The CLI deliberately does not launch model providers. There are no `run` subcommands, callbacks, resumable subprocess protocols, session IDs, provider adapters, polling loops, or embedded chat machinery, because the provider host already supplies the interaction layer.
 
-The deterministic phase rules are the same either way.
+Running the underlying commands by hand remains supported for debugging, inspection, and scripted use. The deterministic phase rules are the same either way.
 
 ## 13. Explicit v0.1 boundaries
 
@@ -350,5 +350,3 @@ The current product intentionally does not include:
 - semantic confidence scoring;
 - a database-backed evidence system;
 - Rust logic that attempts to decide engineering meaning.
-
-The controlling direction is `spec/ALIGNMENT.md`. Historical material under `spec/orchestrate-specification/` is design history where it conflicts with the alignment spec.

@@ -3,16 +3,15 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
-    path::Path,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use orchestrate_contracts::{
-    ArtifactKind, ArtifactRef, DiscoveryRun, DiscoverySubmission, DiscoverySummary, EvidenceKind,
-    EvidenceNode, EvidenceStatus, Independence, Provenance, RequestKind, validate_evidence_node,
+    ArtifactKind, ArtifactRef, DiscoveryRun, DiscoverySummary, EvidenceKind, EvidenceNode,
+    EvidenceStatus, Independence, Provenance, RequestKind, validate_evidence_node,
 };
-use orchestrate_core::{Effort, Store, invoke_provider_json, write_bytes_sync};
-use serde::{Deserialize, Serialize};
+use orchestrate_core::{Effort, Store};
+use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
 struct WorkspaceContext {
@@ -23,7 +22,7 @@ struct WorkspaceContext {
     baseline_commit: String,
     baseline_tree: String,
 }
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct Frontmatter {
     id: String,
     kind: EvidenceKind,
@@ -75,12 +74,7 @@ pub fn prepare(
     Ok((run_id, workspace))
 }
 
-pub fn validate(
-    store: &Store,
-    effort: &Effort,
-    run_id: &str,
-    requested_outcome: Option<&str>,
-) -> Result<ValidatedDiscovery> {
+pub fn validate(store: &Store, effort: &Effort, run_id: &str) -> Result<ValidatedDiscovery> {
     let root = store.phase_dir(effort, "discovery")?.join(run_id);
     let run_bytes =
         fs::read(root.join("run.json")).context("Discovery workspace lacks run.json")?;
@@ -145,22 +139,13 @@ pub fn validate(
     let blocked = nodes
         .iter()
         .any(|n| n.kind == EvidenceKind::Question && n.status == EvidenceStatus::Blocked);
-    let outcome = requested_outcome.unwrap_or(if blocked {
+    // A blocked result is a valid final Discovery artifact; readiness is only required otherwise.
+    let outcome = if blocked {
         "BLOCKED"
     } else {
+        validate_ready(&nodes)?;
         "IMPLEMENTATION_READY"
-    });
-    match outcome {
-        "IMPLEMENTATION_READY" => {
-            ensure!(
-                !blocked,
-                "implementation-ready Discovery cannot have a blocked question"
-            );
-            validate_ready(&nodes)?;
-        }
-        "BLOCKED" => ensure!(blocked, "blocked Discovery needs a blocked question"),
-        _ => bail!("Discovery outcome must be IMPLEMENTATION_READY or BLOCKED"),
-    }
+    };
     let summary = DiscoverySummary {
         context_id: context.context_id,
         cohort_id: context.cohort_id,
@@ -183,13 +168,8 @@ pub fn validate(
     })
 }
 
-pub fn finalize(
-    store: &Store,
-    effort: &Effort,
-    run_id: &str,
-    outcome: Option<&str>,
-) -> Result<ArtifactRef> {
-    let validated = match validate(store, effort, run_id, outcome) {
+pub fn finalize(store: &Store, effort: &Effort, run_id: &str) -> Result<ArtifactRef> {
+    let validated = match validate(store, effort, run_id) {
         Ok(value) => value,
         Err(error) => {
             let _ = store.append_journal(
@@ -218,46 +198,6 @@ pub fn finalize(
     )?;
     store.append_journal(effort, "discovery_finalized", Some(run_id), serde_json::json!({"artifact": reference.artifact_id, "outcome": validated.summary.outcome}))?;
     Ok(reference)
-}
-
-pub fn run_provider(
-    store: &Store,
-    effort: &Effort,
-    slot: &str,
-    provider_command: &Path,
-    guide: &str,
-    provenance: Provenance,
-) -> Result<ArtifactRef> {
-    let (run_id, workspace) = prepare(store, effort, slot, provenance)?;
-    store.append_journal(
-        effort,
-        "provider_started",
-        Some(&run_id),
-        serde_json::json!({"phase":"discovery"}),
-    )?;
-    let packet = serde_json::json!({"phase":"discovery", "run_id":run_id, "slot":slot, "request_kind":effort.context.request_kind, "request":effort.context.request, "constraints":effort.context.constraints, "context_id":effort.context.id, "baseline_commit":effort.cohort.baseline_commit, "frozen_source":workspace.join("source"), "guide":guide});
-    let response =
-        invoke_provider_json::<_, DiscoverySubmission>(provider_command, &packet, 1_048_576);
-    let response = match response {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = store.append_journal(
-                effort,
-                "provider_failed",
-                Some(&run_id),
-                serde_json::json!({"reason":e.to_string()}),
-            );
-            return Err(e);
-        }
-    };
-    materialize_submission(&workspace, &response.value)?;
-    store.append_journal(
-        effort,
-        "provider_completed",
-        Some(&run_id),
-        serde_json::json!({"phase":"discovery"}),
-    )?;
-    finalize(store, effort, &run_id, None)
 }
 
 pub fn load_discovery(
@@ -289,41 +229,6 @@ pub fn load_discovery(
     Ok((envelope, summary, nodes))
 }
 
-fn materialize_submission(workspace: &Path, submission: &DiscoverySubmission) -> Result<()> {
-    write_bytes_sync(
-        &workspace.join("technical-spec.md"),
-        submission.technical_spec.as_bytes(),
-    )?;
-    for node in &submission.nodes {
-        validate_evidence_node(node)?;
-        write_bytes_sync(
-            &workspace.join("graph").join(format!("{}.md", node.id)),
-            render_node(node).as_bytes(),
-        )?;
-    }
-    Ok(())
-}
-fn render_node(node: &EvidenceNode) -> String {
-    let front = Frontmatter {
-        id: node.id.clone(),
-        kind: node.kind.clone(),
-        status: node.status.clone(),
-        depends_on: node.depends_on.clone(),
-        sources: node.sources.clone(),
-        required: node.required,
-        mandatory: node.mandatory,
-    };
-    format!(
-        "---\n{}---\n\n# {}\n\n{}\n",
-        serde_yaml::to_string(&front).unwrap_or_default(),
-        if node.title.is_empty() {
-            &node.id
-        } else {
-            &node.title
-        },
-        node.body
-    )
-}
 fn parse_node(input: &str) -> Result<EvidenceNode> {
     let rest = input
         .strip_prefix("---\n")

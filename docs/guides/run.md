@@ -1,6 +1,11 @@
 # Complete run guide
 
-This is the shortest end-to-end human workflow for Orchestrate.
+This is the normal end-to-end human workflow for Orchestrate. The installed phase skills own the routine mechanics, so you work in provider sessions and only type the decisions.
+
+```text
+prepared request → init → three Discovery skills → Consensus skill
+→ explicit adoption → external Build → register → Audit skill
+```
 
 Use the focused guides when you need more detail:
 
@@ -9,13 +14,13 @@ Use the focused guides when you need more detail:
 - [Consensus and Agreement](consensus.md)
 - [Build and Audit](build-and-audit.md)
 
+Raw command sequences for manual or debugging use are in [Advanced and manual operation](#advanced-and-manual-operation) at the end of this guide.
+
 ## 1. Prepare and review the request
 
 Use `prep-discovery-ticket` for an existing ticket or `prep-discovery-freeform` for a freeform request.
 
-The prep skill writes a reviewed Markdown input containing YAML frontmatter.
-
-For tickets, paste the original ticket verbatim into the generated placeholder yourself.
+The prep skill writes a reviewed Markdown input containing YAML frontmatter. For tickets, paste the original ticket verbatim into the generated placeholder yourself.
 
 Review the file, then run the exact command the prep skill returns:
 
@@ -23,179 +28,182 @@ Review the file, then run the exact command the prep skill returns:
 orchestrate init --from-file "/absolute/path/to/request.prepared.md"
 ```
 
-Copy the returned effort ID.
-
-Set the store root to the `root` value from the prepared file:
+Copy the returned effort ID. If the prepared file's `root` is not `~/.orchestration`, tell every phase skill and command that root; otherwise the default store applies.
 
 ```sh
-export ORCH_ROOT="/absolute/root/from-prepared-file"
 export EFFORT_ID="PASTE-EFFORT-ID"
 ```
 
-## 2. Prepare A, B, and C
+## 2. Run three independent Discovery sessions
 
-Prepare all three independent Discovery workspaces before starting the investigations.
+Open three fresh provider sessions, one per slot:
 
-```sh
-orchestrate --root "$ORCH_ROOT" discovery prepare \
-  --effort "$EFFORT_ID" --slot a \
-  --host codex --provider openai --model "ACTUAL-MODEL" --model-effort high
+```text
+Codex  → $orchestrate-discovery  → slot a
+Claude → /orchestrate-discovery  → slot b
+Cursor → /orchestrate-discovery  → slot c
 ```
 
+Give each session only:
+
+- the effort ID;
+- its slot (`a`, `b`, or `c`);
+- the store root, if it is not `~/.orchestration`.
+
+The skill runs `orchestrate guide discovery`, prepares its own run workspace, investigates the frozen baseline interactively, asks you about material ambiguity, writes `technical-spec.md` and the evidence graph, and finalizes the run. It then reports the run ID, the finalized Discovery artifact ID, and the outcome (`IMPLEMENTATION_READY` or `BLOCKED`, with any blocked questions).
+
+You do not need to type `prepare`, `validate`, or `finalize` yourself.
+
+If one session raises a material question, answer it there and share the same clarification with the peer sessions before they finalize. Share only the user's clarification, never another provider's reasoning or conclusion.
+
+A blocked Discovery is a valid result but cannot proceed into Consensus. Do not force it to implementation-ready.
+
+## 3. Run Consensus
+
+In a fresh session, invoke `orchestrate-consensus` with the effort ID (and the store root if it is not `~/.orchestration`).
+
+The skill reads the frozen request and the three finalized public Discovery specifications, reconciles them, writes `proposal.json`, and finalizes. Rust infers the single eligible finalized Discovery artifact for each slot; the skill asks you only if a slot has no candidate or more than one, and re-runs with explicit selectors.
+
+The skill then reports either `NO_CONSENSUS` or the Agreement candidate. If a candidate exists, review the Agreement it shows you — that is exactly what adoption would authorize.
+
+## 4. Adopt the Agreement
+
+Adoption is the explicit transition from recommendation to implementation authority. Nothing adopts automatically.
+
+The Consensus skill prints the exact command to run, which is normally:
+
 ```sh
-orchestrate --root "$ORCH_ROOT" discovery prepare \
-  --effort "$EFFORT_ID" --slot b \
-  --host claude-code --provider anthropic --model "ACTUAL-MODEL" --model-effort high
+orchestrate agreement adopt --effort "$EFFORT_ID" --authorization-label "YOUR-NAME"
 ```
 
+When exactly one eligible Agreement exists, `--agreement` is inferred. If several exist, the command fails and lists the candidates; pass `--agreement "<artifact-id>"` explicitly.
+
+Save the returned adoption artifact ID.
+
+## 5. Build externally
+
+Give the adopted Agreement to your coding agent or implement it manually. Orchestrate does not schedule or run Build.
+
+Review the implementation normally, then commit it:
+
 ```sh
-orchestrate --root "$ORCH_ROOT" discovery prepare \
-  --effort "$EFFORT_ID" --slot c \
-  --host cursor --provider "ACTUAL-PROVIDER" --model "ACTUAL-MODEL" --model-effort high
+git status
+git diff
+git add .
+git commit -m "Implement adopted Orchestration agreement"
 ```
 
-Save each returned run ID and workspace path.
+## 6. Register the implementation
 
-## 3. Run the three Discoveries independently
-
-Open three fresh provider sessions.
-
-Give each provider only its own workspace and invoke `orchestrate-discovery`.
-
-Each run should:
-
-- read its `run.json`, `request.md`, and `context.json`;
-- investigate the frozen Git checkout under `source/`;
-- use evidence, including Git history where relevant;
-- ask you about material ambiguity instead of silently assuming;
-- write `technical-spec.md` and its evidence graph;
-- stop before implementation.
-
-If one provider obtains a material user clarification, share the same clarification with the peer runs before finalization without sharing peer reasoning.
-
-See [Discovery](discovery.md) for the detailed independence and clarification rules.
-
-## 4. Validate and finalize A, B, and C
-
-For each run:
+Registration records the exact commit and tree and retains an immutable implementation snapshot:
 
 ```sh
-orchestrate --root "$ORCH_ROOT" discovery validate \
-  --effort "$EFFORT_ID" --run "RUN-ID"
+orchestrate implementation register --effort "$EFFORT_ID"
 ```
 
-Then:
+Defaults and inference:
+
+- the effort's stored canonical project (there is no `--project` argument);
+- `--commit HEAD`;
+- `--status submitted`;
+- `--declaration "external implementation"`;
+- the sole Adoption receipt for the effort, when exactly one exists.
+
+Override any of these when reality differs:
 
 ```sh
-orchestrate --root "$ORCH_ROOT" discovery finalize \
-  --effort "$EFFORT_ID" --run "RUN-ID"
-```
-
-Save the three Discovery artifact IDs.
-
-A blocked Discovery is a valid result but cannot proceed into implementation-ready Consensus.
-
-## 5. Run Consensus
-
-Use a fresh Consensus session and invoke `orchestrate-consensus`.
-
-Give it the three finalized public Discovery results and frozen request/context. Do not give it private Discovery chats and do not have it re-investigate the repository.
-
-Have it create a `proposal.json` matching `scripts/proposal-schema.json`.
-
-Finalize:
-
-```sh
-orchestrate --root "$ORCH_ROOT" consensus finalize \
-  --effort "$EFFORT_ID" \
-  --opinion "A-DISCOVERY-ARTIFACT" \
-  --opinion "B-DISCOVERY-ARTIFACT" \
-  --opinion "C-DISCOVERY-ARTIFACT" \
-  --bundle "/absolute/path/to/proposal.json" \
-  --host "CONSENSUS-HOST" \
-  --provider "CONSENSUS-PROVIDER" \
-  --model "CONSENSUS-MODEL" \
-  --model-effort high
-```
-
-If the result is `NO_CONSENSUS`, stop rather than forcing a package forward.
-
-## 6. Review and adopt the Agreement
-
-Read the Agreement candidate and verify that it is actually what you want implemented.
-
-Then adopt it:
-
-```sh
-orchestrate --root "$ORCH_ROOT" agreement adopt \
-  --effort "$EFFORT_ID" \
-  --agreement "AGREEMENT-ARTIFACT" \
-  --authorization-label "YOUR-NAME" \
-  --host human
-```
-
-Save the adoption artifact ID.
-
-## 7. Build externally
-
-Give the adopted Agreement to your coding agent or implement it manually.
-
-When the implementation is complete, review it and commit it.
-
-```sh
-git rev-parse HEAD
-```
-
-Save that exact commit.
-
-## 8. Register the implementation
-
-```sh
-orchestrate --root "$ORCH_ROOT" implementation register \
+orchestrate implementation register \
   --effort "$EFFORT_ID" \
   --adoption "ADOPTION-ARTIFACT" \
-  --project "/absolute/path/to/project" \
-  --commit "IMPLEMENTATION-COMMIT" \
-  --declaration "Implemented from adopted Agreement" \
-  --status submitted
+  --commit "abc123" \
+  --status partial \
+  --declaration "Partial implementation; blocked by..."
 ```
+
+Repository identity, baseline ancestry, the exact commit and tree, the immutable snapshot, and lineage are still verified mechanically.
 
 Save the returned implementation artifact ID.
 
-## 9. Audit
+## 7. Run Audit
 
-Open a fresh Audit session and invoke `orchestrate-audit`.
+In a fresh session, invoke `orchestrate-audit` with the effort ID (and the store root if it is not `~/.orchestration`).
 
-Have the assessor evaluate the exact adopted Agreement against the exact registered implementation and create `assessment.json` matching `scripts/audit-schema.json`.
+The skill locates the Agreement → Adoption → Implementation chain, inspects the retained immutable implementation source, runs relevant tests, writes `assessment.json` with one coverage row per Agreement requirement, and finalizes the Audit. It asks you only when several valid chains make the selection ambiguous.
 
-Finalize:
+The verdict is derived mechanically as `PASS`, `CHANGES_REQUIRED`, or `BLOCKED`.
 
-```sh
-orchestrate --root "$ORCH_ROOT" audit finalize \
-  --effort "$EFFORT_ID" \
-  --bundle "/absolute/path/to/assessment.json" \
-  --host "AUDIT-HOST" \
-  --provider "AUDIT-PROVIDER" \
-  --model "AUDIT-MODEL" \
-  --model-effort high
-```
-
-The result is mechanically derived as `PASS`, `CHANGES_REQUIRED`, or `BLOCKED`.
-
-## 10. Inspect the run
+## 8. Inspect the run
 
 ```sh
-orchestrate --root "$ORCH_ROOT" status --effort "$EFFORT_ID"
-```
-
-```sh
-orchestrate --root "$ORCH_ROOT" journal --effort "$EFFORT_ID"
-```
-
-```sh
-orchestrate --root "$ORCH_ROOT" lineage \
-  --effort "$EFFORT_ID" \
-  --artifact "AUDIT-ARTIFACT"
+orchestrate status --effort "$EFFORT_ID"
+orchestrate journal --effort "$EFFORT_ID"
+orchestrate lineage --effort "$EFFORT_ID" --artifact "AUDIT-ARTIFACT"
 ```
 
 The artifact lineage is authoritative. The journal is diagnostic.
+
+## Advanced and manual operation
+
+The underlying commands remain available for debugging, manual inspection, and scripted use. They are the same deterministic boundaries the skills use.
+
+`orchestrate` does not launch model providers. The removed `discovery run`, `consensus run`, and `audit run` commands had no way to support an interactive conversation, so phase work happens in provider sessions (or by hand) instead.
+
+### Discovery
+
+```sh
+orchestrate discovery prepare --effort "$EFFORT_ID" --slot a \
+  --host codex --provider openai --model "ACTUAL-MODEL" --model-effort high
+
+orchestrate discovery validate --effort "$EFFORT_ID" --run "RUN-ID"
+
+orchestrate discovery finalize --effort "$EFFORT_ID" --run "RUN-ID"
+```
+
+`prepare` prints the run ID and workspace path. Write `technical-spec.md` and `graph/*.md` in that workspace, then finalize. `validate` is optional at any point; `finalize` validates before it publishes anything. The outcome is derived from the evidence graph and cannot be overridden: any blocked question produces `BLOCKED`.
+
+### Consensus
+
+```sh
+orchestrate consensus finalize \
+  --effort "$EFFORT_ID" \
+  --bundle "/absolute/path/to/proposal.json"
+```
+
+Omit `--opinion` to infer the single eligible Discovery artifact per slot. When a slot has no candidate or several candidates, the command stops and lists them; re-run with all three explicit selectors:
+
+```sh
+orchestrate consensus finalize \
+  --effort "$EFFORT_ID" \
+  --opinion "$A_DISCOVERY_ARTIFACT" \
+  --opinion "$B_DISCOVERY_ARTIFACT" \
+  --opinion "$C_DISCOVERY_ARTIFACT" \
+  --bundle "/absolute/path/to/proposal.json"
+```
+
+The result is `ELIGIBLE_CANDIDATE` with an Agreement artifact, or `NO_CONSENSUS`. Do not force `NO_CONSENSUS` forward.
+
+### Agreement adoption
+
+```sh
+orchestrate agreement adopt \
+  --effort "$EFFORT_ID" \
+  --authorization-label "YOUR-NAME"
+```
+
+When several eligible Agreements exist, pass `--agreement "<artifact-id>"` explicitly. `--authorization-label` is always required.
+
+### Implementation registration and Audit
+
+```sh
+orchestrate implementation register --effort "$EFFORT_ID"
+
+orchestrate audit finalize \
+  --effort "$EFFORT_ID" \
+  --bundle "/absolute/path/to/assessment.json"
+```
+
+The Audit assessment must reference the exact Agreement, Adoption, and Implementation artifacts and cover every Agreement requirement. `orchestrate status` prints the artifact references, including digests, that belong in `assessment.json`.
+
+### Provenance metadata
+
+`prepare`, `finalize`, `consensus finalize`, `agreement adopt`, `implementation register`, and `audit finalize` accept `--host`, `--provider`, `--model`, `--model-effort`, and `--independence`. Set them truthfully when you know them; leave them unset rather than guessing.

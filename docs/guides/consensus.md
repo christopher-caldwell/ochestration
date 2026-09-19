@@ -6,53 +6,86 @@ Consensus answers:
 
 Consensus is reconciliation, not another repository investigation.
 
-It consumes exactly one eligible Discovery artifact from each of slots A, B, and C in the same cohort.
+## 1. Run the Consensus skill
 
-## 1. Prerequisites
+Open a fresh model session and invoke `orchestrate-consensus`, giving it the effort ID (and the store root if it is not `~/.orchestration`).
 
-You need:
+The skill resolves the `orchestrate` executable, runs `orchestrate guide consensus` as its controlling instructions, and reads only:
 
-```text
-EFFORT_ID
-A_DISCOVERY_ARTIFACT
-B_DISCOVERY_ARTIFACT
-C_DISCOVERY_ARTIFACT
-```
-
-All three Discoveries must be `IMPLEMENTATION_READY`.
-
-A blocked Discovery is intentionally ineligible.
-
-Set the store root if it is not already set:
-
-```sh
-export ORCH_ROOT="/absolute/root/from-the-prepared-file"
-```
-
-## 2. Use a fresh Consensus session
-
-Open a fresh model session and invoke `orchestrate-consensus`.
-
-The model-facing rules are available from:
-
-```sh
-orchestrate guide consensus
-```
-
-The Consensus model should receive only:
-
-- the frozen request/context;
+- the frozen request and context;
 - the three finalized public Discovery specifications.
 
-It should not inspect the target repository or private Discovery chats.
+It never inspects the target repository, private Discovery chats, or sibling workspaces.
 
-Its job is to normalize equivalent conclusions, preserve material conditions, distinguish silence from disagreement, and identify which slots support each mandatory requirement.
+The skill writes `proposal.json`, then finalizes:
 
-## 3. Prepare a Consensus proposal
+```sh
+orchestrate consensus finalize --effort "$EFFORT_ID" --bundle "/absolute/path/to/proposal.json"
+```
 
-For the manual path, have the Consensus model write a `proposal.json` file matching the repository's `scripts/proposal-schema.json` contract.
+`--opinion` is omitted, so Rust selects the single eligible finalized Discovery artifact for each of slots `a`, `b`, and `c`. Eligibility requires a finalized `Discovery` artifact with outcome `IMPLEMENTATION_READY` for the same effort, cohort, context, and baseline, in the correct slot.
 
-A simplified requirement entry looks like:
+If a slot has no eligible artifact or more than one, the command fails and lists what it found. The skill then asks you which artifacts to use and re-runs with all three explicit selectors. Rust never silently picks the newest artifact.
+
+The result is either:
+
+```text
+ELIGIBLE_CANDIDATE
+```
+
+with an Agreement artifact, or:
+
+```text
+NO_CONSENSUS
+```
+
+Do not force `NO_CONSENSUS` forward.
+
+## 2. Review the Agreement candidate
+
+The skill shows you the Agreement. The human question at this boundary is:
+
+> **Is this actually what I want implemented?**
+
+Check that the Agreement:
+
+- represents the shared Discovery result;
+- preserves material conditions;
+- has not introduced unrelated scope;
+- includes explicit user constraints correctly;
+- has acceptance criteria that can later be audited.
+
+Consensus producing a candidate does not authorize Build.
+
+## 3. Adopt the exact Agreement
+
+The skill prints the exact adopt command. It is normally:
+
+```sh
+orchestrate agreement adopt --effort "$EFFORT_ID" --authorization-label "YOUR-NAME"
+```
+
+When exactly one eligible Agreement exists, `--agreement` is inferred; when several exist, the command fails and lists the candidates, and you pass `--agreement "<artifact-id>"` explicitly. `--authorization-label` is always required.
+
+Save the returned adoption artifact ID. This is the transition from recommendation to implementation authority:
+
+```text
+Consensus
+   ↓
+Agreement candidate
+   ↓
+explicit adoption
+   ↓
+Build authority
+```
+
+Nothing adopts automatically, and the Consensus skill never adopts on your behalf.
+
+## Advanced and manual operation
+
+You can run Consensus by hand when debugging or producing the proposal yourself. All three Discoveries must be `IMPLEMENTATION_READY`; a blocked Discovery is intentionally ineligible.
+
+A simplified `proposal.json` requirement entry looks like:
 
 ```json
 {
@@ -68,20 +101,11 @@ A simplified requirement entry looks like:
 }
 ```
 
-The proposal also contains:
-
-- `comparison_md` — the readable reconciliation;
-- `selection_rationale` — why this package represents the shared result;
-- `dissent` — meaningful remaining disagreement;
-- `counterexample_blocks` — whether a concrete counterexample prevents the package from being implementation-ready.
+The proposal also contains `comparison_md` (the readable reconciliation), `selection_rationale`, `dissent` (meaningful remaining disagreement), and `counterexample_blocks`.
 
 Do not manually manufacture supporter sets to make the package pass. They are claims about what the finalized Discovery artifacts actually support.
 
-## 4. The majority rule
-
-Every mandatory Consensus-derived requirement needs at least two supporters.
-
-In addition, the supporter sets across the **entire mandatory package** must share at least two slots in common.
+Every mandatory Consensus-derived requirement needs at least two supporters, and the supporter sets across the entire mandatory package must share at least two slots in common.
 
 Valid example:
 
@@ -102,90 +126,20 @@ R2 = {B, C}
 common = {B}
 ```
 
-The second package is rejected even though each row separately has two supporters.
+The second package is rejected even though each row separately has two supporters. Explicit user constraints are appended as governing requirements; they are not Consensus votes.
 
-Explicit user constraints are appended as governing requirements. They are not Consensus votes.
-
-## 5. Finalize Consensus
-
-Run:
+Finalize with explicit selectors when you want to override inference:
 
 ```sh
-orchestrate --root "$ORCH_ROOT" consensus finalize \
+orchestrate consensus finalize \
   --effort "$EFFORT_ID" \
   --opinion "$A_DISCOVERY_ARTIFACT" \
   --opinion "$B_DISCOVERY_ARTIFACT" \
   --opinion "$C_DISCOVERY_ARTIFACT" \
-  --bundle "/absolute/path/to/proposal.json" \
-  --host "CONSENSUS-HOST" \
-  --provider "CONSENSUS-PROVIDER" \
-  --model "CONSENSUS-MODEL" \
-  --model-effort high
+  --bundle "/absolute/path/to/proposal.json"
 ```
 
-The result is either:
-
-```text
-ELIGIBLE_CANDIDATE
-```
-
-with an Agreement artifact, or:
-
-```text
-NO_CONSENSUS
-```
-
-Do not force `NO_CONSENSUS` forward.
-
-Save the Agreement artifact ID when one is produced.
-
-## 6. Review the Agreement
-
-Locate and read the finalized Agreement before adoption.
-
-The human question at this boundary is:
-
-> **Is this actually what I want implemented?**
-
-Check that the Agreement:
-
-- represents the shared Discovery result;
-- preserves material conditions;
-- has not introduced unrelated scope;
-- includes explicit user constraints correctly;
-- has acceptance criteria that can later be audited.
-
-Consensus producing a candidate does not authorize Build.
-
-## 7. Adopt the exact Agreement
-
-When you approve it, run:
-
-```sh
-orchestrate --root "$ORCH_ROOT" agreement adopt \
-  --effort "$EFFORT_ID" \
-  --agreement "$AGREEMENT_ARTIFACT" \
-  --authorization-label "YOUR-NAME" \
-  --host human
-```
-
-Save the returned adoption artifact ID.
-
-```text
-ADOPTION_ARTIFACT
-```
-
-This is the transition from recommendation to implementation authority:
-
-```text
-Consensus
-   ↓
-Agreement candidate
-   ↓
-explicit adoption
-   ↓
-Build authority
-```
+Explicit selection is all-or-nothing: pass all three selectors, or omit `--opinion` entirely.
 
 ## Next step
 

@@ -5,7 +5,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -17,55 +17,6 @@ use orchestrate_contracts::{
     validate_envelope,
 };
 use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ProviderObservation<T> {
-    pub value: T,
-    pub program: PathBuf,
-    pub exit_code: i32,
-    pub stderr: String,
-}
-pub fn invoke_provider_json<I: Serialize, O: for<'a> Deserialize<'a>>(
-    program: &Path,
-    input: &I,
-    max_output_bytes: usize,
-) -> Result<ProviderObservation<O>> {
-    ensure!(
-        program.is_absolute(),
-        "provider command must be an absolute selected path"
-    );
-    let mut child = Command::new(program)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("could not launch provider {}", program.display()))?;
-    child
-        .stdin
-        .as_mut()
-        .context("provider stdin unavailable")?
-        .write_all(&encode(input)?)?;
-    drop(child.stdin.take());
-    let output = child.wait_with_output()?;
-    ensure!(
-        output.stdout.len() <= max_output_bytes,
-        "provider output exceeded declared byte limit"
-    );
-    ensure!(
-        output.status.success(),
-        "provider failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(ProviderObservation {
-        value: decode(&output.stdout).context("provider returned malformed protocol output")?,
-        program: program.to_owned(),
-        exit_code: output.status.code().unwrap_or(-1),
-        stderr: String::from_utf8_lossy(&output.stderr)
-            .chars()
-            .take(16_384)
-            .collect(),
-    })
-}
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -1,19 +1,12 @@
 //! Explicit Agreement adoption, external implementation registration, and Audit validation.
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use orchestrate_contracts::{
-    Adoption, Agreement, ArtifactKind, ArtifactRef, AuditAssessment, AuditReport, Coverage,
-    Implementation, ImplementationStatus, Provenance, Verdict, derive_verdict,
+    Adoption, Agreement, ArtifactKind, ArtifactRef, AuditAssessment, AuditReport, Implementation,
+    ImplementationStatus, Provenance, Verdict, derive_verdict,
 };
-use orchestrate_core::{Effort, Store, invoke_provider_json, now_ms};
-use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path, process::Command};
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AuditProposal {
-    pub coverage: Vec<Coverage>,
-    pub assessor_context: String,
-}
+use orchestrate_core::{Effort, Store, now_ms};
+use std::{collections::BTreeMap, process::Command};
 
 pub fn adopt(
     store: &Store,
@@ -61,12 +54,48 @@ pub fn adopt(
     Ok(reference)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Find the sole eligible Agreement for this effort.
+///
+/// Inference never guesses: no candidate or more than one candidate stops the
+/// operation and asks for an explicit `--agreement`.
+pub fn select_agreement(store: &Store, effort: &Effort) -> Result<ArtifactRef> {
+    let found = eligible_artifacts(store, effort, &eligible_agreement)?;
+    match found.as_slice() {
+        [only] => Ok(only.clone()),
+        [] => bail!(
+            "no eligible Agreement artifact exists for effort {}; finalize Consensus first or pass --agreement explicitly",
+            effort.id
+        ),
+        many => bail!(
+            "multiple eligible Agreement artifacts exist: {}; pass --agreement explicitly with the intended artifact",
+            artifact_ids(many)
+        ),
+    }
+}
+
+/// Find the sole Adoption receipt for this effort.
+///
+/// Inference never guesses: no candidate or more than one candidate stops the
+/// operation and asks for an explicit `--adoption`.
+pub fn select_adoption(store: &Store, effort: &Effort) -> Result<ArtifactRef> {
+    let found = eligible_artifacts(store, effort, &eligible_adoption)?;
+    match found.as_slice() {
+        [only] => Ok(only.clone()),
+        [] => bail!(
+            "no eligible Adoption artifact exists for effort {}; adopt an Agreement first or pass --adoption explicitly",
+            effort.id
+        ),
+        many => bail!(
+            "multiple eligible Adoption artifacts exist: {}; pass --adoption explicitly with the intended artifact",
+            artifact_ids(many)
+        ),
+    }
+}
+
 pub fn register_implementation(
     store: &Store,
     effort: &Effort,
     adoption_ref: ArtifactRef,
-    repo: &Path,
     commit: &str,
     declaration: String,
     status: ImplementationStatus,
@@ -80,9 +109,11 @@ pub fn register_implementation(
     let (_, agreement): (_, Agreement) =
         store.load_json(effort, &adoption.agreement, "agreement.json")?;
     let project = store.project_for(effort)?;
+    let repo = project.canonical_locator.as_path();
     ensure!(
         std::fs::canonicalize(repo)? == project.canonical_locator,
-        "implementation repository does not match the effort project"
+        "the effort project is no longer at its canonical location {}",
+        project.canonical_locator.display()
     );
     let ancestry = Command::new("git")
         .args([
@@ -129,6 +160,52 @@ pub fn register_implementation(
         serde_json::json!({"artifact":reference.artifact_id,"commit":implementation.target_commit}),
     )?;
     Ok(reference)
+}
+
+fn eligible_artifacts<F>(store: &Store, effort: &Effort, eligible: &F) -> Result<Vec<ArtifactRef>>
+where
+    F: Fn(&Store, &Effort, &ArtifactRef) -> Result<bool>,
+{
+    let mut found = Vec::new();
+    for reference in store.list_artifacts(effort)? {
+        if eligible(store, effort, &reference)? {
+            found.push(reference);
+        }
+    }
+    Ok(found)
+}
+
+fn eligible_agreement(store: &Store, effort: &Effort, reference: &ArtifactRef) -> Result<bool> {
+    if reference.kind != ArtifactKind::Agreement {
+        return Ok(false);
+    }
+    let (envelope, agreement): (_, Agreement) =
+        store.load_json(effort, reference, "agreement.json")?;
+    Ok(envelope.outcome == "ELIGIBLE_CANDIDATE"
+        && envelope.cohort_id.as_deref() == Some(effort.cohort.id.as_str())
+        && agreement.context_id == effort.context.id
+        && agreement.cohort_id == effort.cohort.id
+        && agreement.baseline_commit == effort.cohort.baseline_commit)
+}
+
+fn eligible_adoption(store: &Store, effort: &Effort, reference: &ArtifactRef) -> Result<bool> {
+    if reference.kind != ArtifactKind::Adoption {
+        return Ok(false);
+    }
+    let (envelope, adoption): (_, Adoption) =
+        store.load_json(effort, reference, "adoption.json")?;
+    if envelope.outcome != "ADOPTED" {
+        return Ok(false);
+    }
+    eligible_agreement(store, effort, &adoption.agreement)
+}
+
+fn artifact_ids(references: &[ArtifactRef]) -> String {
+    references
+        .iter()
+        .map(|reference| reference.artifact_id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub fn finalize_audit(
@@ -191,79 +268,4 @@ pub fn finalize_audit(
         serde_json::json!({"artifact":reference.artifact_id,"outcome":outcome}),
     )?;
     Ok(reference)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn run_provider(
-    store: &Store,
-    effort: &Effort,
-    agreement_ref: ArtifactRef,
-    adoption_ref: ArtifactRef,
-    implementation_ref: ArtifactRef,
-    provider: &Path,
-    guide: &str,
-    provenance: Provenance,
-) -> Result<ArtifactRef> {
-    let (_, agreement): (_, Agreement) =
-        store.load_json(effort, &agreement_ref, "agreement.json")?;
-    let (_, adoption): (_, Adoption) = store.load_json(effort, &adoption_ref, "adoption.json")?;
-    let (_, implementation): (_, Implementation) =
-        store.load_json(effort, &implementation_ref, "implementation.json")?;
-    ensure!(
-        adoption.agreement == agreement_ref
-            && implementation.adoption == adoption_ref
-            && implementation.agreement == agreement_ref,
-        "audit authority chain is inconsistent"
-    );
-    let target_source = store
-        .root()
-        .join("snapshots")
-        .join(&implementation.target_commit)
-        .join("source");
-    ensure!(
-        target_source.exists(),
-        "retained exact implementation source is missing"
-    );
-    store.append_journal(
-        effort,
-        "provider_started",
-        None,
-        serde_json::json!({"phase":"audit"}),
-    )?;
-    let packet = serde_json::json!({"phase":"audit","agreement_ref":agreement_ref,"adoption_ref":adoption_ref,"implementation_ref":implementation_ref,"agreement":agreement,"implementation":implementation,"target_source":target_source,"guide":guide});
-    let response = invoke_provider_json::<_, AuditProposal>(provider, &packet, 1_048_576);
-    let response = match response {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = store.append_journal(
-                effort,
-                "provider_failed",
-                None,
-                serde_json::json!({"reason":e.to_string()}),
-            );
-            return Err(e);
-        }
-    };
-    store.append_journal(
-        effort,
-        "provider_completed",
-        None,
-        serde_json::json!({"phase":"audit"}),
-    )?;
-    let agreement_ref: ArtifactRef = serde_json::from_value(packet["agreement_ref"].clone())?;
-    let adoption_ref: ArtifactRef = serde_json::from_value(packet["adoption_ref"].clone())?;
-    let implementation_ref: ArtifactRef =
-        serde_json::from_value(packet["implementation_ref"].clone())?;
-    finalize_audit(
-        store,
-        effort,
-        AuditAssessment {
-            agreement: agreement_ref,
-            adoption: adoption_ref,
-            implementation: implementation_ref,
-            coverage: response.value.coverage,
-            assessor_context: response.value.assessor_context,
-        },
-        provenance,
-    )
 }

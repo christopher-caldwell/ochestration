@@ -64,27 +64,26 @@ orchestrate init --from-file "/absolute/path/to/request.prepared.md"
 
 ### 3. Run the workflow
 
-An Orchestrate effort uses three independent Discovery runs over the same request and Git baseline.
+An Orchestrate effort uses three independent Discovery runs over the same request and Git baseline. The three installed phase skills own the normal lifecycle, so you work in provider sessions instead of typing every command:
 
 A common setup is:
 
 ```text
-Discovery A → Codex
-Discovery B → Claude Code
-Discovery C → Cursor
+Discovery A → Codex  → $orchestrate-discovery  (slot a)
+Discovery B → Claude → /orchestrate-discovery  (slot b)
+Discovery C → Cursor → /orchestrate-discovery  (slot c)
 ```
 
-Each investigator works independently, can inspect source and Git history, and may ask you questions when material information is missing.
+Each `orchestrate-discovery` session prepares its own run, investigates the frozen baseline independently, asks you questions when material information is missing, and finalizes the run for you. It reports the run ID, the Discovery artifact ID, and the outcome.
 
 Once all three Discovery artifacts are complete:
 
 ```text
-Discovery A ─┐
-Discovery B ─┼─→ Consensus → adopt Agreement → Build → Audit
-Discovery C ─┘
+$orchestrate-consensus → review → explicit adopt → external Build
+    → orchestrate implementation register --effort "$EFFORT" → $orchestrate-audit
 ```
 
-See the [step-by-step run guide](docs/guides/run.md) for the exact commands and workflow.
+Consensus infers the three eligible Discovery artifacts, and registration infers the canonical project and the sole Adoption receipt, so the typed surface stays small. See the [step-by-step run guide](docs/guides/run.md) for the full workflow and the raw commands for manual use.
 
 ## Key concepts
 

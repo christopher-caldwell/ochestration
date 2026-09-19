@@ -1,7 +1,7 @@
 use orchestrate_contracts::{
     Agreement, AgreementRequirement, ArtifactKind, ArtifactRef, AuditAssessment, ConsensusProposal,
     ConsensusRequirement, Coverage, CoverageState, EvidenceKind, EvidenceNode, EvidenceStatus,
-    ImplementationStatus, Requirement,
+    Implementation, ImplementationStatus, Requirement,
 };
 use orchestrate_core::Store;
 use std::{
@@ -157,6 +157,87 @@ fn write_workspace(workspace: &Path) {
     for n in [&f, &r] {
         write_node(workspace, n);
     }
+}
+
+fn new_effort(name: &str, request: &str) -> (PathBuf, PathBuf, String) {
+    let root = temporary(&format!("{name}-store"));
+    let repo = temporary(&format!("{name}-repo"));
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+    let init = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            name,
+            "--request",
+            request,
+        ],
+    );
+    let effort = init["details"]["effort"].as_str().unwrap().to_owned();
+    (root, repo, effort)
+}
+fn finalize_discovery(root: &Path, effort: &str, slot: &str) -> ArtifactRef {
+    let prepared = command(
+        root,
+        &["discovery", "prepare", "--effort", effort, "--slot", slot],
+    );
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_workspace(&workspace);
+    let run = prepared["details"]["run"].as_str().unwrap();
+    let finalized = command(
+        root,
+        &["discovery", "finalize", "--effort", effort, "--run", run],
+    );
+    reference(&finalized, "artifact")
+}
+fn write_proposal(root: &Path, name: &str) -> PathBuf {
+    let proposal = ConsensusProposal {
+        requirements: vec![ConsensusRequirement {
+            requirement: Requirement {
+                id: "R1".into(),
+                text: "Required behavior".into(),
+                acceptance: "Focused proof".into(),
+                condition: None,
+                governing: false,
+            },
+            supporters: vec!["a".into(), "b".into(), "c".into()],
+            source_refs: BTreeMap::new(),
+        }],
+        comparison_md: "# Comparison\n\nAll slots agree.\n".into(),
+        selection_rationale: "coherent".into(),
+        dissent: vec![],
+        counterexample_blocks: false,
+    };
+    let path = root.join(format!("{name}.json"));
+    fs::write(&path, orchestrate_contracts::encode(&proposal).unwrap()).unwrap();
+    path
+}
+fn consensus_agreement(root: &Path, effort: &str, proposal: &Path) -> ArtifactRef {
+    let consensus = command(
+        root,
+        &[
+            "consensus",
+            "finalize",
+            "--effort",
+            effort,
+            "--bundle",
+            proposal.to_str().unwrap(),
+        ],
+    );
+    reference(&consensus, "agreement")
+}
+fn implementation_payload(root: &Path, effort: &str, reference: &ArtifactRef) -> Implementation {
+    let store = Store::open(root).unwrap();
+    let effort = store.load_effort(effort).unwrap();
+    let (_, files) = store.load_bundle(&effort, reference).unwrap();
+    orchestrate_contracts::decode(files.get("implementation.json").unwrap()).unwrap()
 }
 
 #[test]
@@ -647,6 +728,7 @@ fn discovery_workspace_is_self_describing_git_checkout_and_preserves_blockers() 
         ],
     );
     let discovery_reference = reference(&finalized, "artifact");
+    assert_eq!(finalized["details"]["outcome"], "IMPLEMENTATION_READY");
     let store = Store::open(&root).unwrap();
     let effort = store.load_effort(&effort_id).unwrap();
     let (manifest, files) = store.load_bundle(&effort, &discovery_reference).unwrap();
@@ -712,6 +794,18 @@ fn discovery_workspace_is_self_describing_git_checkout_and_preserves_blockers() 
     );
     let blocked_reference = reference(&blocked_finalized, "artifact");
     assert_eq!(blocked_reference.kind, ArtifactKind::Discovery);
+    assert_eq!(blocked_finalized["details"]["outcome"], "BLOCKED");
+    let inspected = command(
+        &root,
+        &[
+            "inspect",
+            "--effort",
+            &effort_id,
+            "--artifact",
+            &blocked_reference.artifact_id,
+        ],
+    );
+    assert_eq!(inspected["details"]["manifest"]["outcome"], "BLOCKED");
 }
 
 #[test]
@@ -775,23 +869,6 @@ fn optional_blocked_question_blocks_discovery_and_is_reported() {
     );
     assert_eq!(validation["semantic_outcome"], "BLOCKED");
     assert_eq!(validation["details"]["questions"][0]["id"], question.id);
-
-    assert!(
-        command_error(
-            &root,
-            &[
-                "discovery",
-                "validate",
-                "--effort",
-                &effort_id,
-                "--run",
-                &run,
-                "--outcome",
-                "IMPLEMENTATION_READY",
-            ],
-        )
-        .contains("implementation-ready Discovery cannot have a blocked question")
-    );
 }
 
 #[test]
@@ -931,8 +1008,6 @@ fn complete_flow_preserves_source_and_journal() {
                 &effort_id,
                 "--adoption",
                 &adoption.artifact_id,
-                "--project",
-                repo.to_str().unwrap(),
                 "--declaration",
                 "external",
             ],
@@ -967,20 +1042,19 @@ fn complete_flow_preserves_source_and_journal() {
         orchestrate_contracts::encode(&assessment).unwrap(),
     )
     .unwrap();
-    let audit = reference(
-        &command(
-            &root,
-            &[
-                "audit",
-                "finalize",
-                "--effort",
-                &effort_id,
-                "--bundle",
-                assessment_path.to_str().unwrap(),
-            ],
-        ),
-        "audit",
+    let audit_result = command(
+        &root,
+        &[
+            "audit",
+            "finalize",
+            "--effort",
+            &effort_id,
+            "--bundle",
+            assessment_path.to_str().unwrap(),
+        ],
     );
+    assert_eq!(audit_result["details"]["verdict"], "PASS");
+    let audit = reference(&audit_result, "audit");
     let inspected = command(
         &root,
         &[
@@ -1048,5 +1122,315 @@ fn audit_coverage_controls_verdict() {
         )
         .unwrap(),
         orchestrate_contracts::Verdict::ChangesRequired
+    );
+}
+
+#[test]
+fn removed_provider_commands_and_manual_overrides_do_not_parse() {
+    let root = temporary("removed-commands-store");
+    for command in [["discovery", "run"], ["consensus", "run"], ["audit", "run"]] {
+        let error = command_error(&root, &command);
+        assert!(
+            error.contains("unrecognized subcommand") || error.contains("unexpected argument"),
+            "{error}"
+        );
+    }
+    assert!(
+        command_error(
+            &root,
+            &[
+                "discovery",
+                "validate",
+                "--effort",
+                "effort",
+                "--run",
+                "run",
+                "--outcome",
+                "BLOCKED",
+            ],
+        )
+        .contains("unexpected argument")
+    );
+    assert!(
+        command_error(
+            &root,
+            &[
+                "implementation",
+                "register",
+                "--effort",
+                "effort",
+                "--project",
+                "/tmp/project",
+            ],
+        )
+        .contains("unexpected argument")
+    );
+}
+
+#[test]
+fn discovery_finalize_rejects_an_invalid_workspace_without_publishing() {
+    let (root, _repo, effort) = new_effort("discovery-invalid", "change fixture");
+    let prepared = command(
+        &root,
+        &["discovery", "prepare", "--effort", &effort, "--slot", "a"],
+    );
+    let run = prepared["details"]["run"].as_str().unwrap();
+
+    let error = command_error(
+        &root,
+        &["discovery", "finalize", "--effort", &effort, "--run", run],
+    );
+    assert!(
+        error.contains("implementation-ready Discovery needs at least one evidence node"),
+        "{error}"
+    );
+    let status = command(&root, &["status", "--effort", &effort]);
+    assert!(
+        status["details"]["artifacts"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "an invalid workspace must not publish an artifact"
+    );
+    let journal = command(&root, &["journal", "--effort", &effort]);
+    assert!(
+        journal["details"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["event"] == "finalization_rejected")
+    );
+}
+
+#[test]
+fn consensus_infers_sole_eligible_discovery_opinions() {
+    let (root, _repo, effort) = new_effort("consensus-inference", "change fixture");
+    let expected: Vec<_> = ["a", "b", "c"]
+        .iter()
+        .map(|slot| finalize_discovery(&root, &effort, slot).artifact_id)
+        .collect();
+    let proposal = write_proposal(&root, "proposal-inference");
+    let consensus = command(
+        &root,
+        &[
+            "consensus",
+            "finalize",
+            "--effort",
+            &effort,
+            "--bundle",
+            proposal.to_str().unwrap(),
+        ],
+    );
+    let agreement = reference(&consensus, "agreement");
+    assert_eq!(agreement.kind, ArtifactKind::Agreement);
+
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    let (_, files) = store
+        .load_bundle(&effort_state, &reference(&consensus, "comparison"))
+        .unwrap();
+    let comparison: serde_json::Value =
+        serde_json::from_slice(files.get("comparison.json").unwrap()).unwrap();
+    let opinions: Vec<String> = comparison["opinions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["artifact_id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(opinions, expected);
+}
+
+#[test]
+fn consensus_inference_requires_an_eligible_artifact_for_every_slot() {
+    let (root, _repo, effort) = new_effort("consensus-missing-slot", "change fixture");
+    for slot in ["a", "b"] {
+        finalize_discovery(&root, &effort, slot);
+    }
+    let proposal = write_proposal(&root, "proposal-missing-slot");
+    let error = command_error(
+        &root,
+        &[
+            "consensus",
+            "finalize",
+            "--effort",
+            &effort,
+            "--bundle",
+            proposal.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        error.contains("no eligible finalized Discovery artifact exists for slot c"),
+        "{error}"
+    );
+}
+
+#[test]
+fn consensus_inference_rejects_ambiguous_slot_candidates() {
+    let (root, _repo, effort) = new_effort("consensus-ambiguous-slot", "change fixture");
+    let first = finalize_discovery(&root, &effort, "a");
+    let second = finalize_discovery(&root, &effort, "a");
+    for slot in ["b", "c"] {
+        finalize_discovery(&root, &effort, slot);
+    }
+    let proposal = write_proposal(&root, "proposal-ambiguous-slot");
+    let error = command_error(
+        &root,
+        &[
+            "consensus",
+            "finalize",
+            "--effort",
+            &effort,
+            "--bundle",
+            proposal.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        error.contains("multiple eligible Discovery artifacts exist for slot a"),
+        "{error}"
+    );
+    assert!(error.contains(&first.artifact_id), "{error}");
+    assert!(error.contains(&second.artifact_id), "{error}");
+    assert!(error.contains("--opinion"), "{error}");
+}
+
+#[test]
+fn agreement_adoption_infers_the_sole_eligible_agreement() {
+    let (root, _repo, effort) = new_effort("adoption-inference", "change fixture");
+    for slot in ["a", "b", "c"] {
+        finalize_discovery(&root, &effort, slot);
+    }
+    let proposal = write_proposal(&root, "proposal-adoption");
+    let agreement = consensus_agreement(&root, &effort, &proposal);
+    let adoption = reference(
+        &command(
+            &root,
+            &[
+                "agreement",
+                "adopt",
+                "--effort",
+                &effort,
+                "--authorization-label",
+                "tester",
+            ],
+        ),
+        "adoption",
+    );
+    assert_eq!(adoption.kind, ArtifactKind::Adoption);
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    let (_, adoption_payload): (_, orchestrate_contracts::Adoption) = store
+        .load_json(&effort_state, &adoption, "adoption.json")
+        .unwrap();
+    assert_eq!(adoption_payload.agreement, agreement);
+}
+
+#[test]
+fn agreement_adoption_requires_an_eligible_candidate() {
+    let (root, _repo, effort) = new_effort("adoption-missing", "change fixture");
+    let error = command_error(
+        &root,
+        &[
+            "agreement",
+            "adopt",
+            "--effort",
+            &effort,
+            "--authorization-label",
+            "tester",
+        ],
+    );
+    assert!(
+        error.contains("no eligible Agreement artifact exists"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agreement_adoption_rejects_ambiguous_candidates() {
+    let (root, _repo, effort) = new_effort("adoption-ambiguous", "change fixture");
+    for slot in ["a", "b", "c"] {
+        finalize_discovery(&root, &effort, slot);
+    }
+    let proposal = write_proposal(&root, "proposal-ambiguous-agreement");
+    let first = consensus_agreement(&root, &effort, &proposal);
+    let second = consensus_agreement(&root, &effort, &proposal);
+    let error = command_error(
+        &root,
+        &[
+            "agreement",
+            "adopt",
+            "--effort",
+            &effort,
+            "--authorization-label",
+            "tester",
+        ],
+    );
+    assert!(
+        error.contains("multiple eligible Agreement artifacts exist"),
+        "{error}"
+    );
+    assert!(error.contains(&first.artifact_id), "{error}");
+    assert!(error.contains(&second.artifact_id), "{error}");
+    assert!(error.contains("--agreement"), "{error}");
+}
+
+#[test]
+fn implementation_registration_uses_the_stored_project_and_defaults() {
+    let (root, repo, effort) = new_effort("registration-defaults", "change fixture");
+    for slot in ["a", "b", "c"] {
+        finalize_discovery(&root, &effort, slot);
+    }
+    let proposal = write_proposal(&root, "proposal-registration");
+    consensus_agreement(&root, &effort, &proposal);
+    let adoption = reference(
+        &command(
+            &root,
+            &[
+                "agreement",
+                "adopt",
+                "--effort",
+                &effort,
+                "--authorization-label",
+                "tester",
+            ],
+        ),
+        "adoption",
+    );
+
+    let implementation = reference(
+        &command(&root, &["implementation", "register", "--effort", &effort]),
+        "implementation",
+    );
+    let head = git_output(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    let payload = implementation_payload(&root, &effort, &implementation);
+    assert_eq!(payload.adoption, adoption);
+    assert_eq!(payload.status, ImplementationStatus::Submitted);
+    assert_eq!(payload.producer_declaration, "external implementation");
+    assert_eq!(payload.target_commit, head);
+
+    let overridden = reference(
+        &command(
+            &root,
+            &[
+                "implementation",
+                "register",
+                "--effort",
+                &effort,
+                "--adoption",
+                &adoption.artifact_id,
+                "--commit",
+                &head,
+                "--status",
+                "partial",
+                "--declaration",
+                "Partial implementation; blocked by pending review",
+            ],
+        ),
+        "implementation",
+    );
+    let payload = implementation_payload(&root, &effort, &overridden);
+    assert_eq!(payload.status, ImplementationStatus::Partial);
+    assert_eq!(
+        payload.producer_declaration,
+        "Partial implementation; blocked by pending review"
     );
 }

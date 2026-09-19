@@ -20,7 +20,6 @@ Use these docs based on what you are trying to do.
 ## Understand Orchestrate
 
 - [Architecture](architecture.md) — the authority chain, artifacts, evidence graph, Git freezing, majority rule, Audit verdicts, storage, and what Rust does versus what the models decide.
-- [v0.1 alignment specification](../spec/ALIGNMENT.md) — the controlling product direction and explicit v0.1 scope.
 
 ## Model-facing phase guides
 

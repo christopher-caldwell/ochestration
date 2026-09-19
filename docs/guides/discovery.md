@@ -16,135 +16,41 @@ C → Cursor
 
 All three receive the same reviewed request and Git baseline. They do not receive one another's private reasoning or outputs.
 
-## 1. Set the effort and store
+## 1. Give each slot its inputs
 
 After `orchestrate init --from-file ...`, copy the returned effort ID.
 
-Set:
-
 ```sh
-export ORCH_ROOT="/absolute/root/from-the-prepared-file"
 export EFFORT_ID="PASTE-EFFORT-ID"
 ```
 
-Use the same `ORCH_ROOT` for the entire effort.
+Open three fresh provider sessions and invoke `orchestrate-discovery` in each. Give each session:
 
-Check the effort:
+- the effort ID;
+- its own slot (`a`, `b`, or `c`);
+- the store root, if it is not `~/.orchestration`;
+- host/provider/model metadata, if you want it recorded truthfully in the artifact.
 
-```sh
-orchestrate --root "$ORCH_ROOT" status --effort "$EFFORT_ID"
-```
+Do not give a session another slot's workspace, reasoning, or conclusions.
 
-## 2. Prepare all three runs
+## 2. Let the skill run the phase
 
-Prepare all three before starting the investigations. This makes the parallel boundary explicit.
+The skill resolves the `orchestrate` executable and runs `orchestrate guide discovery` as its controlling instructions. It then:
 
-### A
+1. runs `orchestrate discovery prepare` for its own slot;
+2. captures the run ID and workspace path from the output;
+3. reads `run.json`, `request.md`, and `context.json`;
+4. investigates the frozen `source/` checkout interactively;
+5. asks you about material ambiguity, conflicting evidence, or missing decisions;
+6. writes `technical-spec.md` and the `graph/*.md` evidence nodes;
+7. optionally runs `discovery validate` as an intermediate check;
+8. runs `discovery finalize` and reports the run ID, artifact ID, outcome, and blocked questions.
 
-```sh
-orchestrate --root "$ORCH_ROOT" discovery prepare \
-  --effort "$EFFORT_ID" \
-  --slot a \
-  --host codex \
-  --provider openai \
-  --model "ACTUAL-MODEL" \
-  --model-effort high
-```
+You do not need to type `prepare`, `validate`, or `finalize` yourself, and there is no non-interactive `discovery run` command. A fresh provider session per slot keeps the runs independent.
 
-### B
+## 3. Answer questions without breaking independence
 
-```sh
-orchestrate --root "$ORCH_ROOT" discovery prepare \
-  --effort "$EFFORT_ID" \
-  --slot b \
-  --host claude-code \
-  --provider anthropic \
-  --model "ACTUAL-MODEL" \
-  --model-effort high
-```
-
-### C
-
-```sh
-orchestrate --root "$ORCH_ROOT" discovery prepare \
-  --effort "$EFFORT_ID" \
-  --slot c \
-  --host cursor \
-  --provider "ACTUAL-PROVIDER" \
-  --model "ACTUAL-MODEL" \
-  --model-effort high
-```
-
-Use the host/provider/model values that were actually selected. If a value is unknown, leave it unknown rather than guessing later.
-
-Each command returns a run ID and workspace path. Save them.
-
-```text
-A_RUN       / A_WORKSPACE
-B_RUN       / B_WORKSPACE
-C_RUN       / C_WORKSPACE
-```
-
-## 3. Inspect a workspace once
-
-A workspace contains:
-
-```text
-run.json
-request.md
-context.json
-source/
-graph/
-technical-spec.md
-```
-
-`run.json` identifies this specific run.
-
-`request.md` is the reviewed request.
-
-`source/` is a clean detached Git checkout of the common baseline and includes repository history.
-
-You can verify a workspace with:
-
-```sh
-cat "/path/to/workspace/run.json"
-git -C "/path/to/workspace/source" status --short
-git -C "/path/to/workspace/source" log --oneline -5
-```
-
-The Git status should be clean.
-
-## 4. Start three independent provider sessions
-
-Open a fresh session in each provider.
-
-Give each provider **only its own workspace path**.
-
-Invoke the installed `orchestrate-discovery` skill, or give the equivalent instruction:
-
-```text
-You are one independent Orchestration Discovery investigator.
-
-Your assigned workspace is:
-
-/absolute/path/to/your/workspace
-
-Run `orchestrate guide discovery` and follow it as the controlling instructions.
-
-Investigate the request against the frozen source. Do not inspect sibling Discovery runs and do not implement the feature.
-
-If a material ambiguity, contradiction, or unknown could change the implementation contract, ask me directly rather than silently assuming an answer.
-
-Tell me when the run is ready for validation or when you are blocked.
-```
-
-The investigator may use relevant source, tests, Git history, authoritative external documentation, and appropriate authorized experiments.
-
-## 5. Answering Discovery questions
-
-Questions are a normal part of Discovery.
-
-If one provider asks a material product or engineering question, answer truthfully without telling it what another provider concluded.
+Questions are a normal part of Discovery. If one provider asks a material product or engineering question, answer truthfully without telling it what another provider concluded.
 
 For example:
 
@@ -152,11 +58,7 @@ For example:
 Does staging behavior need to remain unchanged, or may this ticket alter it?
 ```
 
-Your answer is new user authority.
-
-### Preserve independence while sharing authority
-
-When the three runs are active in parallel:
+Your answer is new user authority. When the three runs are active in parallel:
 
 1. let each investigator reach its own clarification point where practical;
 2. answer questions normally in the conversation where they were raised;
@@ -178,7 +80,7 @@ Claude discovered that staging should remain unchanged because...
 
 If you genuinely do not know the answer and it materially changes the implementation contract, say so. A correct Discovery may remain blocked.
 
-## 6. What the investigator produces
+## 4. What the investigator produces
 
 The model writes:
 
@@ -187,61 +89,11 @@ technical-spec.md
 graph/*.md
 ```
 
-The graph records important Questions, Findings, Decisions, and Requirements.
+The graph records important Questions, Findings, Decisions, and Requirements. The public technical specification should stand on its own: a later model should not need the private chat transcript to understand what the Discovery concluded.
 
-The public technical specification should stand on its own. A later model should not need the private chat transcript to understand what the Discovery concluded.
+The outcome is derived mechanically from that graph. Any blocked question produces a `BLOCKED` result, which is a valid final artifact but is ineligible for Consensus. Otherwise the run must be implementation-ready: every required question `answered` or `no_change`, and every mandatory requirement traceable to accepted evidence and not stale.
 
-## 7. Validate all three runs
-
-Do not use one Discovery's validation result to change another run's reasoning.
-
-Run validation separately:
-
-```sh
-orchestrate --root "$ORCH_ROOT" discovery validate \
-  --effort "$EFFORT_ID" \
-  --run "A-RUN-ID"
-```
-
-Repeat for B and C.
-
-The semantic outcome is normally:
-
-```text
-IMPLEMENTATION_READY
-```
-
-or:
-
-```text
-BLOCKED
-```
-
-A blocked result includes its blocked questions in the CLI output.
-
-Do not force a blocked run to implementation-ready.
-
-## 8. Finalize the runs
-
-Finalize each completed run independently:
-
-```sh
-orchestrate --root "$ORCH_ROOT" discovery finalize \
-  --effort "$EFFORT_ID" \
-  --run "A-RUN-ID"
-```
-
-Repeat for B and C.
-
-Save the three returned Discovery artifact IDs.
-
-```text
-A_DISCOVERY_ARTIFACT
-B_DISCOVERY_ARTIFACT
-C_DISCOVERY_ARTIFACT
-```
-
-## 9. Inspect before Consensus
+## 5. Inspect before Consensus
 
 Especially while dogfooding, stop here and compare the three public results before running Consensus.
 
@@ -254,13 +106,61 @@ Useful questions:
 - Did a model turn an unknown into an assumption?
 - Can you understand each conclusion from the finalized artifact without the private chat?
 
-Use:
+Use `orchestrate status --effort "$EFFORT_ID"` to list the finalized artifacts, then read a bundle's `technical-spec.md` and `graph/` directly from its artifact directory under the effort's `discovery/` directory.
+
+## Advanced and manual operation
+
+You can run Discovery by hand when debugging, inspecting a workspace, or working manually with a model.
+
+Prepare all three runs first so the parallel boundary is explicit:
 
 ```sh
-orchestrate --root "$ORCH_ROOT" status --effort "$EFFORT_ID"
+orchestrate discovery prepare --effort "$EFFORT_ID" --slot a \
+  --host codex --provider openai --model "ACTUAL-MODEL" --model-effort high
+
+orchestrate discovery prepare --effort "$EFFORT_ID" --slot b \
+  --host claude-code --provider anthropic --model "ACTUAL-MODEL" --model-effort high
+
+orchestrate discovery prepare --effort "$EFFORT_ID" --slot c \
+  --host cursor --provider "ACTUAL-PROVIDER" --model "ACTUAL-MODEL" --model-effort high
 ```
 
-You can also locate a finalized artifact directory by artifact ID under the effort's `discovery/` directory when you want to inspect `technical-spec.md` and `graph/` directly.
+Each command returns a run ID and workspace path. A workspace contains:
+
+```text
+run.json
+request.md
+context.json
+source/
+graph/
+technical-spec.md
+```
+
+`run.json` identifies this specific run, `request.md` is the reviewed request, and `source/` is a clean detached Git checkout of the common baseline including repository history. Verify it with:
+
+```sh
+cat "/path/to/workspace/run.json"
+git -C "/path/to/workspace/source" status --short
+git -C "/path/to/workspace/source" log --oneline -5
+```
+
+The Git status should be clean. Give a manual investigator only its own workspace path, plus `orchestrate guide discovery` as the controlling instructions.
+
+Validate whenever an intermediate check is useful:
+
+```sh
+orchestrate discovery validate --effort "$EFFORT_ID" --run "RUN-ID"
+```
+
+Validation is not required before finalization; `discovery finalize` validates the workspace before it publishes anything. Do not use one Discovery's validation result to change another run's reasoning, and do not force a blocked run to implementation-ready.
+
+Finalize each completed run independently:
+
+```sh
+orchestrate discovery finalize --effort "$EFFORT_ID" --run "RUN-ID"
+```
+
+The command prints the finalized artifact ID and the derived outcome (`details.artifact` and `details.outcome`). Save the three Discovery artifact IDs.
 
 ## Next step
 

@@ -5,7 +5,7 @@ use orchestrate_contracts::{
     Agreement, AgreementRequirement, ArtifactKind, ArtifactRef, ConsensusProposal, Provenance,
     Requirement, validate_agreement, validate_requirement,
 };
-use orchestrate_core::{Effort, Store, invoke_provider_json};
+use orchestrate_core::{Effort, Store};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 
@@ -70,6 +70,36 @@ pub fn mandatory_package_support(
     Ok((requirements, common.unwrap_or_default()))
 }
 
+/// Select the sole eligible finalized Discovery artifact for every slot.
+///
+/// Inference never guesses: a slot with no candidate or more than one candidate stops
+/// the operation and requires explicit `--opinion` selectors.
+pub fn select_opinions(store: &Store, effort: &Effort) -> Result<[ArtifactRef; 3]> {
+    let mut candidates: BTreeMap<String, Vec<ArtifactRef>> = BTreeMap::new();
+    for reference in store.list_artifacts(effort)? {
+        if let Some(slot) = eligible_slot(store, effort, &reference)? {
+            candidates.entry(slot).or_default().push(reference);
+        }
+    }
+    let mut selected = Vec::new();
+    for slot in ["a", "b", "c"] {
+        let found = candidates.remove(slot).unwrap_or_default();
+        match found.as_slice() {
+            [only] => selected.push(only.clone()),
+            [] => bail!(
+                "no eligible finalized Discovery artifact exists for slot {slot}; finalize an implementation-ready Discovery for every slot or pass three explicit --opinion selectors"
+            ),
+            many => bail!(
+                "multiple eligible Discovery artifacts exist for slot {slot}: {}; pass three explicit --opinion selectors",
+                artifact_ids(many)
+            ),
+        }
+    }
+    selected
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("three opinions required"))
+}
+
 pub fn finalize(
     store: &Store,
     effort: &Effort,
@@ -90,25 +120,16 @@ pub fn finalize(
             reference.kind == ArtifactKind::Discovery,
             "consensus needs Discovery artifacts"
         );
-        let (envelope, summary, _) =
-            orchestrate_discovery::load_discovery(store, effort, reference)?;
-        ensure!(
-            envelope.outcome == "IMPLEMENTATION_READY" && summary.outcome == "IMPLEMENTATION_READY",
-            "blocked Discovery is not an eligible Consensus opinion"
-        );
-        ensure!(
-            envelope.cohort_id.as_deref() == Some(&effort.cohort.id)
-                && summary.context_id == effort.context.id
-                && summary.baseline_commit == effort.cohort.baseline_commit,
-            "incompatible Discovery cohort or baseline"
-        );
-        if opinions
-            .insert(summary.slot.clone(), reference.clone())
-            .is_some()
-        {
+        let slot = eligible_slot(store, effort, reference)?.with_context(|| {
+            format!(
+                "Discovery artifact {} is not an eligible Consensus opinion",
+                reference.artifact_id
+            )
+        })?;
+        if opinions.insert(slot.clone(), reference.clone()).is_some() {
             bail!("duplicate Discovery slot");
         }
-        public_specs.push(summary.slot);
+        public_specs.push(slot);
     }
     ensure!(
         opinions.len() == 3
@@ -231,53 +252,33 @@ pub fn finalize(
     outcome
 }
 
-pub fn run_provider(
+/// A Discovery artifact is an eligible Consensus opinion only when it is finalized,
+/// implementation-ready, belongs to this effort/cohort/context/baseline, and names
+/// a valid slot.
+fn eligible_slot(
     store: &Store,
     effort: &Effort,
-    refs: [ArtifactRef; 3],
-    provider: &std::path::Path,
-    guide: &str,
-    provenance: Provenance,
-) -> Result<ConsensusResult> {
-    let mut opinions = Vec::new();
-    for reference in &refs {
-        let (_, summary, _) = orchestrate_discovery::load_discovery(store, effort, reference)?;
-        let (_, files) = store.load_bundle(effort, reference)?;
-        let technical_spec = String::from_utf8(
-            files
-                .get("technical-spec.md")
-                .context("Discovery lacks technical specification")?
-                .clone(),
-        )?;
-        opinions.push(serde_json::json!({"artifact":reference,"summary":summary,"technical_spec":technical_spec}));
+    reference: &ArtifactRef,
+) -> Result<Option<String>> {
+    if reference.kind != ArtifactKind::Discovery {
+        return Ok(None);
     }
-    store.append_journal(
-        effort,
-        "provider_started",
-        None,
-        serde_json::json!({"phase":"consensus"}),
-    )?;
-    let packet = serde_json::json!({"phase":"consensus","context_id":effort.context.id,"request":effort.context.request,"constraints":effort.context.constraints,"baseline_commit":effort.cohort.baseline_commit,"opinions":opinions,"guide":guide});
-    let response = invoke_provider_json::<_, ConsensusProposal>(provider, &packet, 1_048_576);
-    let response = match response {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = store.append_journal(
-                effort,
-                "provider_failed",
-                None,
-                serde_json::json!({"reason":e.to_string()}),
-            );
-            return Err(e);
-        }
-    };
-    store.append_journal(
-        effort,
-        "provider_completed",
-        None,
-        serde_json::json!({"phase":"consensus"}),
-    )?;
-    finalize(store, effort, refs, response.value, provenance)
+    let (envelope, summary, _) = orchestrate_discovery::load_discovery(store, effort, reference)?;
+    let eligible = envelope.outcome == "IMPLEMENTATION_READY"
+        && summary.outcome == "IMPLEMENTATION_READY"
+        && envelope.cohort_id.as_deref() == Some(effort.cohort.id.as_str())
+        && summary.context_id == effort.context.id
+        && summary.baseline_commit == effort.cohort.baseline_commit
+        && matches!(summary.slot.as_str(), "a" | "b" | "c");
+    Ok(if eligible { Some(summary.slot) } else { None })
+}
+
+fn artifact_ids(references: &[ArtifactRef]) -> String {
+    references
+        .iter()
+        .map(|reference| reference.artifact_id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 fn render_agreement(agreement: &Agreement) -> String {
     let mut out = format!(

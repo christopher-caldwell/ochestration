@@ -107,44 +107,23 @@ enum Discovery {
         effort: String,
         #[arg(long)]
         run: String,
-        #[arg(long)]
-        outcome: Option<String>,
-    },
-    Run {
-        #[arg(long)]
-        effort: String,
-        #[arg(long)]
-        slot: String,
-        #[arg(long = "provider-command")]
-        provider_command: PathBuf,
-        #[command(flatten)]
-        provenance: ProvenanceArgs,
     },
     Finalize {
         #[arg(long)]
         effort: String,
         #[arg(long)]
         run: String,
-        #[arg(long)]
-        outcome: Option<String>,
     },
 }
 #[derive(Subcommand)]
 enum Consensus {
-    Run {
-        #[arg(long)]
-        effort: String,
-        #[arg(long = "opinion")]
-        opinions: Vec<String>,
-        #[arg(long)]
-        provider: PathBuf,
-        #[command(flatten)]
-        provenance: ProvenanceArgs,
-    },
     Finalize {
         #[arg(long)]
         effort: String,
-        #[arg(long = "opinion")]
+        #[arg(
+            long = "opinion",
+            help = "Discovery artifact selector; omit to infer the single eligible artifact per slot"
+        )]
         opinions: Vec<String>,
         #[arg(long)]
         bundle: PathBuf,
@@ -157,8 +136,11 @@ enum AgreementCommand {
     Adopt {
         #[arg(long)]
         effort: String,
-        #[arg(long)]
-        agreement: String,
+        #[arg(
+            long,
+            help = "Agreement artifact selector; inferred when exactly one eligible Agreement exists"
+        )]
+        agreement: Option<String>,
         #[arg(long)]
         authorization_label: String,
         #[command(flatten)]
@@ -170,13 +152,14 @@ enum ImplementationCommand {
     Register {
         #[arg(long)]
         effort: String,
-        #[arg(long)]
-        adoption: String,
-        #[arg(long)]
-        project: PathBuf,
-        #[arg(long, default_value = "HEAD")]
+        #[arg(
+            long,
+            help = "Adoption receipt selector; inferred when exactly one eligible Adoption exists"
+        )]
+        adoption: Option<String>,
+        #[arg(long, default_value = "HEAD", help = "Git revision to register")]
         commit: String,
-        #[arg(long)]
+        #[arg(long, default_value = "external implementation")]
         declaration: String,
         #[arg(long, default_value = "submitted")]
         status: String,
@@ -186,20 +169,6 @@ enum ImplementationCommand {
 }
 #[derive(Subcommand)]
 enum AuditCommand {
-    Run {
-        #[arg(long)]
-        effort: String,
-        #[arg(long)]
-        agreement: String,
-        #[arg(long)]
-        adoption: String,
-        #[arg(long)]
-        implementation: String,
-        #[arg(long)]
-        provider: PathBuf,
-        #[command(flatten)]
-        provenance: ProvenanceArgs,
-    },
     Finalize {
         #[arg(long)]
         effort: String,
@@ -350,16 +319,10 @@ fn execute(store: Store, command: Command) -> Result<()> {
             );
         }
         Command::Discovery {
-            command:
-                Discovery::Validate {
-                    effort,
-                    run,
-                    outcome,
-                },
+            command: Discovery::Validate { effort, run },
         } => {
             let effort = store.load_effort(&effort)?;
-            let result =
-                orchestrate_discovery::validate(&store, &effort, &run, outcome.as_deref())?;
+            let result = orchestrate_discovery::validate(&store, &effort, &run)?;
             let details = if result.summary.outcome == "BLOCKED" {
                 let questions: Vec<_> = result
                     .nodes
@@ -379,73 +342,15 @@ fn execute(store: Store, command: Command) -> Result<()> {
             output("SUCCESS", &result.summary.outcome, details);
         }
         Command::Discovery {
-            command:
-                Discovery::Run {
-                    effort,
-                    slot,
-                    provider_command,
-                    provenance,
-                },
+            command: Discovery::Finalize { effort, run },
         } => {
             let effort = store.load_effort(&effort)?;
-            let reference = orchestrate_discovery::run_provider(
-                &store,
-                &effort,
-                &slot,
-                &provider_command,
-                DISCOVERY_GUIDE,
-                provenance.for_guide(DISCOVERY_GUIDE),
-            )?;
+            let reference = orchestrate_discovery::finalize(&store, &effort, &run)?;
+            let outcome = store.load_envelope(&effort, &reference)?.outcome;
             output(
                 "SUCCESS",
                 "FINALIZED",
-                serde_json::json!({"artifact":reference}),
-            );
-        }
-        Command::Discovery {
-            command:
-                Discovery::Finalize {
-                    effort,
-                    run,
-                    outcome,
-                },
-        } => {
-            let effort = store.load_effort(&effort)?;
-            let reference =
-                orchestrate_discovery::finalize(&store, &effort, &run, outcome.as_deref())?;
-            output(
-                "SUCCESS",
-                "FINALIZED",
-                serde_json::json!({"artifact":reference}),
-            );
-        }
-        Command::Consensus {
-            command:
-                Consensus::Run {
-                    effort,
-                    opinions,
-                    provider,
-                    provenance,
-                },
-        } => {
-            let effort = store.load_effort(&effort)?;
-            let refs = three_refs(&store, &effort, opinions)?;
-            let result = orchestrate_consensus::run_provider(
-                &store,
-                &effort,
-                refs,
-                &provider,
-                CONSENSUS_GUIDE,
-                provenance.for_guide(CONSENSUS_GUIDE),
-            )?;
-            output(
-                "SUCCESS",
-                if result.agreement.is_some() {
-                    "ELIGIBLE_CANDIDATE"
-                } else {
-                    "NO_CONSENSUS"
-                },
-                serde_json::json!({"comparison":result.comparison,"agreement":result.agreement}),
+                serde_json::json!({"artifact":reference,"outcome":outcome}),
             );
         }
         Command::Consensus {
@@ -458,7 +363,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 },
         } => {
             let effort = store.load_effort(&effort)?;
-            let refs = three_refs(&store, &effort, opinions)?;
+            let refs = consensus_opinions(&store, &effort, opinions)?;
             let proposal: ConsensusProposal = json_file(&bundle_file(&bundle, "proposal.json"))?;
             let result = orchestrate_consensus::finalize(
                 &store,
@@ -487,10 +392,14 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 },
         } => {
             let effort = store.load_effort(&effort)?;
+            let agreement = match agreement {
+                Some(artifact_id) => store.find_artifact_ref(&effort, &artifact_id)?,
+                None => orchestrate_audit::select_agreement(&store, &effort)?,
+            };
             let reference = orchestrate_audit::adopt(
                 &store,
                 &effort,
-                store.find_artifact_ref(&effort, &agreement)?,
+                agreement,
                 authorization_label,
                 provenance.for_guide(CONSENSUS_GUIDE),
             )?;
@@ -505,7 +414,6 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 ImplementationCommand::Register {
                     effort,
                     adoption,
-                    project,
                     commit,
                     declaration,
                     status,
@@ -513,12 +421,15 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 },
         } => {
             let effort = store.load_effort(&effort)?;
+            let adoption = match adoption {
+                Some(artifact_id) => store.find_artifact_ref(&effort, &artifact_id)?,
+                None => orchestrate_audit::select_adoption(&store, &effort)?,
+            };
             let status = parse_status(&status)?;
             let reference = orchestrate_audit::register_implementation(
                 &store,
                 &effort,
-                store.find_artifact_ref(&effort, &adoption)?,
-                &project,
+                adoption,
                 &commit,
                 declaration,
                 status,
@@ -528,34 +439,6 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 "SUCCESS",
                 "REGISTERED_EXTERNAL",
                 serde_json::json!({"implementation":reference}),
-            );
-        }
-        Command::Audit {
-            command:
-                AuditCommand::Run {
-                    effort,
-                    agreement,
-                    adoption,
-                    implementation,
-                    provider,
-                    provenance,
-                },
-        } => {
-            let effort = store.load_effort(&effort)?;
-            let reference = orchestrate_audit::run_provider(
-                &store,
-                &effort,
-                store.find_artifact_ref(&effort, &agreement)?,
-                store.find_artifact_ref(&effort, &adoption)?,
-                store.find_artifact_ref(&effort, &implementation)?,
-                &provider,
-                AUDIT_GUIDE,
-                provenance.for_guide(AUDIT_GUIDE),
-            )?;
-            output(
-                "SUCCESS",
-                "ASSESSMENT_FINALIZED",
-                serde_json::json!({"audit":reference}),
             );
         }
         Command::Audit {
@@ -574,10 +457,11 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 assessment,
                 provenance.for_guide(AUDIT_GUIDE),
             )?;
+            let verdict = store.load_envelope(&effort, &reference)?.outcome;
             output(
                 "SUCCESS",
                 "ASSESSMENT_FINALIZED",
-                serde_json::json!({"audit":reference}),
+                serde_json::json!({"audit":reference,"verdict":verdict}),
             );
         }
         Command::Journal(args) => {
@@ -619,14 +503,17 @@ fn execute(store: Store, command: Command) -> Result<()> {
     }
     Ok(())
 }
-fn three_refs(
+fn consensus_opinions(
     store: &Store,
     effort: &orchestrate_core::Effort,
     opinions: Vec<String>,
 ) -> Result<[ArtifactRef; 3]> {
+    if opinions.is_empty() {
+        return orchestrate_consensus::select_opinions(store, effort);
+    }
     ensure!(
         opinions.len() == 3,
-        "exactly three --opinion selectors are required"
+        "pass exactly three --opinion selectors, or omit --opinion to infer the eligible artifacts"
     );
     opinions
         .iter()

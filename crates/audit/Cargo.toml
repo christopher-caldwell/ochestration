@@ -8,7 +8,6 @@ license.workspace = true
 anyhow.workspace = true
 orchestrate-contracts = { path = "../contracts" }
 orchestrate-core = { path = "../core" }
-serde.workspace = true
 serde_json.workspace = true
 
 [lints]
