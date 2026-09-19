@@ -6,6 +6,7 @@ use orchestrate_contracts::{
 };
 use orchestrate_core::Store;
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -117,6 +118,15 @@ enum Discovery {
 }
 #[derive(Subcommand)]
 enum Consensus {
+    Inputs {
+        #[arg(long)]
+        effort: String,
+        #[arg(
+            long = "opinion",
+            help = "Discovery artifact selector; omit to resolve the single eligible artifact per slot"
+        )]
+        opinions: Vec<String>,
+    },
     Finalize {
         #[arg(long)]
         effort: String,
@@ -354,6 +364,17 @@ fn execute(store: Store, command: Command) -> Result<()> {
             );
         }
         Command::Consensus {
+            command: Consensus::Inputs { effort, opinions },
+        } => {
+            let effort = store.load_effort(&effort)?;
+            let opinions = consensus_opinions(&store, &effort, opinions)?;
+            output(
+                "SUCCESS",
+                "READ_ONLY",
+                serde_json::json!({"opinions":opinions}),
+            );
+        }
+        Command::Consensus {
             command:
                 Consensus::Finalize {
                     effort,
@@ -507,20 +528,11 @@ fn consensus_opinions(
     store: &Store,
     effort: &orchestrate_core::Effort,
     opinions: Vec<String>,
-) -> Result<[ArtifactRef; 3]> {
+) -> Result<BTreeMap<String, ArtifactRef>> {
     if opinions.is_empty() {
         return orchestrate_consensus::select_opinions(store, effort);
     }
-    ensure!(
-        opinions.len() == 3,
-        "pass exactly three --opinion selectors, or omit --opinion to infer the eligible artifacts"
-    );
-    opinions
-        .iter()
-        .map(|id| store.find_artifact_ref(effort, id))
-        .collect::<Result<Vec<_>>>()?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("three opinions required"))
+    orchestrate_consensus::bind_opinions(store, effort, &opinions)
 }
 fn store(root: Option<PathBuf>) -> Result<Store> {
     Store::open(root.unwrap_or_else(default_root))

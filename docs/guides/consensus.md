@@ -13,19 +13,32 @@ Open a fresh model session and invoke `orchestrate-consensus`, giving it the eff
 The skill resolves the `orchestrate` executable, runs `orchestrate guide consensus` as its controlling instructions, and reads only:
 
 - the frozen request and context;
-- the three finalized public Discovery specifications.
+- the three resolved finalized public Discovery specifications.
 
 It never inspects the target repository, private Discovery chats, or sibling workspaces.
 
-The skill writes `proposal.json`, then finalizes:
+Before it reconciles anything, the skill resolves the exact inputs:
 
 ```sh
-orchestrate consensus finalize --effort "$EFFORT_ID" --bundle "/absolute/path/to/proposal.json"
+orchestrate consensus inputs --effort "$EFFORT_ID"
 ```
 
-`--opinion` is omitted, so Rust selects the single eligible finalized Discovery artifact for each of slots `a`, `b`, and `c`. Eligibility requires a finalized `Discovery` artifact with outcome `IMPLEMENTATION_READY` for the same effort, cohort, context, and baseline, in the correct slot.
+Rust names the single eligible finalized Discovery artifact for each of slots `a`, `b`, and `c`. Eligibility requires a finalized `Discovery` artifact with outcome `IMPLEMENTATION_READY` for the same effort, cohort, context, and baseline, in the correct slot.
 
-If a slot has no eligible artifact or more than one, the command fails and lists what it found. The skill then asks you which artifacts to use and re-runs with all three explicit selectors. Rust never silently picks the newest artifact.
+If a slot has no eligible artifact or more than one, the command fails and lists what it found. The skill then asks you which artifacts to use and confirms the complete set with all three explicit selectors. Rust never silently picks the newest artifact.
+
+The skill reads exactly those three artifacts, writes `proposal.json`, and finalizes against the same three:
+
+```sh
+orchestrate consensus finalize \
+  --effort "$EFFORT_ID" \
+  --opinion "$A_DISCOVERY_ARTIFACT" \
+  --opinion "$B_DISCOVERY_ARTIFACT" \
+  --opinion "$C_DISCOVERY_ARTIFACT" \
+  --bundle "/absolute/path/to/proposal.json"
+```
+
+The parent artifacts are fixed before reconciliation begins and cannot move afterwards, so the immutable Consensus lineage always names the artifacts the proposal was actually derived from.
 
 The result is either:
 
@@ -85,6 +98,8 @@ Nothing adopts automatically, and the Consensus skill never adopts on your behal
 
 You can run Consensus by hand when debugging or producing the proposal yourself. All three Discoveries must be `IMPLEMENTATION_READY`; a blocked Discovery is intentionally ineligible.
 
+`orchestrate consensus inputs` performs the input resolution read-only and publishes nothing. Run it without `--opinion` to see the inferred artifacts, or with all three `--opinion` selectors to check an explicit set before you reconcile against it.
+
 A simplified `proposal.json` requirement entry looks like:
 
 ```json
@@ -128,7 +143,7 @@ common = {B}
 
 The second package is rejected even though each row separately has two supporters. Explicit user constraints are appended as governing requirements; they are not Consensus votes.
 
-Finalize with explicit selectors when you want to override inference:
+Finalize against the artifacts you resolved and reconciled:
 
 ```sh
 orchestrate consensus finalize \

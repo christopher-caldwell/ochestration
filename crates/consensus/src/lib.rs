@@ -74,18 +74,20 @@ pub fn mandatory_package_support(
 ///
 /// Inference never guesses: a slot with no candidate or more than one candidate stops
 /// the operation and requires explicit `--opinion` selectors.
-pub fn select_opinions(store: &Store, effort: &Effort) -> Result<[ArtifactRef; 3]> {
+pub fn select_opinions(store: &Store, effort: &Effort) -> Result<BTreeMap<String, ArtifactRef>> {
     let mut candidates: BTreeMap<String, Vec<ArtifactRef>> = BTreeMap::new();
     for reference in store.list_artifacts(effort)? {
         if let Some(slot) = eligible_slot(store, effort, &reference)? {
             candidates.entry(slot).or_default().push(reference);
         }
     }
-    let mut selected = Vec::new();
+    let mut selected = BTreeMap::new();
     for slot in ["a", "b", "c"] {
         let found = candidates.remove(slot).unwrap_or_default();
         match found.as_slice() {
-            [only] => selected.push(only.clone()),
+            [only] => {
+                selected.insert(slot.to_owned(), only.clone());
+            }
             [] => bail!(
                 "no eligible finalized Discovery artifact exists for slot {slot}; finalize an implementation-ready Discovery for every slot or pass three explicit --opinion selectors"
             ),
@@ -95,49 +97,71 @@ pub fn select_opinions(store: &Store, effort: &Effort) -> Result<[ArtifactRef; 3
             ),
         }
     }
-    selected
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("three opinions required"))
+    Ok(selected)
+}
+
+/// Bind an explicit set of Consensus input selectors to the exact eligible artifacts.
+///
+/// This is the only way an explicit parent selection enters a Consensus session, so it
+/// validates the whole set before any reconciliation can depend on it: exactly three
+/// selectors, each an eligible finalized Discovery artifact, one per distinct slot.
+pub fn bind_opinions(
+    store: &Store,
+    effort: &Effort,
+    selectors: &[String],
+) -> Result<BTreeMap<String, ArtifactRef>> {
+    ensure!(
+        selectors.len() == 3,
+        "pass exactly three --opinion selectors, or omit --opinion to infer the eligible artifacts"
+    );
+    let mut selected: BTreeMap<String, ArtifactRef> = BTreeMap::new();
+    for selector in selectors {
+        let reference = store.find_artifact_ref(effort, selector)?;
+        ensure!(
+            reference.kind == ArtifactKind::Discovery,
+            "consensus needs Discovery artifacts"
+        );
+        let slot = eligible_slot(store, effort, &reference)?.with_context(|| {
+            format!(
+                "Discovery artifact {} is not an eligible Consensus opinion",
+                reference.artifact_id
+            )
+        })?;
+        ensure!(
+            selected.insert(slot, reference).is_none(),
+            "duplicate Discovery slot"
+        );
+    }
+    ensure!(
+        ["a", "b", "c"]
+            .iter()
+            .all(|slot| selected.contains_key(*slot)),
+        "all three distinct eligible slots are required"
+    );
+    Ok(selected)
 }
 
 pub fn finalize(
     store: &Store,
     effort: &Effort,
-    refs: [ArtifactRef; 3],
+    opinions: BTreeMap<String, ArtifactRef>,
     proposal: ConsensusProposal,
     provenance: Provenance,
 ) -> Result<ConsensusResult> {
+    // Finalization re-binds its parents through the same resolution path that produced
+    // them, so it can never publish a comparison against an ineligible artifact.
+    let selectors = opinions
+        .values()
+        .map(|reference| reference.artifact_id.clone())
+        .collect::<Vec<_>>();
+    let opinions = bind_opinions(store, effort, &selectors)?;
+    let refs: Vec<ArtifactRef> = opinions.values().cloned().collect();
     store.append_journal(
         effort,
         "consensus_started",
         None,
         serde_json::json!({"inputs":refs.iter().map(|r|&r.artifact_id).collect::<Vec<_>>()}),
     )?;
-    let mut opinions = BTreeMap::new();
-    let mut public_specs = Vec::new();
-    for reference in &refs {
-        ensure!(
-            reference.kind == ArtifactKind::Discovery,
-            "consensus needs Discovery artifacts"
-        );
-        let slot = eligible_slot(store, effort, reference)?.with_context(|| {
-            format!(
-                "Discovery artifact {} is not an eligible Consensus opinion",
-                reference.artifact_id
-            )
-        })?;
-        if opinions.insert(slot.clone(), reference.clone()).is_some() {
-            bail!("duplicate Discovery slot");
-        }
-        public_specs.push(slot);
-    }
-    ensure!(
-        opinions.len() == 3
-            && ["a", "b", "c"]
-                .iter()
-                .all(|slot| opinions.contains_key(*slot)),
-        "all three distinct eligible slots are required"
-    );
     let outcome = (|| -> Result<ConsensusResult> {
         let (mut requirements, common) = mandatory_package_support(&proposal)?;
         let eligible =

@@ -173,6 +173,8 @@ Private conversation transcripts are not part of the authority chain. The public
 
 Consensus consumes exactly three finalized, eligible Discovery artifacts from slots A, B, and C in the same cohort.
 
+The exact three artifacts are resolved before reconciliation starts, an ambiguous slot is resolved with the user first, and finalization binds those same three artifacts. A Consensus lineage therefore always names the artifacts the proposal was actually derived from, and a Discovery artifact that becomes eligible later cannot change them.
+
 It does not re-investigate the repository. Its job is semantic reconciliation:
 
 - normalize equivalent conclusions;

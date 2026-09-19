@@ -62,7 +62,7 @@ A blocked Discovery is a valid result but cannot proceed into Consensus. Do not 
 
 In a fresh session, invoke `orchestrate-consensus` with the effort ID (and the store root if it is not `~/.orchestration`).
 
-The skill reads the frozen request and the three finalized public Discovery specifications, reconciles them, writes `proposal.json`, and finalizes. Rust infers the single eligible finalized Discovery artifact for each slot; the skill asks you only if a slot has no candidate or more than one, and re-runs with explicit selectors.
+Before it reconciles anything, the skill resolves the exact eligible artifact for each slot. It then reads the frozen request and exactly those three Discovery specifications, reconciles them, writes `proposal.json`, and finalizes against the same three artifact IDs. It asks you only if a slot has no candidate or more than one, and it never changes the parents after reconciliation.
 
 The skill then reports either `NO_CONSENSUS` or the Agreement candidate. If a candidate exists, review the Agreement it shows you — that is exactly what adoption would authorize.
 
@@ -164,12 +164,10 @@ orchestrate discovery finalize --effort "$EFFORT_ID" --run "RUN-ID"
 ### Consensus
 
 ```sh
-orchestrate consensus finalize \
-  --effort "$EFFORT_ID" \
-  --bundle "/absolute/path/to/proposal.json"
+orchestrate consensus inputs --effort "$EFFORT_ID"
 ```
 
-Omit `--opinion` to infer the single eligible Discovery artifact per slot. When a slot has no candidate or several candidates, the command stops and lists them; re-run with all three explicit selectors:
+`consensus inputs` is read-only: it resolves the single eligible Discovery artifact per slot, or stops and lists what it found when a slot has none or several. Resolve the exact `A`, `B`, and `C` first, reconcile against exactly those artifacts, and finalize against the same three:
 
 ```sh
 orchestrate consensus finalize \
@@ -179,6 +177,18 @@ orchestrate consensus finalize \
   --opinion "$C_DISCOVERY_ARTIFACT" \
   --bundle "/absolute/path/to/proposal.json"
 ```
+
+`consensus inputs` also accepts all three explicit selectors and validates the set without publishing anything. When a slot has no candidate or several candidates, it stops and lists them, so you can choose and check the set before reconciling:
+
+```sh
+orchestrate consensus inputs \
+  --effort "$EFFORT_ID" \
+  --opinion "$A_DISCOVERY_ARTIFACT" \
+  --opinion "$B_DISCOVERY_ARTIFACT" \
+  --opinion "$C_DISCOVERY_ARTIFACT"
+```
+
+Omit `--opinion` on `consensus finalize` to infer the single eligible Discovery artifact per slot; explicit selection is all-or-nothing.
 
 The result is `ELIGIBLE_CANDIDATE` with an Agreement artifact, or `NO_CONSENSUS`. Do not force `NO_CONSENSUS` forward.
 

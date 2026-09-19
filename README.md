@@ -83,7 +83,7 @@ $orchestrate-consensus → review → explicit adopt → external Build
     → orchestrate implementation register --effort "$EFFORT" → $orchestrate-audit
 ```
 
-Consensus infers the three eligible Discovery artifacts, and registration infers the canonical project and the sole Adoption receipt, so the typed surface stays small. See the [step-by-step run guide](docs/guides/run.md) for the full workflow and the raw commands for manual use.
+Consensus resolves the three eligible Discovery artifacts before it reconciles them and binds those same three at finalization, and registration infers the canonical project and the sole Adoption receipt, so the typed surface stays small. See the [step-by-step run guide](docs/guides/run.md) for the full workflow and the raw commands for manual use.
 
 ## Key concepts
 

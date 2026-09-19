@@ -233,6 +233,30 @@ fn consensus_agreement(root: &Path, effort: &str, proposal: &Path) -> ArtifactRe
     );
     reference(&consensus, "agreement")
 }
+fn consensus_inputs(root: &Path, effort: &str, selectors: &[&str]) -> serde_json::Value {
+    let mut args = vec!["consensus", "inputs", "--effort", effort];
+    for selector in selectors {
+        args.push("--opinion");
+        args.push(selector);
+    }
+    command(root, &args)
+}
+fn resolved_opinions(value: &serde_json::Value) -> BTreeMap<String, ArtifactRef> {
+    serde_json::from_value(value["details"]["opinions"].clone()).unwrap()
+}
+fn comparison_opinions(root: &Path, effort: &str, comparison: &ArtifactRef) -> Vec<String> {
+    let store = Store::open(root).unwrap();
+    let effort = store.load_effort(effort).unwrap();
+    let (_, files) = store.load_bundle(&effort, comparison).unwrap();
+    let comparison: serde_json::Value =
+        serde_json::from_slice(files.get("comparison.json").unwrap()).unwrap();
+    comparison["opinions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value["artifact_id"].as_str().unwrap().to_owned())
+        .collect()
+}
 fn implementation_payload(root: &Path, effort: &str, reference: &ArtifactRef) -> Implementation {
     let store = Store::open(root).unwrap();
     let effort = store.load_effort(effort).unwrap();
@@ -1291,6 +1315,170 @@ fn consensus_inference_rejects_ambiguous_slot_candidates() {
     assert!(error.contains(&first.artifact_id), "{error}");
     assert!(error.contains(&second.artifact_id), "{error}");
     assert!(error.contains("--opinion"), "{error}");
+}
+
+#[test]
+fn consensus_inputs_resolve_the_exact_opinions_before_reconciliation() {
+    let (root, _repo, effort) = new_effort("consensus-inputs-resolve", "change fixture");
+    let expected: Vec<_> = ["a", "b", "c"]
+        .iter()
+        .map(|slot| finalize_discovery(&root, &effort, slot))
+        .collect();
+
+    let resolved = consensus_inputs(&root, &effort, &[]);
+    assert_eq!(resolved["semantic_outcome"], "READ_ONLY");
+    let opinions = resolved_opinions(&resolved);
+    let slots: Vec<_> = opinions.keys().cloned().collect();
+    assert_eq!(slots, vec!["a", "b", "c"]);
+    assert_eq!(
+        opinions.values().cloned().collect::<Vec<_>>(),
+        expected,
+        "resolution must name the exact eligible artifact of every slot"
+    );
+
+    let proposal = write_proposal(&root, "proposal-resolved-inputs");
+    let consensus = command(
+        &root,
+        &[
+            "consensus",
+            "finalize",
+            "--effort",
+            &effort,
+            "--opinion",
+            &opinions["a"].artifact_id,
+            "--opinion",
+            &opinions["b"].artifact_id,
+            "--opinion",
+            &opinions["c"].artifact_id,
+            "--bundle",
+            proposal.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        reference(&consensus, "agreement").kind,
+        ArtifactKind::Agreement
+    );
+    assert_eq!(
+        comparison_opinions(&root, &effort, &reference(&consensus, "comparison")),
+        vec![
+            opinions["a"].artifact_id.clone(),
+            opinions["b"].artifact_id.clone(),
+            opinions["c"].artifact_id.clone()
+        ],
+        "finalization must bind exactly the resolved artifacts"
+    );
+}
+
+#[test]
+fn consensus_inputs_stop_before_reconciliation_when_a_slot_has_no_eligible_artifact() {
+    let (root, _repo, effort) = new_effort("consensus-inputs-missing-slot", "change fixture");
+    for slot in ["a", "b"] {
+        finalize_discovery(&root, &effort, slot);
+    }
+
+    let error = command_error(&root, &["consensus", "inputs", "--effort", &effort]);
+    assert!(
+        error.contains("no eligible finalized Discovery artifact exists for slot c"),
+        "{error}"
+    );
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    assert!(
+        store
+            .list_artifacts(&effort_state)
+            .unwrap()
+            .iter()
+            .all(|reference| !matches!(
+                reference.kind,
+                ArtifactKind::ConsensusComparison | ArtifactKind::Agreement
+            )),
+        "input resolution must not publish anything"
+    );
+}
+
+#[test]
+fn consensus_inputs_require_a_user_choice_when_a_slot_is_ambiguous() {
+    let (root, _repo, effort) = new_effort("consensus-inputs-ambiguous-slot", "change fixture");
+    let first = finalize_discovery(&root, &effort, "a");
+    let second = finalize_discovery(&root, &effort, "a");
+    let b = finalize_discovery(&root, &effort, "b");
+    let c = finalize_discovery(&root, &effort, "c");
+
+    let error = command_error(&root, &["consensus", "inputs", "--effort", &effort]);
+    assert!(
+        error.contains("multiple eligible Discovery artifacts exist for slot a"),
+        "{error}"
+    );
+    assert!(error.contains(&first.artifact_id), "{error}");
+    assert!(error.contains(&second.artifact_id), "{error}");
+
+    let chosen = consensus_inputs(
+        &root,
+        &effort,
+        &[&second.artifact_id, &b.artifact_id, &c.artifact_id],
+    );
+    let opinions = resolved_opinions(&chosen);
+    assert_eq!(opinions["a"], second);
+    assert_eq!(opinions["b"], b);
+    assert_eq!(opinions["c"], c);
+
+    let rejected = command_error(
+        &root,
+        &[
+            "consensus",
+            "inputs",
+            "--effort",
+            &effort,
+            "--opinion",
+            &second.artifact_id,
+            "--opinion",
+            &second.artifact_id,
+            "--opinion",
+            &b.artifact_id,
+        ],
+    );
+    assert!(rejected.contains("duplicate Discovery slot"), "{rejected}");
+}
+
+#[test]
+fn consensus_finalization_binds_the_resolved_inputs_after_new_candidates_appear() {
+    let (root, _repo, effort) = new_effort("consensus-binding-stability", "change fixture");
+    for slot in ["a", "b", "c"] {
+        finalize_discovery(&root, &effort, slot);
+    }
+    let resolved = resolved_opinions(&consensus_inputs(&root, &effort, &[]));
+    let proposal = write_proposal(&root, "proposal-binding-stability");
+
+    // A further eligible Discovery for slot a appears after resolution.
+    let late = finalize_discovery(&root, &effort, "a");
+    assert_ne!(late.artifact_id, resolved["a"].artifact_id);
+
+    let consensus = command(
+        &root,
+        &[
+            "consensus",
+            "finalize",
+            "--effort",
+            &effort,
+            "--opinion",
+            &resolved["a"].artifact_id,
+            "--opinion",
+            &resolved["b"].artifact_id,
+            "--opinion",
+            &resolved["c"].artifact_id,
+            "--bundle",
+            proposal.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        comparison_opinions(&root, &effort, &reference(&consensus, "comparison")),
+        vec![
+            resolved["a"].artifact_id.clone(),
+            resolved["b"].artifact_id.clone(),
+            resolved["c"].artifact_id.clone()
+        ],
+        "a later eligible artifact must not change the finalized parents"
+    );
 }
 
 #[test]
