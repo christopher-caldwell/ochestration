@@ -1,6 +1,6 @@
 # Orchestrate Discovery
 
-Discovery answers: **what should be built, and why?** Work only in the run workspace supplied by `orchestrate discovery prepare`. Its `source/` directory is a clean detached checkout of the cohort baseline with Git history. Do not inspect sibling runs, parent records, a dirty checkout, or unrelated paths.
+Discovery answers: **what should be built, and why?** Work only in the run workspace supplied by `orchestrate discovery prepare`. If the run was already prepared (for example by `orchestrate discovery prepare-all`), do not run `prepare` again; use the supplied workspace and run ID. The workspace's `source/` directory is a clean detached checkout of the cohort baseline with Git history. Do not inspect sibling runs, parent records, a dirty checkout, or unrelated paths.
 
 Start by reading `run.json`, `request.md`, and `context.json`. `run.json` defines this Discovery run: its slot, effort, cohort, baseline, host, provider, model, and model effort. `request.md` is the original user input and must be read as written. `context.json` supplies the same frozen request for convenience plus explicit user-supplied constraints. Constraints are explicit user-supplied clarifications or governing instructions; do not extract new immutable constraints from a ticket.
 

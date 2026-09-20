@@ -11,7 +11,8 @@ Use this skill only when explicitly invoked. It owns the normal lifecycle of a s
 ## 1. Resolve the CLI and the inputs
 
 - Resolve the installed executable with `command -v orchestrate`, falling back to `$CARGO_HOME/bin/orchestrate` or `~/.cargo/bin/orchestrate`. If it cannot be found, stop and tell the user.
-- Take the effort ID and the slot (`a`, `b`, or `c`) from the user. Ask for whichever value is missing; never guess either one.
+- Take the effort ID and the slot from the user. Ask for whichever value is missing; never guess either one.
+- If the user also supplies an already-prepared run ID and workspace path, use them and skip the prepare step. This is the normal shape for a parallel launch.
 - If the user supplies a store root, include `--root "<root>"` on every command below. Otherwise omit `--root` so the CLI uses `~/.orchestration`.
 - Pass `--host`, `--provider`, `--model`, and `--model-effort` only when the user supplies them. Never invent provider or model values; report when provenance fell back to CLI defaults.
 
@@ -19,7 +20,10 @@ Use this skill only when explicitly invoked. It owns the normal lifecycle of a s
 
 Run `orchestrate guide discovery` (with `--root` when the user supplied one). That guide is authoritative for phase behavior; follow it throughout this session.
 
-## 3. Prepare the run
+## 3. Prepare the run (unless already prepared)
+
+If the user supplied a pre-prepared run ID and workspace, skip this step and use those values in
+step 4. Otherwise run:
 
 ```sh
 orchestrate discovery prepare --effort "<effort>" --slot "<slot>"

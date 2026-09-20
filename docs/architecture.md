@@ -5,9 +5,9 @@ Orchestrate is intentionally a small deterministic shell around capable engineer
 The product is the authority chain:
 
 ```text
-Discovery A ─┐
-Discovery B ─┼─→ Consensus → adopted Agreement → external Build → Audit
-Discovery C ─┘
+Discovery codex  ─┐
+Discovery claude ─┼─→ Consensus → adopted Agreement → external Build → Audit
+Discovery cursor ─┘
 ```
 
 Models perform semantic engineering work. Rust freezes inputs, validates mechanical invariants, binds exact artifacts together, and prevents a later phase from quietly changing what an earlier phase established.
@@ -23,18 +23,18 @@ A useful way to divide responsibility is:
 - which code, tests, history, documentation, or experiments matter;
 - whether an ambiguity is material;
 - what implementation direction the evidence supports;
-- whether three Discovery results express the same underlying conclusion;
+- whether the Discovery results express the same underlying conclusion;
 - whether an implementation satisfies a requirement.
 
 ### Rust decides
 
 - which exact request and constraints define the effort;
-- which exact Git commit all three Discoveries inspect;
+- which exact Git commit every Discovery inspects;
 - whether a Discovery graph is structurally valid;
 - whether a blocked question makes the Discovery blocked;
-- whether all three Consensus inputs belong to the same cohort;
-- whether every Consensus requirement has a strict majority;
-- whether the entire mandatory package shares one common strict majority;
+- whether every Consensus input belongs to the same cohort;
+- whether every Consensus requirement meets the configured quorum;
+- whether the entire mandatory package shares one common quorum;
 - which exact Agreement was adopted;
 - which exact implementation commit/tree was registered;
 - whether Audit covers the Agreement completely;
@@ -52,7 +52,9 @@ Initialization freezes three things that matter downstream:
 2. any explicit user constraints;
 3. the target repository's current committed Git baseline.
 
-The request and constraints form a context identity. A three-slot **cohort** binds that context to one baseline commit and tree.
+The request and constraints form a context identity. A **cohort** binds that context to one
+baseline commit and tree plus an ordered, provider-named slot set (default `codex`, `claude`,
+`cursor`; extended via `--slot` or `--providers`) and a consensus `quorum`.
 
 All Discovery runs in the cohort therefore investigate the same subject.
 
@@ -65,7 +67,8 @@ Effort
 └── Cohort
     ├── baseline commit
     ├── baseline tree
-    └── slots: a, b, c
+    ├── slots: codex, claude, cursor, ...
+    └── quorum
 ```
 
 A constraint is direct user authority. It is not intended to be an AI-extracted summary of a ticket.
@@ -94,7 +97,8 @@ For ticket requests, the preparation skill deliberately leaves the original tick
 
 ## 3. Independent Discovery runs
 
-Each cohort has exactly three slots: `a`, `b`, and `c`.
+Each cohort has one run workspace per declared slot. Slots are independent provider identities
+(`codex`, `claude`, `cursor`, or a custom name such as `provider-x`).
 
 `discovery prepare` creates a separate self-describing workspace for one slot:
 
@@ -111,7 +115,13 @@ technical-spec.md
 
 `source/` is a clean detached Git checkout at the cohort baseline. It includes Git history, but excludes dirty and untracked state from the operator's working checkout.
 
-The three workspaces are isolated from one another. Independence is about peer reasoning: A must not receive B or C's private work, and so on.
+The workspaces are isolated from one another. Independence is about peer reasoning: one slot must
+not receive another slot's private work.
+
+For a first-class parallel run, `discovery prepare-all` prepares every slot sequentially from a
+provider plan and emits `launch.json`; the bundled launcher script then starts the headless
+providers concurrently, each confined to its own workspace and log directory. The Rust CLI itself
+still never launches model providers.
 
 ## 4. Discovery evidence graph
 
@@ -171,9 +181,12 @@ Private conversation transcripts are not part of the authority chain. The public
 
 ## 6. Consensus
 
-Consensus consumes exactly three finalized, eligible Discovery artifacts from slots A, B, and C in the same cohort.
+Consensus consumes exactly one finalized, eligible Discovery artifact from every slot in the same cohort.
 
-The exact three artifacts are resolved before reconciliation starts, an ambiguous slot is resolved with the user first, and finalization binds those same three artifacts. A Consensus lineage therefore always names the artifacts the proposal was actually derived from, and a Discovery artifact that becomes eligible later cannot change them.
+The exact artifact set is resolved before reconciliation starts, an ambiguous slot is resolved with
+the user first, and finalization binds those same artifacts. A Consensus lineage therefore always
+names the artifacts the proposal was actually derived from, and a Discovery artifact that becomes
+eligible later cannot change them.
 
 It does not re-investigate the repository. Its job is semantic reconciliation:
 
@@ -183,11 +196,13 @@ It does not re-investigate the repository. Its job is semantic reconciliation:
 - retain meaningful dissent;
 - identify which slots support each proposed requirement.
 
-### Strict-majority package rule
+### Quorum package rule
 
-Each Consensus-derived mandatory requirement needs at least two supporters.
+Each Consensus-derived mandatory requirement needs at least `quorum` supporters. `quorum` defaults
+to strict majority (`floor(N/2)+1`) and is frozen at initialization.
 
-Orchestrate also intersects the supporter sets across the entire mandatory package. The intersection must itself contain at least two slots.
+Orchestrate also intersects the supporter sets across the entire mandatory package. The
+intersection must itself contain at least `quorum` slots.
 
 For example:
 

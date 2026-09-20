@@ -178,6 +178,12 @@ fn new_effort(name: &str, request: &str) -> (PathBuf, PathBuf, String) {
             name,
             "--request",
             request,
+            "--slot",
+            "a",
+            "--slot",
+            "b",
+            "--slot",
+            "c",
         ],
     );
     let effort = init["details"]["effort"].as_str().unwrap().to_owned();
@@ -305,6 +311,12 @@ fn typed_request_intake_changes_context_identity() {
             ticket.to_str().unwrap(),
             "--request-kind",
             "ticket",
+            "--slot",
+            "a",
+            "--slot",
+            "b",
+            "--slot",
+            "c",
         ],
     );
     let changed_request = command(
@@ -677,6 +689,12 @@ fn discovery_workspace_is_self_describing_git_checkout_and_preserves_blockers() 
             ticket.to_str().unwrap(),
             "--request-kind",
             "ticket",
+            "--slot",
+            "a",
+            "--slot",
+            "b",
+            "--slot",
+            "c",
         ],
     );
     let effort_id = init["details"]["effort"].as_str().unwrap().to_owned();
@@ -853,6 +871,12 @@ fn optional_blocked_question_blocks_discovery_and_is_reported() {
             "optional-blocked-question",
             "--request",
             "change fixture",
+            "--slot",
+            "a",
+            "--slot",
+            "b",
+            "--slot",
+            "c",
         ],
     );
     let effort_id = init["details"]["effort"].as_str().unwrap().to_owned();
@@ -919,6 +943,12 @@ fn complete_flow_preserves_source_and_journal() {
             "change fixture",
             "--constraint",
             "preserve boundary",
+            "--slot",
+            "a",
+            "--slot",
+            "b",
+            "--slot",
+            "c",
         ],
     );
     let effort_id = init["details"]["effort"].as_str().unwrap().to_owned();
@@ -1620,5 +1650,350 @@ fn implementation_registration_uses_the_stored_project_and_defaults() {
     assert_eq!(
         payload.producer_declaration,
         "Partial implementation; blocked by pending review"
+    );
+}
+
+fn write_providers(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn init_with_provider_plan_defines_cohort_slots_and_quorum() {
+    let root = temporary("plan-init-store");
+    let aux = temporary("plan-init-aux");
+    let repo = temporary("plan-init-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let plan = write_providers(
+        &aux,
+        "providers.toml",
+        "quorum = \"majority\"\n\n\
+         [[provider]]\nname = \"codex\"\nhost = \"codex\"\ninteractive = false\ncommand = [\"/bin/true\"]\n\n\
+         [[provider]]\nname = \"claude\"\nhost = \"claude-code\"\ninteractive = false\ncommand = [\"/bin/true\"]\n\n\
+         [[provider]]\nname = \"cursor\"\nhost = \"cursor\"\ninteractive = true\ncommand = [\"cursor\", \"{workspace}\"]\n",
+    );
+    let init = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "plan",
+            "--request",
+            "change fixture",
+            "--providers",
+            plan.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        init["details"]["slots"],
+        serde_json::json!(["codex", "claude", "cursor"])
+    );
+    assert_eq!(init["details"]["quorum"], 2);
+}
+
+#[test]
+fn init_with_provider_plan_accepts_an_integer_quorum_and_four_slots() {
+    let root = temporary("plan-int-quorum-store");
+    let aux = temporary("plan-int-quorum-aux");
+    let repo = temporary("plan-int-quorum-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let plan = write_providers(
+        &aux,
+        "providers.toml",
+        "quorum = 2\n\n\
+         [[provider]]\nname = \"codex\"\nhost = \"codex\"\ninteractive = false\ncommand = [\"/bin/true\"]\n\n\
+         [[provider]]\nname = \"claude\"\nhost = \"claude-code\"\ninteractive = false\ncommand = [\"/bin/true\"]\n\n\
+         [[provider]]\nname = \"cursor\"\nhost = \"cursor\"\ninteractive = false\ncommand = [\"/bin/true\"]\n\n\
+         [[provider]]\nname = \"provider-x\"\nhost = \"provider-x\"\ninteractive = false\ncommand = [\"/bin/true\"]\n",
+    );
+    let init = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "plan-int-quorum",
+            "--request",
+            "change fixture",
+            "--providers",
+            plan.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        init["details"]["slots"],
+        serde_json::json!(["codex", "claude", "cursor", "provider-x"])
+    );
+    assert_eq!(init["details"]["quorum"], 2);
+}
+
+#[test]
+fn init_rejects_invalid_slots_and_quorum() {
+    let root = temporary("plan-invalid-store");
+    let repo = temporary("plan-invalid-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let duplicate = command_error(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "dup",
+            "--request",
+            "change fixture",
+            "--slot",
+            "a",
+            "--slot",
+            "a",
+            "--slot",
+            "b",
+        ],
+    );
+    assert!(duplicate.contains("duplicate"), "{duplicate}");
+
+    let out_of_range = command_error(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "quorum",
+            "--request",
+            "change fixture",
+            "--slot",
+            "a",
+            "--slot",
+            "b",
+            "--quorum",
+            "3",
+        ],
+    );
+    assert!(
+        out_of_range.contains("quorum must be between"),
+        "{out_of_range}"
+    );
+}
+
+#[test]
+fn prepare_all_emits_manifest_and_prepares_every_slot() {
+    let root = temporary("prepare-all-store");
+    let aux = temporary("prepare-all-aux");
+    let repo = temporary("prepare-all-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let plan = write_providers(
+        &aux,
+        "providers.toml",
+        "[[provider]]\nname = \"codex\"\nhost = \"codex\"\ninteractive = false\ncommand = [\"/bin/sh\", \"-c\", \"touch {log}/sentinel\"]\n\n\
+         [[provider]]\nname = \"claude\"\nhost = \"claude-code\"\ninteractive = false\ncommand = [\"/bin/sh\", \"-c\", \"touch {log}/sentinel\"]\n\n\
+         [[provider]]\nname = \"cursor\"\nhost = \"cursor\"\ninteractive = true\ncommand = [\"cursor\", \"{workspace}\"]\n",
+    );
+    let init = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "prepare-all",
+            "--request",
+            "change fixture",
+            "--providers",
+            plan.to_str().unwrap(),
+        ],
+    );
+    let effort = init["details"]["effort"].as_str().unwrap().to_owned();
+    let launch_dir = root.join("launch");
+    let result = command(
+        &root,
+        &[
+            "discovery",
+            "prepare-all",
+            "--effort",
+            &effort,
+            "--providers",
+            plan.to_str().unwrap(),
+            "--launch-dir",
+            launch_dir.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(result["semantic_outcome"], "PREPARED_ALL");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(launch_dir.join("launch.json")).unwrap()).unwrap();
+    assert_eq!(manifest["effort"], effort);
+    assert_eq!(
+        manifest["slots"],
+        serde_json::json!(["codex", "claude", "cursor"])
+    );
+    assert_eq!(manifest["quorum"], 2);
+    for provider in manifest["providers"].as_array().unwrap() {
+        let slot = provider["slot"].as_str().unwrap();
+        let workspace = PathBuf::from(provider["workspace"].as_str().unwrap());
+        assert!(workspace.join("run.json").exists());
+        assert!(workspace.join("source").is_dir());
+        assert!(PathBuf::from(provider["prompt"].as_str().unwrap()).exists());
+        let run_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(workspace.join("run.json")).unwrap()).unwrap();
+        assert_eq!(run_json["slot"], slot);
+    }
+}
+
+#[test]
+fn prepare_all_rejects_plan_with_mismatched_slots() {
+    let root = temporary("prepare-all-mismatch-store");
+    let aux = temporary("prepare-all-mismatch-aux");
+    let repo = temporary("prepare-all-mismatch-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let plan = write_providers(
+        &aux,
+        "providers.toml",
+        "[[provider]]\nname = \"codex\"\nhost = \"codex\"\ninteractive = false\ncommand = [\"/bin/true\"]\n\n\
+         [[provider]]\nname = \"claude\"\nhost = \"claude-code\"\ninteractive = false\ncommand = [\"/bin/true\"]\n\n\
+         [[provider]]\nname = \"cursor\"\nhost = \"cursor\"\ninteractive = true\ncommand = [\"cursor\", \"{workspace}\"]\n",
+    );
+    let init = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "mismatch",
+            "--request",
+            "change fixture",
+            "--slot",
+            "a",
+            "--slot",
+            "b",
+            "--slot",
+            "c",
+        ],
+    );
+    let effort = init["details"]["effort"].as_str().unwrap().to_owned();
+    let error = command_error(
+        &root,
+        &[
+            "discovery",
+            "prepare-all",
+            "--effort",
+            &effort,
+            "--providers",
+            plan.to_str().unwrap(),
+        ],
+    );
+    assert!(error.contains("do not match"), "{error}");
+}
+
+#[test]
+fn parallel_launcher_runs_headless_providers_concurrently() {
+    let root = temporary("launcher-store");
+    let aux = temporary("launcher-aux");
+    let repo = temporary("launcher-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let plan = write_providers(
+        &aux,
+        "providers.toml",
+        "[[provider]]\nname = \"codex\"\nhost = \"codex\"\ninteractive = false\ncommand = [\"/bin/sh\", \"-c\", \"touch {log}/sentinel\"]\n\n\
+         [[provider]]\nname = \"claude\"\nhost = \"claude-code\"\ninteractive = false\ncommand = [\"/bin/sh\", \"-c\", \"touch {log}/sentinel\"]\n\n\
+         [[provider]]\nname = \"cursor\"\nhost = \"cursor\"\ninteractive = true\ncommand = [\"cursor\", \"{workspace}\"]\n",
+    );
+    let init = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "launcher",
+            "--request",
+            "change fixture",
+            "--providers",
+            plan.to_str().unwrap(),
+        ],
+    );
+    let effort = init["details"]["effort"].as_str().unwrap().to_owned();
+    let launch_dir = root.join("launch");
+    command(
+        &root,
+        &[
+            "discovery",
+            "prepare-all",
+            "--effort",
+            &effort,
+            "--providers",
+            plan.to_str().unwrap(),
+            "--launch-dir",
+            launch_dir.to_str().unwrap(),
+        ],
+    );
+
+    let script = fs::canonicalize(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/discovery-parallel.sh"),
+    )
+    .unwrap();
+    let output = Command::new("bash")
+        .arg(&script)
+        .arg(&launch_dir)
+        .env("ORCHESTRATE_BIN", env!("CARGO_BIN_EXE_orchestrate"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(launch_dir.join("codex").join("sentinel").exists());
+    assert!(launch_dir.join("claude").join("sentinel").exists());
+    assert_eq!(
+        fs::read_to_string(launch_dir.join("codex").join("exit"))
+            .unwrap()
+            .trim(),
+        "0"
+    );
+    assert_eq!(
+        fs::read_to_string(launch_dir.join("claude").join("exit"))
+            .unwrap()
+            .trim(),
+        "0"
     );
 }

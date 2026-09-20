@@ -4,17 +4,23 @@ Discovery answers:
 
 > **What should be built, and why?**
 
-One effort contains three independent Discovery slots: `a`, `b`, and `c`.
+One effort contains a set of independent Discovery slots. By default a new effort uses
+`codex`, `claude`, and `cursor`; explicit slot names (for example a custom `provider-x`) are frozen
+at `orchestrate init` with `--slot` or `--providers`.
 
 A typical assignment is:
 
 ```text
-A → Codex
-B → Claude Code
-C → Cursor
+codex  → Codex
+claude → Claude Code
+cursor → Cursor
 ```
 
-All three receive the same reviewed request and Git baseline. They do not receive one another's private reasoning or outputs.
+Every slot receives the same reviewed request and Git baseline. Slots do not receive one another's
+private reasoning or outputs.
+
+For the first-class parallel launch flow (one `prepare-all`, then concurrent provider runs), see
+[Parallel Discovery](parallel-discovery.md).
 
 ## 1. Give each slot its inputs
 
@@ -24,7 +30,7 @@ After `orchestrate init --from-file ...`, copy the returned effort ID.
 export EFFORT_ID="PASTE-EFFORT-ID"
 ```
 
-Open three fresh provider sessions and invoke `orchestrate-discovery` in each. Give each session:
+Open one fresh provider session per slot and invoke `orchestrate-discovery` in each. Give each session:
 
 - the effort ID;
 - its own slot (`a`, `b`, or `c`);
@@ -58,7 +64,7 @@ For example:
 Does staging behavior need to remain unchanged, or may this ticket alter it?
 ```
 
-Your answer is new user authority. When the three runs are active in parallel:
+Your answer is new user authority. When the runs are active in parallel:
 
 1. let each investigator reach its own clarification point where practical;
 2. answer questions normally in the conversation where they were raised;
@@ -95,7 +101,7 @@ The outcome is derived mechanically from that graph. Any blocked question produc
 
 ## 5. Inspect before Consensus
 
-Especially while dogfooding, stop here and compare the three public results before running Consensus.
+Especially while dogfooding, stop here and compare the public results before running Consensus.
 
 Useful questions:
 
@@ -112,16 +118,16 @@ Use `orchestrate status --effort "$EFFORT_ID"` to list the finalized artifacts, 
 
 You can run Discovery by hand when debugging, inspecting a workspace, or working manually with a model.
 
-Prepare all three runs first so the parallel boundary is explicit:
+Prepare all runs first so the parallel boundary is explicit:
 
 ```sh
-orchestrate discovery prepare --effort "$EFFORT_ID" --slot a \
+orchestrate discovery prepare --effort "$EFFORT_ID" --slot codex \
   --host codex --provider openai --model "ACTUAL-MODEL" --model-effort high
 
-orchestrate discovery prepare --effort "$EFFORT_ID" --slot b \
+orchestrate discovery prepare --effort "$EFFORT_ID" --slot claude \
   --host claude-code --provider anthropic --model "ACTUAL-MODEL" --model-effort high
 
-orchestrate discovery prepare --effort "$EFFORT_ID" --slot c \
+orchestrate discovery prepare --effort "$EFFORT_ID" --slot cursor \
   --host cursor --provider "ACTUAL-PROVIDER" --model "ACTUAL-MODEL" --model-effort high
 ```
 
@@ -160,10 +166,10 @@ Finalize each completed run independently:
 orchestrate discovery finalize --effort "$EFFORT_ID" --run "RUN-ID"
 ```
 
-The command prints the finalized artifact ID and the derived outcome (`details.artifact` and `details.outcome`). Save the three Discovery artifact IDs.
+The command prints the finalized artifact ID and the derived outcome (`details.artifact` and `details.outcome`). Save every Discovery artifact ID.
 
 ## Next step
 
-Continue only when all three required Consensus inputs are finalized and implementation-ready.
+Continue only when every required Consensus input is finalized and implementation-ready.
 
 See [Consensus and Agreement](consensus.md).

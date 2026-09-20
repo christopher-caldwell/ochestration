@@ -24,6 +24,8 @@ pub struct ConsensusResult {
 
 pub fn mandatory_package_support(
     proposal: &ConsensusProposal,
+    slots: &[String],
+    quorum: usize,
 ) -> Result<(Vec<AgreementRequirement>, HashSet<String>)> {
     let mut ids = HashSet::new();
     let mut common: Option<HashSet<String>> = None;
@@ -41,13 +43,13 @@ pub fn mandatory_package_support(
         );
         let supporters: HashSet<_> = item.supporters.iter().cloned().collect();
         ensure!(
-            supporters.len() >= 2,
-            "Consensus requirement {} lacks two supporting slots",
+            supporters.len() >= quorum,
+            "Consensus requirement {} lacks {quorum} supporting slots",
             item.requirement.id
         );
         for slot in &supporters {
             ensure!(
-                matches!(slot.as_str(), "a" | "b" | "c"),
+                slots.iter().any(|candidate| candidate == slot),
                 "unknown supporter slot {slot}"
             );
         }
@@ -82,17 +84,17 @@ pub fn select_opinions(store: &Store, effort: &Effort) -> Result<BTreeMap<String
         }
     }
     let mut selected = BTreeMap::new();
-    for slot in ["a", "b", "c"] {
+    for slot in &effort.cohort.slots {
         let found = candidates.remove(slot).unwrap_or_default();
         match found.as_slice() {
             [only] => {
                 selected.insert(slot.to_owned(), only.clone());
             }
             [] => bail!(
-                "no eligible finalized Discovery artifact exists for slot {slot}; finalize an implementation-ready Discovery for every slot or pass three explicit --opinion selectors"
+                "no eligible finalized Discovery artifact exists for slot {slot}; finalize an implementation-ready Discovery for every slot or pass explicit --opinion selectors"
             ),
             many => bail!(
-                "multiple eligible Discovery artifacts exist for slot {slot}: {}; pass three explicit --opinion selectors",
+                "multiple eligible Discovery artifacts exist for slot {slot}: {}; pass explicit --opinion selectors",
                 artifact_ids(many)
             ),
         }
@@ -111,8 +113,9 @@ pub fn bind_opinions(
     selectors: &[String],
 ) -> Result<BTreeMap<String, ArtifactRef>> {
     ensure!(
-        selectors.len() == 3,
-        "pass exactly three --opinion selectors, or omit --opinion to infer the eligible artifacts"
+        selectors.len() == effort.cohort.slots.len(),
+        "pass exactly {} --opinion selectors, or omit --opinion to infer the eligible artifacts",
+        effort.cohort.slots.len()
     );
     let mut selected: BTreeMap<String, ArtifactRef> = BTreeMap::new();
     for selector in selectors {
@@ -133,10 +136,12 @@ pub fn bind_opinions(
         );
     }
     ensure!(
-        ["a", "b", "c"]
+        effort
+            .cohort
+            .slots
             .iter()
-            .all(|slot| selected.contains_key(*slot)),
-        "all three distinct eligible slots are required"
+            .all(|slot| selected.contains_key(slot)),
+        "all distinct eligible slots are required"
     );
     Ok(selected)
 }
@@ -163,15 +168,17 @@ pub fn finalize(
         serde_json::json!({"inputs":refs.iter().map(|r|&r.artifact_id).collect::<Vec<_>>()}),
     )?;
     let outcome = (|| -> Result<ConsensusResult> {
-        let (mut requirements, common) = mandatory_package_support(&proposal)?;
-        let eligible =
-            !proposal.counterexample_blocks && !requirements.is_empty() && common.len() >= 2;
+        let (mut requirements, common) =
+            mandatory_package_support(&proposal, &effort.cohort.slots, effort.cohort.quorum)?;
+        let eligible = !proposal.counterexample_blocks
+            && !requirements.is_empty()
+            && common.len() >= effort.cohort.quorum;
         let reason = if proposal.counterexample_blocks {
             "A concrete counterexample blocks the package."
         } else if requirements.is_empty() {
             "No consensus-derived mandatory package was supplied."
-        } else if common.len() < 2 {
-            "Mandatory package lacks one common strict majority."
+        } else if common.len() < effort.cohort.quorum {
+            "Mandatory package lacks the required common strict majority."
         } else {
             "Eligible majority package."
         }
@@ -293,7 +300,7 @@ fn eligible_slot(
         && envelope.cohort_id.as_deref() == Some(effort.cohort.id.as_str())
         && summary.context_id == effort.context.id
         && summary.baseline_commit == effort.cohort.baseline_commit
-        && matches!(summary.slot.as_str(), "a" | "b" | "c");
+        && effort.cohort.slots.iter().any(|slot| slot == &summary.slot);
     Ok(if eligible { Some(summary.slot) } else { None })
 }
 
@@ -364,10 +371,49 @@ mod tests {
             counterexample_blocks: false,
         };
 
-        let (requirements, common) = mandatory_package_support(&proposal).unwrap();
+        let slots = vec!["a".into(), "b".into(), "c".into()];
+        let quorum = 2;
+        let (requirements, common) = mandatory_package_support(&proposal, &slots, quorum).unwrap();
         assert_eq!(common, HashSet::from(["b".to_owned()]));
         let eligible =
-            !proposal.counterexample_blocks && !requirements.is_empty() && common.len() >= 2;
+            !proposal.counterexample_blocks && !requirements.is_empty() && common.len() >= quorum;
         assert!(!eligible);
+    }
+
+    #[test]
+    fn quorum_threshold_is_enforced_per_requirement() {
+        let slots = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        let quorum = 3;
+
+        let enough = ConsensusProposal {
+            requirements: vec![requirement("R1", &["a", "b", "c"])],
+            comparison_md: "comparison".into(),
+            selection_rationale: "selection".into(),
+            dissent: vec![],
+            counterexample_blocks: false,
+        };
+        assert!(mandatory_package_support(&enough, &slots, quorum).is_ok());
+
+        let too_few = ConsensusProposal {
+            requirements: vec![requirement("R2", &["a", "b"])],
+            comparison_md: "comparison".into(),
+            selection_rationale: "selection".into(),
+            dissent: vec![],
+            counterexample_blocks: false,
+        };
+        assert!(mandatory_package_support(&too_few, &slots, quorum).is_err());
+    }
+
+    #[test]
+    fn unknown_supporter_slot_is_rejected() {
+        let slots = vec!["a".into(), "b".into(), "c".into()];
+        let proposal = ConsensusProposal {
+            requirements: vec![requirement("R1", &["a", "x"])],
+            comparison_md: "comparison".into(),
+            selection_rationale: "selection".into(),
+            dissent: vec![],
+            counterexample_blocks: false,
+        };
+        assert!(mandatory_package_support(&proposal, &slots, 2).is_err());
     }
 }

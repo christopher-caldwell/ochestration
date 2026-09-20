@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -41,7 +41,10 @@ pub struct Cohort {
     pub context_id: String,
     pub baseline_commit: String,
     pub baseline_tree: String,
-    pub slots: [String; 3],
+    #[serde(default = "default_slots")]
+    pub slots: Vec<String>,
+    #[serde(default = "default_quorum")]
+    pub quorum: usize,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Effort {
@@ -142,8 +145,11 @@ impl Store {
         request_kind: RequestKind,
         request: String,
         constraints: Vec<String>,
+        slots: Vec<String>,
+        quorum: usize,
     ) -> Result<Effort> {
         validate_label(slug)?;
+        validate_slots_and_quorum(&slots, quorum)?;
         let canonical_repo = fs::canonicalize(repo)
             .with_context(|| format!("cannot canonicalize repository {}", repo.display()))?;
         ensure!(
@@ -186,7 +192,8 @@ impl Store {
             context_id: context.id.clone(),
             baseline_commit: baseline.commit,
             baseline_tree: baseline.tree,
-            slots: ["a".into(), "b".into(), "c".into()],
+            slots,
+            quorum,
         };
         let effort = Effort {
             id: effort_id,
@@ -252,11 +259,14 @@ impl Store {
             run_id: run_id.map(str::to_owned),
             details,
         };
-        let mut file = OpenOptions::new().append(true).create(true).open(path)?;
-        file.write_all(&serde_json::to_vec(&record)?)?;
-        file.write_all(b"\n")?;
-        file.sync_data()?;
-        Ok(())
+        let mut bytes = serde_json::to_vec(&record)?;
+        bytes.push(b'\n');
+        with_journal_lock(&path, || {
+            let mut file = OpenOptions::new().append(true).create(true).open(&path)?;
+            file.write_all(&bytes)?;
+            file.sync_data()?;
+            Ok(())
+        })
     }
     pub fn read_journal(&self, effort: &Effort) -> Result<Vec<JournalEvent>> {
         let path = self
@@ -329,8 +339,9 @@ impl Store {
         validate_id(&run.run_id)?;
         ensure!(run.phase == "discovery", "run phase must be discovery");
         ensure!(
-            matches!(run.slot.as_str(), "a" | "b" | "c"),
-            "slot must be a, b, or c"
+            effort.cohort.slots.iter().any(|slot| slot == &run.slot),
+            "unknown discovery slot {}",
+            run.slot
         );
         ensure!(
             run.effort_id == effort.id
@@ -764,6 +775,53 @@ fn validate_label(v: &str) -> Result<()> {
 fn validate_id(v: &str) -> Result<()> {
     validate_label(v)
 }
+fn default_slots() -> Vec<String> {
+    vec!["a".into(), "b".into(), "c".into()]
+}
+fn default_quorum() -> usize {
+    2
+}
+fn validate_slots_and_quorum(slots: &[String], quorum: usize) -> Result<()> {
+    ensure!(
+        slots.len() >= 2,
+        "a cohort requires at least two Discovery slots"
+    );
+    let mut seen = std::collections::HashSet::new();
+    for slot in slots {
+        validate_label(slot)?;
+        ensure!(seen.insert(slot), "duplicate Discovery slot {slot}");
+    }
+    ensure!(
+        (2..=slots.len()).contains(&quorum),
+        "quorum must be between 2 and the number of Discovery slots ({})",
+        slots.len()
+    );
+    Ok(())
+}
+fn with_journal_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let lock_path = path.with_extension("jsonl.lock");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_lock) => {
+                let result = f();
+                let _ = fs::remove_file(&lock_path);
+                return result;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if Instant::now() >= deadline {
+                    bail!("timed out waiting for journal lock {}", lock_path.display());
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_bytes_sync(path, &encode(value)?)
 }
@@ -789,4 +847,47 @@ pub fn write_bytes_sync(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 fn sync_dir(path: &Path) -> Result<()> {
     File::open(path)?.sync_all().map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    #[test]
+    fn concurrent_journal_appends_remain_line_framed() {
+        let dir = std::env::temp_dir().join(format!("journal-{}", unique_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("journal.jsonl");
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for j in 0..16 {
+                        super::with_journal_lock(&path, || {
+                            let mut file = OpenOptions::new()
+                                .append(true)
+                                .create(true)
+                                .open(&path)
+                                .unwrap();
+                            let line = format!("{{\"i\":{i},\"j\":{j}}}\n");
+                            file.write_all(line.as_bytes()).unwrap();
+                            Ok(())
+                        })
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 16 * 16);
+        for line in text.lines() {
+            serde_json::from_str::<serde_json::Value>(line).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

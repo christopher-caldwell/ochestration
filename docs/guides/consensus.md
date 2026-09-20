@@ -2,7 +2,7 @@
 
 Consensus answers:
 
-> **What implementation direction do the three finalized Discovery investigations genuinely agree on?**
+> **What implementation direction do the finalized Discovery investigations genuinely agree on?**
 
 Consensus is reconciliation, not another repository investigation.
 
@@ -13,7 +13,7 @@ Open a fresh model session and invoke `orchestrate-consensus`, giving it the eff
 The skill resolves the `orchestrate` executable, runs `orchestrate guide consensus` as its controlling instructions, and reads only:
 
 - the frozen request and context;
-- the three resolved finalized public Discovery specifications.
+- the resolved finalized public Discovery specifications.
 
 It never inspects the target repository, private Discovery chats, or sibling workspaces.
 
@@ -23,11 +23,11 @@ Before it reconciles anything, the skill resolves the exact inputs:
 orchestrate consensus inputs --effort "$EFFORT_ID"
 ```
 
-Rust names the single eligible finalized Discovery artifact for each of slots `a`, `b`, and `c`. Eligibility requires a finalized `Discovery` artifact with outcome `IMPLEMENTATION_READY` for the same effort, cohort, context, and baseline, in the correct slot.
+Rust names the single eligible finalized Discovery artifact for every cohort slot. Eligibility requires a finalized `Discovery` artifact with outcome `IMPLEMENTATION_READY` for the same effort, cohort, context, and baseline, in the correct slot.
 
-If a slot has no eligible artifact or more than one, the command fails and lists what it found. The skill then asks you which artifacts to use and confirms the complete set with all three explicit selectors. Rust never silently picks the newest artifact.
+If a slot has no eligible artifact or more than one, the command fails and lists what it found. The skill then asks you which artifacts to use and confirms the complete set with explicit selectors. Rust never silently picks the newest artifact.
 
-The skill reads exactly those three artifacts, writes `proposal.json`, and finalizes against the same three:
+The skill reads exactly those artifacts, writes `proposal.json`, and finalizes against the same set:
 
 ```sh
 orchestrate consensus finalize \
@@ -96,9 +96,9 @@ Nothing adopts automatically, and the Consensus skill never adopts on your behal
 
 ## Advanced and manual operation
 
-You can run Consensus by hand when debugging or producing the proposal yourself. All three Discoveries must be `IMPLEMENTATION_READY`; a blocked Discovery is intentionally ineligible.
+You can run Consensus by hand when debugging or producing the proposal yourself. Every Discovery must be `IMPLEMENTATION_READY`; a blocked Discovery is intentionally ineligible.
 
-`orchestrate consensus inputs` performs the input resolution read-only and publishes nothing. Run it without `--opinion` to see the inferred artifacts, or with all three `--opinion` selectors to check an explicit set before you reconcile against it.
+`orchestrate consensus inputs` performs the input resolution read-only and publishes nothing. Run it without `--opinion` to see the inferred artifacts, or with one `--opinion` selector per slot to check an explicit set before you reconcile against it.
 
 A simplified `proposal.json` requirement entry looks like:
 
@@ -120,7 +120,10 @@ The proposal also contains `comparison_md` (the readable reconciliation), `selec
 
 Do not manually manufacture supporter sets to make the package pass. They are claims about what the finalized Discovery artifacts actually support.
 
-Every mandatory Consensus-derived requirement needs at least two supporters, and the supporter sets across the entire mandatory package must share at least two slots in common.
+Every mandatory Consensus-derived requirement needs at least `quorum` supporters, and the supporter
+sets across the entire mandatory package must share at least `quorum` slots in common. `quorum`
+defaults to strict majority (`floor(N/2)+1`) and is frozen at `orchestrate init`; it can be lowered
+or raised with `--quorum`.
 
 Valid example:
 
@@ -141,7 +144,7 @@ R2 = {B, C}
 common = {B}
 ```
 
-The second package is rejected even though each row separately has two supporters. Explicit user constraints are appended as governing requirements; they are not Consensus votes.
+The second package is rejected even though each row separately meets the per-row threshold. Explicit user constraints are appended as governing requirements; they are not Consensus votes.
 
 Finalize against the artifacts you resolved and reconciled:
 
@@ -154,7 +157,7 @@ orchestrate consensus finalize \
   --bundle "/absolute/path/to/proposal.json"
 ```
 
-Explicit selection is all-or-nothing: pass all three selectors, or omit `--opinion` entirely.
+Explicit selection is all-or-nothing: pass one selector per cohort slot, or omit `--opinion` entirely.
 
 ## Next step
 

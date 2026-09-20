@@ -64,26 +64,34 @@ orchestrate init --from-file "/absolute/path/to/request.prepared.md"
 
 ### 3. Run the workflow
 
-An Orchestrate effort uses three independent Discovery runs over the same request and Git baseline. The three installed phase skills own the normal lifecycle, so you work in provider sessions instead of typing every command:
-
-A common setup is:
+An Orchestrate effort runs independent Discovery investigations over the same request and Git
+baseline. The installed phase skills own the normal lifecycle, so you work in provider sessions
+instead of typing every command. A common assignment is:
 
 ```text
-Discovery A → Codex  → $orchestrate-discovery  (slot a)
-Discovery B → Claude → /orchestrate-discovery  (slot b)
-Discovery C → Cursor → /orchestrate-discovery  (slot c)
+Discovery codex  → Codex  → $orchestrate-discovery
+Discovery claude → Claude → /orchestrate-discovery
+Discovery cursor → Cursor → /orchestrate-discovery
 ```
 
-Each `orchestrate-discovery` session prepares its own run, investigates the frozen baseline independently, asks you questions when material information is missing, and finalizes the run for you. It reports the run ID, the Discovery artifact ID, and the outcome.
+For a one-shot, first-class parallel run, declare a provider plan and launch every provider
+concurrently — see [Parallel Discovery](docs/guides/parallel-discovery.md).
 
-Once all three Discovery artifacts are complete:
+Each `orchestrate-discovery` session investigates the frozen baseline independently, asks you
+questions when material information is missing, and finalizes the run for you. It reports the run
+ID, the Discovery artifact ID, and the outcome.
+
+Once every Discovery artifact is complete:
 
 ```text
 $orchestrate-consensus → review → explicit adopt → external Build
     → orchestrate implementation register --effort "$EFFORT" → $orchestrate-audit
 ```
 
-Consensus resolves the three eligible Discovery artifacts before it reconciles them and binds those same three at finalization, and registration infers the canonical project and the sole Adoption receipt, so the typed surface stays small. See the [step-by-step run guide](docs/guides/run.md) for the full workflow and the raw commands for manual use.
+Consensus resolves the eligible Discovery artifacts before it reconciles them and binds those same
+artifacts at finalization, and registration infers the canonical project and the sole Adoption
+receipt, so the typed surface stays small. See the [step-by-step run guide](docs/guides/run.md)
+for the full workflow and the raw commands for manual use.
 
 ## Key concepts
 
@@ -105,9 +113,10 @@ Orchestrate validates the graph's structure. The model remains responsible for d
 
 ### Consensus reconciles; it does not re-investigate
 
-Consensus consumes the three finalized Discovery results and determines what they genuinely agree on.
+Consensus consumes the finalized Discovery results and determines what they genuinely agree on.
 
-A useful 2-of-3 conclusion is valid. Silence is not disagreement. Orchestrate prevents a final package from being assembled out of incompatible rotating majorities.
+A strict-majority conclusion is valid. Silence is not disagreement. Orchestrate prevents a final
+package from being assembled out of incompatible rotating majorities.
 
 ### The Agreement is the implementation contract
 
@@ -130,8 +139,9 @@ The final verdict is derived mechanically from Audit coverage.
 Start here:
 
 * **[Complete run guide](docs/guides/run.md)** — step-by-step from request preparation through Audit.
-* **[Discovery run guide](docs/guides/discovery.md)** — running the three independent investigations and handling user questions.
-* **[Consensus and Agreement guide](docs/guides/consensus.md)** — reconciling the three results and adopting the contract.
+* **[Parallel Discovery guide](docs/guides/parallel-discovery.md)** — run the same request across providers concurrently, then reconcile.
+* **[Discovery run guide](docs/guides/discovery.md)** — running the independent investigations and handling user questions.
+* **[Consensus and Agreement guide](docs/guides/consensus.md)** — reconciling the results and adopting the contract.
 * **[Build and Audit guide](docs/guides/build-and-audit.md)** — registering the exact implementation and auditing it.
 * **[Installation guide](docs/guides/agent-installation.md)** — how provider-led installation works.
 * **[Architecture](docs/architecture.md)** — artifacts, authority boundaries, evidence graph, frozen Git state, lineage, and the role of the Rust referee.

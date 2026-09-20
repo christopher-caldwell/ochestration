@@ -12,8 +12,9 @@ Use these docs based on what you are trying to do.
 
 - [Complete run guide](guides/run.md) — the shortest end-to-end path from a prepared request through Audit.
 - [Prepare a request](guides/request-preparation.md) — use the ticket or freeform prep skill, review the generated Markdown, and initialize an effort.
-- [Discovery](guides/discovery.md) — prepare and run the three independent Discovery investigations, handle questions, validate, and finalize them.
-- [Consensus and Agreement](guides/consensus.md) — reconcile the three finalized Discovery results, review the Agreement, and adopt it.
+- [Parallel Discovery](guides/parallel-discovery.md) — run the same request across Codex, Claude Code, Cursor, and any Provider X concurrently, then reconcile.
+- [Discovery](guides/discovery.md) — prepare and run independent Discovery investigations, handle questions, validate, and finalize them.
+- [Consensus and Agreement](guides/consensus.md) — reconcile the finalized Discovery results, review the Agreement, and adopt it.
 - [Build and Audit](guides/build-and-audit.md) — implement outside Orchestrate, register the exact Git commit, and audit it against the adopted Agreement.
 - [Agent-led installation](guides/agent-installation.md) — install the CLI and five checked-in skills for Codex, Claude Code, or Cursor.
 

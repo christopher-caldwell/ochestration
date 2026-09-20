@@ -3,7 +3,7 @@
 This is the normal end-to-end human workflow for Orchestrate. The installed phase skills own the routine mechanics, so you work in provider sessions and only type the decisions.
 
 ```text
-prepared request → init → three Discovery skills → Consensus skill
+prepared request → init → one Discovery skill per slot → Consensus skill
 → explicit adoption → external Build → register → Audit skill
 ```
 
@@ -34,15 +34,18 @@ Copy the returned effort ID. If the prepared file's `root` is not `~/.orchestrat
 export EFFORT_ID="PASTE-EFFORT-ID"
 ```
 
-## 2. Run three independent Discovery sessions
+## 2. Run independent Discovery sessions
 
-Open three fresh provider sessions, one per slot:
+Open one fresh provider session per slot:
 
 ```text
-Codex  → $orchestrate-discovery  → slot a
-Claude → /orchestrate-discovery  → slot b
-Cursor → /orchestrate-discovery  → slot c
+Codex  → $orchestrate-discovery  → slot codex
+Claude → /orchestrate-discovery  → slot claude
+Cursor → /orchestrate-discovery  → slot cursor
 ```
+
+For a one-shot parallel launch, use the provider plan and
+[Parallel Discovery](parallel-discovery.md) instead.
 
 Give each session only:
 
@@ -62,7 +65,7 @@ A blocked Discovery is a valid result but cannot proceed into Consensus. Do not 
 
 In a fresh session, invoke `orchestrate-consensus` with the effort ID (and the store root if it is not `~/.orchestration`).
 
-Before it reconciles anything, the skill resolves the exact eligible artifact for each slot. It then reads the frozen request and exactly those three Discovery specifications, reconciles them, writes `proposal.json`, and finalizes against the same three artifact IDs. It asks you only if a slot has no candidate or more than one, and it never changes the parents after reconciliation.
+Before it reconciles anything, the skill resolves the exact eligible artifact for each slot. It then reads the frozen request and exactly those Discovery specifications, reconciles them, writes `proposal.json`, and finalizes against the same artifact IDs. It asks you only if a slot has no candidate or more than one, and it never changes the parents after reconciliation.
 
 The skill then reports either `NO_CONSENSUS` or the Agreement candidate. If a candidate exists, review the Agreement it shows you — that is exactly what adoption would authorize.
 
@@ -146,12 +149,15 @@ The artifact lineage is authoritative. The journal is diagnostic.
 
 The underlying commands remain available for debugging, manual inspection, and scripted use. They are the same deterministic boundaries the skills use.
 
-`orchestrate` does not launch model providers. The removed `discovery run`, `consensus run`, and `audit run` commands had no way to support an interactive conversation, so phase work happens in provider sessions (or by hand) instead.
+The Rust CLI does not launch model providers; the removed `discovery run`, `consensus run`, and
+`audit run` commands had no way to support an interactive conversation, so phase work happens in
+provider sessions (or by hand) instead. The bundled `scripts/discovery-parallel.sh` launcher wraps
+provider CLIs for the parallel flow.
 
 ### Discovery
 
 ```sh
-orchestrate discovery prepare --effort "$EFFORT_ID" --slot a \
+orchestrate discovery prepare --effort "$EFFORT_ID" --slot codex \
   --host codex --provider openai --model "ACTUAL-MODEL" --model-effort high
 
 orchestrate discovery validate --effort "$EFFORT_ID" --run "RUN-ID"
@@ -167,7 +173,7 @@ orchestrate discovery finalize --effort "$EFFORT_ID" --run "RUN-ID"
 orchestrate consensus inputs --effort "$EFFORT_ID"
 ```
 
-`consensus inputs` is read-only: it resolves the single eligible Discovery artifact per slot, or stops and lists what it found when a slot has none or several. Resolve the exact `A`, `B`, and `C` first, reconcile against exactly those artifacts, and finalize against the same three:
+`consensus inputs` is read-only: it resolves the single eligible Discovery artifact per slot, or stops and lists what it found when a slot has none or several. Resolve the exact artifacts first, reconcile against exactly those artifacts, and finalize against the same set:
 
 ```sh
 orchestrate consensus finalize \
@@ -178,7 +184,7 @@ orchestrate consensus finalize \
   --bundle "/absolute/path/to/proposal.json"
 ```
 
-`consensus inputs` also accepts all three explicit selectors and validates the set without publishing anything. When a slot has no candidate or several candidates, it stops and lists them, so you can choose and check the set before reconciling:
+`consensus inputs` also accepts explicit selectors and validates the set without publishing anything. When a slot has no candidate or several candidates, it stops and lists them, so you can choose and check the set before reconciling:
 
 ```sh
 orchestrate consensus inputs \

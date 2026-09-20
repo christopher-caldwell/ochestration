@@ -51,7 +51,14 @@ pub fn prepare(
     slot: &str,
     provenance: Provenance,
 ) -> Result<(String, std::path::PathBuf)> {
-    ensure!(matches!(slot, "a" | "b" | "c"), "slot must be a, b, or c");
+    ensure!(
+        effort
+            .cohort
+            .slots
+            .iter()
+            .any(|candidate| candidate == slot),
+        "unknown discovery slot {slot}"
+    );
     let run_id = format!("discovery-{}-{}", slot, suffix());
     let run = DiscoveryRun {
         run_id: run_id.clone(),
@@ -82,7 +89,11 @@ pub fn validate(store: &Store, effort: &Effort, run_id: &str) -> Result<Validate
     ensure!(
         run.run_id == run_id
             && run.phase == "discovery"
-            && matches!(run.slot.as_str(), "a" | "b" | "c")
+            && effort
+                .cohort
+                .slots
+                .iter()
+                .any(|candidate| candidate == &run.slot)
             && run.effort_id == effort.id
             && run.cohort_id == effort.cohort.id
             && run.context_id == effort.context.id

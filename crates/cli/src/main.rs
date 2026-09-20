@@ -6,16 +6,45 @@ use orchestrate_contracts::{
 };
 use orchestrate_core::Store;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     path::{Path, PathBuf},
 };
 
 mod prepared_request;
+mod provider_plan;
 
 const DISCOVERY_GUIDE: &str = include_str!("../resources/guides/discovery.md");
 const CONSENSUS_GUIDE: &str = include_str!("../resources/guides/consensus.md");
 const AUDIT_GUIDE: &str = include_str!("../resources/guides/audit.md");
+
+const DEFAULT_SLOTS: [&str; 3] = ["codex", "claude", "cursor"];
+
+#[derive(Clone, Copy, Debug)]
+enum QuorumSpec {
+    Majority,
+    Count(usize),
+}
+
+impl QuorumSpec {
+    fn parse(value: &str) -> std::result::Result<Self, String> {
+        if value == "majority" {
+            Ok(Self::Majority)
+        } else {
+            value
+                .parse::<usize>()
+                .map(Self::Count)
+                .map_err(|_| "quorum must be 'majority' or a positive integer".to_owned())
+        }
+    }
+
+    fn resolve(self, slot_count: usize) -> usize {
+        match self {
+            Self::Majority => slot_count / 2 + 1,
+            Self::Count(count) => count,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -80,6 +109,12 @@ struct Init {
     request_kind: Option<RequestKind>,
     #[arg(long = "constraint")]
     constraints: Vec<String>,
+    #[arg(long, help = "Provider plan TOML that declares the cohort slots")]
+    providers: Option<PathBuf>,
+    #[arg(long = "slot", help = "Discovery slot name; repeatable")]
+    slots: Vec<String>,
+    #[arg(long, help = "Consensus quorum: 'majority' or an integer")]
+    quorum: Option<String>,
 }
 #[derive(Args)]
 struct SelectEffort {
@@ -102,6 +137,14 @@ enum Discovery {
         slot: String,
         #[command(flatten)]
         provenance: ProvenanceArgs,
+    },
+    PrepareAll {
+        #[arg(long)]
+        effort: String,
+        #[arg(long)]
+        providers: Option<PathBuf>,
+        #[arg(long)]
+        launch_dir: Option<PathBuf>,
     },
     Validate {
         #[arg(long)]
@@ -235,9 +278,13 @@ struct InitInput {
     request_kind: RequestKind,
     request: String,
     constraints: Vec<String>,
+    slots: Vec<String>,
+    quorum: usize,
 }
 fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
-    if let Some(path) = args.from_file {
+    let (root, project, effort, request_kind, request, constraints) = if let Some(path) =
+        args.from_file
+    {
         ensure!(
             root.is_none()
                 && args.project.is_none()
@@ -249,44 +296,60 @@ fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
             "--from-file cannot be combined with --root, --project, --effort, --request, --request-file, --request-kind, or --constraint"
         );
         let prepared = prepared_request::read(&path)?;
-        return Ok(InitInput {
-            root: prepared.root,
-            project: prepared.project,
-            effort: prepared.effort,
-            request_kind: prepared.request_kind,
-            request: prepared.body,
-            constraints: prepared.constraints,
-        });
-    }
-
-    let project = args
-        .project
-        .context("--project is required unless --from-file is used")?;
-    let effort = args
-        .effort
-        .context("--effort is required unless --from-file is used")?;
-    let (request_kind, request) = match (args.request, args.request_file) {
-        (Some(request), None) => (args.request_kind.unwrap_or(RequestKind::Freeform), request),
-        (None, Some(path)) => {
-            let request_kind = args
-                .request_kind
-                .context("--request-file requires --request-kind")?;
-            let bytes = fs::read(&path)
-                .with_context(|| format!("cannot read request file {}", path.display()))?;
-            let request = String::from_utf8(bytes)
-                .with_context(|| format!("request file {} is not valid UTF-8", path.display()))?;
-            (request_kind, request)
-        }
-        (None, None) => bail!("provide exactly one of --request or --request-file"),
-        (Some(_), Some(_)) => unreachable!("Clap enforces mutually exclusive request inputs"),
+        (
+            prepared.root,
+            prepared.project,
+            prepared.effort,
+            prepared.request_kind,
+            prepared.body,
+            prepared.constraints,
+        )
+    } else {
+        let project = args
+            .project
+            .context("--project is required unless --from-file is used")?;
+        let effort = args
+            .effort
+            .context("--effort is required unless --from-file is used")?;
+        let (request_kind, request) = match (args.request, args.request_file) {
+            (Some(request), None) => (args.request_kind.unwrap_or(RequestKind::Freeform), request),
+            (None, Some(path)) => {
+                let request_kind = args
+                    .request_kind
+                    .context("--request-file requires --request-kind")?;
+                let bytes = fs::read(&path)
+                    .with_context(|| format!("cannot read request file {}", path.display()))?;
+                let request = String::from_utf8(bytes).with_context(|| {
+                    format!("request file {} is not valid UTF-8", path.display())
+                })?;
+                (request_kind, request)
+            }
+            (None, None) => bail!("provide exactly one of --request or --request-file"),
+            (Some(_), Some(_)) => unreachable!("Clap enforces mutually exclusive request inputs"),
+        };
+        (
+            root.unwrap_or_else(default_root),
+            project,
+            effort,
+            request_kind,
+            request,
+            args.constraints,
+        )
     };
+    let (slots, quorum) = resolve_slots_and_quorum(
+        args.providers.as_deref(),
+        &args.slots,
+        args.quorum.as_deref(),
+    )?;
     Ok(InitInput {
-        root: root.unwrap_or_else(default_root),
+        root,
         project,
         effort,
         request_kind,
         request,
-        constraints: args.constraints,
+        constraints,
+        slots,
+        quorum,
     })
 }
 fn initialize(store: &Store, input: InitInput) -> Result<()> {
@@ -296,11 +359,13 @@ fn initialize(store: &Store, input: InitInput) -> Result<()> {
         input.request_kind,
         input.request,
         input.constraints,
+        input.slots,
+        input.quorum,
     )?;
     output(
         "SUCCESS",
         "COHORT_CREATED",
-        serde_json::json!({"effort":effort.id,"cohort":effort.cohort.id,"baseline":effort.cohort.baseline_commit}),
+        serde_json::json!({"effort":effort.id,"cohort":effort.cohort.id,"baseline":effort.cohort.baseline_commit,"slots":effort.cohort.slots,"quorum":effort.cohort.quorum}),
     );
     Ok(())
 }
@@ -327,6 +392,17 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 "PREPARED",
                 serde_json::json!({"run":run,"workspace":workspace,"frozen_source":workspace.join("source")}),
             );
+        }
+        Command::Discovery {
+            command:
+                Discovery::PrepareAll {
+                    effort,
+                    providers,
+                    launch_dir,
+                },
+        } => {
+            let effort = store.load_effort(&effort)?;
+            prepare_all(&store, &effort, providers, launch_dir)?;
         }
         Command::Discovery {
             command: Discovery::Validate { effort, run },
@@ -524,6 +600,176 @@ fn execute(store: Store, command: Command) -> Result<()> {
     }
     Ok(())
 }
+fn resolve_slots_and_quorum(
+    providers: Option<&Path>,
+    explicit_slots: &[String],
+    quorum_flag: Option<&str>,
+) -> Result<(Vec<String>, usize)> {
+    let (slots, plan_quorum) = if let Some(path) = providers {
+        ensure!(
+            explicit_slots.is_empty(),
+            "--providers cannot be combined with --slot"
+        );
+        let plan = provider_plan::ProviderPlan::read(path)?;
+        (plan.slots(), plan.quorum)
+    } else {
+        let slots: Vec<String> = if explicit_slots.is_empty() {
+            DEFAULT_SLOTS
+                .iter()
+                .map(|slot| (*slot).to_owned())
+                .collect()
+        } else {
+            explicit_slots.to_vec()
+        };
+        (slots, None)
+    };
+    let quorum = if let Some(raw) = quorum_flag {
+        QuorumSpec::parse(raw)
+            .map_err(|message| anyhow::anyhow!(message))?
+            .resolve(slots.len())
+    } else if let Some(raw) = plan_quorum {
+        match raw {
+            provider_plan::QuorumValue::Text(text) => QuorumSpec::parse(&text)
+                .map_err(|message| anyhow::anyhow!(message))?
+                .resolve(slots.len()),
+            provider_plan::QuorumValue::Count(count) => {
+                QuorumSpec::Count(count).resolve(slots.len())
+            }
+        }
+    } else {
+        QuorumSpec::Majority.resolve(slots.len())
+    };
+    Ok((slots, quorum))
+}
+
+fn resolve_providers_path(providers: Option<PathBuf>) -> PathBuf {
+    providers.unwrap_or_else(|| PathBuf::from("orchestrate.providers.toml"))
+}
+
+fn provenance_for_spec(spec: &provider_plan::ProviderSpec) -> Provenance {
+    Provenance {
+        host: spec.host.clone(),
+        provider: spec.provider.clone(),
+        model: spec.model.clone(),
+        model_effort: spec.model_effort.clone(),
+        guide_digest: orchestrate_contracts::digest_bytes(DISCOVERY_GUIDE.as_bytes()),
+        independence: orchestrate_contracts::Independence::InputExcluded,
+    }
+}
+
+fn prepare_all(
+    store: &Store,
+    effort: &orchestrate_core::Effort,
+    providers: Option<PathBuf>,
+    launch_dir: Option<PathBuf>,
+) -> Result<()> {
+    let plan_path = resolve_providers_path(providers);
+    let plan = provider_plan::ProviderPlan::read(&plan_path)?;
+
+    let mut cohort_slots = effort.cohort.slots.clone();
+    let mut plan_slots = plan.slots();
+    cohort_slots.sort();
+    plan_slots.sort();
+    ensure!(
+        cohort_slots == plan_slots,
+        "provider plan slots do not match the cohort slots"
+    );
+
+    let launch_dir = launch_dir.unwrap_or_else(|| {
+        store
+            .effort_dir(&effort.project_id, &effort.id)
+            .join(".launch")
+            .join(orchestrate_core::now_ms().to_string())
+    });
+    fs::create_dir_all(&launch_dir)?;
+
+    let mut entries = Vec::new();
+    for spec in &plan.provider {
+        let (run, workspace) =
+            orchestrate_discovery::prepare(store, effort, &spec.name, provenance_for_spec(spec))?;
+        let slot_dir = launch_dir.join(&spec.name);
+        fs::create_dir_all(&slot_dir)?;
+        let prompt = slot_dir.join("prompt.md");
+        let source = workspace.join("source");
+        let vars: HashMap<String, String> = [
+            ("slot", spec.name.clone()),
+            ("effort", effort.id.clone()),
+            ("run", run.clone()),
+            ("root", store.root().to_string_lossy().into_owned()),
+            ("workspace", workspace.to_string_lossy().into_owned()),
+            ("source", source.to_string_lossy().into_owned()),
+            ("prompt", prompt.to_string_lossy().into_owned()),
+            ("log", slot_dir.to_string_lossy().into_owned()),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect();
+        let command = provider_plan::expand_command(&spec.command, &vars)?;
+        fs::write(&prompt, discovery_prompt(&vars))?;
+        entries.push(provider_plan::LaunchEntry {
+            slot: spec.name.clone(),
+            run,
+            workspace: workspace.to_string_lossy().into_owned(),
+            source: source.to_string_lossy().into_owned(),
+            prompt: prompt.to_string_lossy().into_owned(),
+            log_dir: slot_dir.to_string_lossy().into_owned(),
+            command,
+            interactive: spec.interactive,
+        });
+    }
+
+    let manifest = provider_plan::LaunchManifest {
+        effort: effort.id.clone(),
+        root: store.root().to_string_lossy().into_owned(),
+        slots: effort.cohort.slots.clone(),
+        quorum: effort.cohort.quorum,
+        providers: entries,
+    };
+    fs::write(
+        launch_dir.join("launch.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    output(
+        "SUCCESS",
+        "PREPARED_ALL",
+        serde_json::json!({
+            "launch_dir": launch_dir,
+            "slots": effort.cohort.slots,
+            "quorum": effort.cohort.quorum,
+            "providers": manifest.providers
+        }),
+    );
+    Ok(())
+}
+
+fn discovery_prompt(vars: &HashMap<String, String>) -> String {
+    let effort = &vars["effort"];
+    let slot = &vars["slot"];
+    let run = &vars["run"];
+    let workspace = &vars["workspace"];
+    let source = &vars["source"];
+    let root = &vars["root"];
+    format!(
+        "You are running one pre-prepared Orchestrate Discovery investigation.\n\n\
+Run `orchestrate guide discovery` and follow it for the rest of this phase. Do NOT run \
+`orchestrate discovery prepare`; this run is already prepared.\n\n\
+Identity\n\
+- effort: {effort}\n\
+- slot: {slot}\n\
+- run: {run}\n\
+- workspace: {workspace}\n\
+- frozen source checkout: {source}\n\
+- store root: {root}\n\n\
+Work only inside `{workspace}`. Read `run.json`, `request.md`, and `context.json`; investigate \
+`source/`; write `technical-spec.md` and `graph/*.md`. Do not inspect sibling Discovery workspaces \
+or another provider's outputs. If a material question cannot be answered and you cannot ask the \
+user in this session, record it as a blocked Question rather than guessing.\n\n\
+When complete, finalize:\n\n\
+orchestrate discovery finalize --effort \"{effort}\" --run \"{run}\" --root \"{root}\"\n\n\
+Report `details.artifact` and `details.outcome` from that command's output.\n"
+    )
+}
+
 fn consensus_opinions(
     store: &Store,
     effort: &orchestrate_core::Effort,

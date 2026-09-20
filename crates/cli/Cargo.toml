@@ -19,6 +19,7 @@ orchestrate-discovery = { path = "../discovery" }
 serde_json.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 
