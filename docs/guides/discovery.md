@@ -1,13 +1,84 @@
 # Discovery
 
-Discovery is open engineering investigation over a frozen source checkout. It can inspect source,
-Git history, tests, authorized experiments, and relevant authoritative documentation. It asks the
-user material questions in its own model window.
+Discovery is the investigation phase.
 
-Each run records `Question`, `Finding`, `Decision`, and `Requirement` nodes plus a self-contained
-`technical-spec.md`. Question states are `open`, `answered`, `no_change`, and `blocked`; a material
-blocked question produces a blocked Discovery. Accepted Findings need source references and
-mandatory Requirements must trace to accepted evidence.
+The easiest way to use it is to open several fresh model windows and give each one the same
+prepared request.
 
-Discovery runs are independent and need no provider slots. Launch another model window whenever
-another investigation would be useful.
+## Run one Discovery
+
+In a fresh model window:
+
+```text
+$discovery "/absolute/path/to/request.prepared.md"
+```
+
+Then let it work.
+
+The skill handles the Orchestrate CLI, creates its own isolated frozen source checkout, investigates
+the repository, writes the evidence graph and technical specification, validates them, and
+finalizes the result.
+
+You do not need to initialize an effort or prepare a workspace manually.
+
+## Run several independently
+
+Three independent Discoveries are a reasonable default.
+
+For important or uncertain work, run five or more:
+
+```text
+Window 1 → $discovery "/same/request.prepared.md"
+Window 2 → $discovery "/same/request.prepared.md"
+Window 3 → $discovery "/same/request.prepared.md"
+Window 4 → $discovery "/same/request.prepared.md"
+Window 5 → $discovery "/same/request.prepared.md"
+```
+
+Do not share one Discovery's conclusions with another. Their independence is useful.
+
+## Questions are normal
+
+Discovery may ask you a question when an unresolved decision could materially change what should
+be built.
+
+Answer that model window normally.
+
+If a question remains materially unresolved, the Discovery may correctly finish as `BLOCKED`
+instead of guessing.
+
+## What to save
+
+When a Discovery finishes, it reports:
+
+```text
+run ID
+artifact ID
+outcome
+published Discovery directory
+```
+
+For normal usage, save the **published Discovery directory**.
+
+That directory is what you pass to Reconcile.
+
+Only `IMPLEMENTATION_READY` Discoveries can be reconciled. Keep blocked results for reference, but
+do not include them in the Reconcile input set.
+
+## What Discovery produces internally
+
+Each run records:
+
+```text
+Question
+Finding
+Decision
+Requirement
+```
+
+plus a self-contained `technical-spec.md`.
+
+You do not need to inspect those files during normal usage. They exist so Reconcile can deeply
+analyze the finished Discovery without reopening the repository.
+
+Next: [Reconcile](reconcile.md).
