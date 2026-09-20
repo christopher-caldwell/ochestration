@@ -1,9 +1,9 @@
-//! Explicit Agreement adoption, external implementation registration, and Audit validation.
+//! Explicit Reconciled Discovery adoption, external implementation registration, and Audit validation.
 
 use anyhow::{Result, bail, ensure};
 use orchestrate_contracts::{
-    Adoption, Agreement, ArtifactKind, ArtifactRef, AuditAssessment, AuditReport, Implementation,
-    ImplementationStatus, Provenance, Verdict, derive_verdict,
+    Adoption, ArtifactKind, ArtifactRef, AuditAssessment, AuditReport, Implementation,
+    ImplementationStatus, Provenance, ReconciledDiscovery, Verdict, derive_verdict,
 };
 use orchestrate_core::{Effort, Store, now_ms};
 use std::{collections::BTreeMap, process::Command};
@@ -11,22 +11,22 @@ use std::{collections::BTreeMap, process::Command};
 pub fn adopt(
     store: &Store,
     effort: &Effort,
-    agreement_ref: ArtifactRef,
+    reconciled_ref: ArtifactRef,
     authorization_label: String,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
     ensure!(
-        agreement_ref.kind == ArtifactKind::Agreement,
-        "only an Agreement can be adopted"
+        reconciled_ref.kind == ArtifactKind::ReconciledDiscovery,
+        "only an implementation-ready Reconciled Discovery can be adopted"
     );
-    let (envelope, _): (_, Agreement) =
-        store.load_json(effort, &agreement_ref, "agreement.json")?;
+    let (envelope, _): (_, ReconciledDiscovery) =
+        store.load_json(effort, &reconciled_ref, "reconciled-discovery.json")?;
     ensure!(
-        envelope.outcome == "ELIGIBLE_CANDIDATE",
-        "Agreement is not eligible for adoption"
+        envelope.outcome == "IMPLEMENTATION_READY",
+        "Reconciled Discovery is not implementation-ready for adoption"
     );
     let adoption = Adoption {
-        agreement: agreement_ref.clone(),
+        reconciled: reconciled_ref.clone(),
         authorization_label,
         adopted_at_ms: now_ms(),
     };
@@ -37,37 +37,37 @@ pub fn adopt(
     );
     let reference = store.publish_bundle(
         effort,
-        "agreement",
+        "adoption",
         ArtifactKind::Adoption,
         format!("adoption-{}", now_ms()),
         "ADOPTED".into(),
-        vec![agreement_ref],
+        vec![reconciled_ref],
         provenance,
         files,
     )?;
     store.append_journal(
         effort,
-        "agreement_adopted",
+        "reconciled_discovery_adopted",
         None,
         serde_json::json!({"artifact":reference.artifact_id}),
     )?;
     Ok(reference)
 }
 
-/// Find the sole eligible Agreement for this effort.
+/// Find the sole eligible Reconciled Discovery for this effort.
 ///
 /// Inference never guesses: no candidate or more than one candidate stops the
-/// operation and asks for an explicit `--agreement`.
-pub fn select_agreement(store: &Store, effort: &Effort) -> Result<ArtifactRef> {
-    let found = eligible_artifacts(store, effort, &eligible_agreement)?;
+/// operation and asks for an explicit `--reconciled`.
+pub fn select_reconciled(store: &Store, effort: &Effort) -> Result<ArtifactRef> {
+    let found = eligible_artifacts(store, effort, &eligible_reconciled)?;
     match found.as_slice() {
         [only] => Ok(only.clone()),
         [] => bail!(
-            "no eligible Agreement artifact exists for effort {}; finalize Consensus first or pass --agreement explicitly",
+            "no implementation-ready Reconciled Discovery exists for effort {}; finalize Reconcile first or pass --reconciled explicitly",
             effort.id
         ),
         many => bail!(
-            "multiple eligible Agreement artifacts exist: {}; pass --agreement explicitly with the intended artifact",
+            "multiple eligible Reconciled Discovery artifacts exist: {}; pass --reconciled explicitly with the intended artifact",
             artifact_ids(many)
         ),
     }
@@ -82,7 +82,7 @@ pub fn select_adoption(store: &Store, effort: &Effort) -> Result<ArtifactRef> {
     match found.as_slice() {
         [only] => Ok(only.clone()),
         [] => bail!(
-            "no eligible Adoption artifact exists for effort {}; adopt an Agreement first or pass --adoption explicitly",
+            "no eligible Adoption artifact exists for effort {}; adopt a Reconciled Discovery first or pass --adoption explicitly",
             effort.id
         ),
         many => bail!(
@@ -106,8 +106,8 @@ pub fn register_implementation(
         "implementation needs an adoption receipt"
     );
     let (_, adoption): (_, Adoption) = store.load_json(effort, &adoption_ref, "adoption.json")?;
-    let (_, agreement): (_, Agreement) =
-        store.load_json(effort, &adoption.agreement, "agreement.json")?;
+    let (_, reconciled): (_, ReconciledDiscovery) =
+        store.load_json(effort, &adoption.reconciled, "reconciled-discovery.json")?;
     let project = store.project_for(effort)?;
     let repo = project.canonical_locator.as_path();
     ensure!(
@@ -119,20 +119,20 @@ pub fn register_implementation(
         .args([
             "merge-base",
             "--is-ancestor",
-            &agreement.baseline_commit,
+            &reconciled.baseline_commit,
             commit,
         ])
         .current_dir(repo)
         .status()?;
     ensure!(
         ancestry.success(),
-        "implementation target is not based on the adopted Agreement baseline"
+        "implementation target is not based on the adopted Reconciled Discovery baseline"
     );
     let snapshot = store.materialize_snapshot(repo, commit)?;
     let implementation = Implementation {
         adoption: adoption_ref.clone(),
-        agreement: adoption.agreement,
-        starting_baseline: agreement.baseline_commit,
+        reconciled: adoption.reconciled,
+        starting_baseline: reconciled.baseline_commit,
         target_commit: snapshot.commit,
         target_tree: snapshot.tree,
         producer_declaration: declaration,
@@ -175,17 +175,17 @@ where
     Ok(found)
 }
 
-fn eligible_agreement(store: &Store, effort: &Effort, reference: &ArtifactRef) -> Result<bool> {
-    if reference.kind != ArtifactKind::Agreement {
+fn eligible_reconciled(store: &Store, effort: &Effort, reference: &ArtifactRef) -> Result<bool> {
+    if reference.kind != ArtifactKind::ReconciledDiscovery {
         return Ok(false);
     }
-    let (envelope, agreement): (_, Agreement) =
-        store.load_json(effort, reference, "agreement.json")?;
-    Ok(envelope.outcome == "ELIGIBLE_CANDIDATE"
-        && envelope.cohort_id.as_deref() == Some(effort.cohort.id.as_str())
-        && agreement.context_id == effort.context.id
-        && agreement.cohort_id == effort.cohort.id
-        && agreement.baseline_commit == effort.cohort.baseline_commit)
+    let (envelope, reconciled): (_, ReconciledDiscovery) =
+        store.load_json(effort, reference, "reconciled-discovery.json")?;
+    Ok(envelope.outcome == "IMPLEMENTATION_READY"
+        && envelope.effort_id == effort.id
+        && reconciled.context_id == effort.context.id
+        && reconciled.baseline_commit == effort.baseline_commit
+        && reconciled.baseline_tree == effort.baseline_tree)
 }
 
 fn eligible_adoption(store: &Store, effort: &Effort, reference: &ArtifactRef) -> Result<bool> {
@@ -197,7 +197,7 @@ fn eligible_adoption(store: &Store, effort: &Effort, reference: &ArtifactRef) ->
     if envelope.outcome != "ADOPTED" {
         return Ok(false);
     }
-    eligible_agreement(store, effort, &adoption.agreement)
+    eligible_reconciled(store, effort, &adoption.reconciled)
 }
 
 fn artifact_ids(references: &[ArtifactRef]) -> String {
@@ -215,27 +215,27 @@ pub fn finalize_audit(
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
     ensure!(
-        assessment.agreement.kind == ArtifactKind::Agreement
+        assessment.reconciled.kind == ArtifactKind::ReconciledDiscovery
             && assessment.adoption.kind == ArtifactKind::Adoption
             && assessment.implementation.kind == ArtifactKind::Implementation,
         "audit parent kinds are invalid"
     );
-    let (_, agreement): (_, Agreement) =
-        store.load_json(effort, &assessment.agreement, "agreement.json")?;
+    let (_, reconciled): (_, ReconciledDiscovery) =
+        store.load_json(effort, &assessment.reconciled, "reconciled-discovery.json")?;
     let (_, adoption): (_, Adoption) =
         store.load_json(effort, &assessment.adoption, "adoption.json")?;
     ensure!(
-        adoption.agreement == assessment.agreement,
-        "audit adoption is for another Agreement"
+        adoption.reconciled == assessment.reconciled,
+        "audit adoption is for another Reconciled Discovery"
     );
     let (_, implementation): (_, Implementation) =
         store.load_json(effort, &assessment.implementation, "implementation.json")?;
     ensure!(
         implementation.adoption == assessment.adoption
-            && implementation.agreement == assessment.agreement,
+            && implementation.reconciled == assessment.reconciled,
         "audit implementation is for another authority"
     );
-    let verdict = derive_verdict(&agreement, &assessment, &implementation.status)?;
+    let verdict = derive_verdict(&reconciled, &assessment, &implementation.status)?;
     let report = AuditReport {
         assessment,
         verdict: verdict.clone(),
@@ -254,7 +254,7 @@ pub fn finalize_audit(
         format!("audit-{}", now_ms()),
         outcome.into(),
         vec![
-            report.assessment.agreement.clone(),
+            report.assessment.reconciled.clone(),
             report.assessment.adoption.clone(),
             report.assessment.implementation.clone(),
         ],

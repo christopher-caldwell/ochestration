@@ -1,37 +1,8 @@
 # Orchestrate documentation
 
-Orchestrate guides an engineering request through four explicit boundaries:
-
-```text
-Discovery → Consensus → adopted Agreement → external Build → Audit
-```
-
-Use these docs based on what you are trying to do.
-
-## Run Orchestrate
-
-- [Complete run guide](guides/run.md) — the full manual end-to-end command path from a prepared request through Audit.
-- [Ticket workflow](guides/ticket-workflow.md) — the recommended fast path for tickets using `$prep-discovery-ticket`, `$discovery`, and `$reconcile`.
-- [Prepare a request](guides/request-preparation.md) — use the ticket or freeform prep skill, review the generated Markdown, and initialize an effort.
-- [Parallel Discovery](guides/parallel-discovery.md) — run the same request across Codex, Claude Code, Cursor, and any Provider X concurrently, then reconcile.
-- [Example provider plan](examples/providers.example.toml) — commented TOML template for Codex, Claude Code, Cursor, and Provider X.
-- [Discovery](guides/discovery.md) — prepare and run independent Discovery investigations, handle questions, validate, and finalize them.
-- [Consensus and Agreement](guides/consensus.md) — reconcile the finalized Discovery results, review the Agreement, and adopt it.
-- [Build and Audit](guides/build-and-audit.md) — implement outside Orchestrate, register the exact Git commit, and audit it against the adopted Agreement.
-- [Agent-led installation](guides/agent-installation.md) — install the CLI and checked-in skills for Codex, Claude Code, or Cursor.
-
-## Understand Orchestrate
-
-- [Architecture](architecture.md) — the authority chain, artifacts, evidence graph, Git freezing, majority rule, Audit verdicts, storage, and what Rust does versus what the models decide.
-
-## Model-facing phase guides
-
-The installed CLI carries the authoritative instructions used by models during each phase:
-
-```sh
-orchestrate guide discovery
-orchestrate guide consensus
-orchestrate guide audit
-```
-
-The human-facing guides in this directory explain how to operate the workflow. The CLI guides define how the model should behave inside each phase.
+- [Run guide](guides/run.md) — the user-facing flow.
+- [Request preparation](guides/request-preparation.md) — ticket and freeform prepared inputs.
+- [Discovery](guides/discovery.md) — open engineering investigation.
+- [Build and Audit](guides/build-and-audit.md) — external Build registration and verification.
+- [Installation](guides/agent-installation.md) — CLI and five checked-in skills.
+- [Architecture](architecture.md) — deterministic and semantic boundaries.

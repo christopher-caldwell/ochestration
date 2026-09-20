@@ -1,93 +1,60 @@
 ---
 name: reconcile
-description: Reconcile finalized Orchestrate Discovery output directories into one Agreement candidate and report the finalized document path.
+description: Reconcile two or more explicitly supplied finalized Orchestrate Discovery artifacts into one authoritative Reconciled Discovery.
 disable-model-invocation: true
 ---
 
-# Reconcile Discovery outputs
+# Reconcile
 
-Use this skill when the user provides the output directories from multiple Discovery sessions and
-asks for the reconciled result. The paths may be separated by spaces or commas. The user should not
-have to type Orchestrate CLI commands; you run them.
+Input is two or more finalized Discovery output directories. Read each `manifest.json`,
+`discovery.json`, and public files. Require `kind: discovery`, `IMPLEMENTATION_READY`, and one
+common effort, context, and frozen baseline. Extract exactly the supplied artifact IDs; do not add
+later or otherwise available Discoveries.
 
-## 1. Resolve the CLI
-
-Resolve `orchestrate` with `command -v orchestrate`, then fall back to `$CARGO_HOME/bin/orchestrate`
-or `~/.cargo/bin/orchestrate`. If it is not found, stop and tell the user.
-
-## 2. Read the supplied Discovery directories
-
-For every path supplied (splitting on commas and whitespace):
-
-- Confirm it is a finalized Discovery artifact directory containing `manifest.json`,
-  `discovery.json`, and `technical-spec.md`.
-- Read `manifest.json`. Record `artifact_id`, `effort_id`, `kind`, and `outcome`.
-- Read `discovery.json`. Record `slot`.
-- Require `kind == "discovery"` and `outcome == "IMPLEMENTATION_READY"`. If a path is missing,
-  blocked, or not a Discovery artifact, stop and tell the user which path needs attention.
-
-All paths must belong to the same `effort_id` and cover every cohort slot exactly once. If they do
-not, stop and show the user the mismatch.
-
-The store root is the part of each output directory before the `/projects/` segment. If the paths
-are ambiguous, ask the user for the store root.
-
-## 3. Confirm the input set with the CLI
-
-Use one `--opinion` selector per slot:
+Resolve the set before semantic work:
 
 ```sh
-orchestrate --root "<store root>" consensus inputs \
-  --effort "<effort_id>" \
-  --opinion "<artifact id 1>" \
-  --opinion "<artifact id 2>" \
-  --opinion "<artifact id 3>"
+orchestrate --root "<root>" reconcile inputs --effort "<effort>" \
+  --discovery "<artifact-1>" --discovery "<artifact-2>"
 ```
 
-Add or remove `--opinion` lines to match the exact cohort. If Rust reports a problem, show it to
-the user before continuing.
+Include every user-supplied artifact exactly once. Read `orchestrate guide reconcile` and then
+reason only from the frozen request and constraints plus those exact finalized public Discovery
+artifacts. Never inspect source, Git history, tests, web or vendor docs, private chats, or mutable
+workspaces. Reconcile may preserve a strong minority finding; agreement count is information, not
+an eligibility rule.
 
-## 4. Load the controlling instructions
+Write `reconcile-proposal.json` outside the repository and artifact store. It must distinguish
+binding requirements from advisory `technical_suggestions`. `core_result` is the concise answer to
+what will be done, and `requirements` are its exhaustive auditable decomposition: every
+implementation-affecting obligation needs a binding requirement with acceptance criteria.
+
+Every ordinary model-derived requirement and every suggestion needs at least one source reference
+to a selected Discovery artifact; a referenced node ID must exist there. The model must not set a
+requirement's `governing` flag: Rust rejects that assertion of authority. Frozen effort constraints
+are added mechanically as governing requirements. If an explicit user answer during this Reconcile
+conversation resolves a material intent choice, represent the requirement with an empty
+`source_refs` list and an explicit `user_clarification` containing the exact clarification text.
+That is user authority, not new engineering evidence, and does not permit inspecting source, Git, tests, web documentation,
+private chats, or mutable workspaces. If the selected evidence cannot settle a material decision,
+ask the user when appropriate or use `blocking_issues` rather than inventing an answer.
+
+Finalize against the same exact IDs:
 
 ```sh
-orchestrate guide consensus
+orchestrate --root "<root>" reconcile finalize --effort "<effort>" \
+  --discovery "<artifact-1>" --discovery "<artifact-2>" \
+  --bundle "<absolute path to reconcile-proposal.json>"
 ```
 
-Follow that guide for the rest of this phase.
-
-## 5. Read only the public results
-
-Read the frozen request/context and each selected Discovery `technical-spec.md` plus its evidence
-graph. Do not re-investigate the repository, read private chats, or inspect sibling workspaces.
-
-## 6. Write the proposal
-
-Write `proposal.json` to an absolute path outside the target repository and outside any published
-artifact directory. Follow the `orchestrate guide consensus` schema and quorum rules. Do not
-manufacture supporter sets.
-
-## 7. Finalize Consensus
+Show the resulting `reconciled-discovery.md` to the user. It is rendered deterministically from
+the one structured contract that Audit reads; do not supply separate contract Markdown. Explain
+the binding result separately from advisory technical suggestions. Ask whether they explicitly
+approve Build against this exact artifact. Only after an affirmative answer may you run:
 
 ```sh
-orchestrate --root "<store root>" consensus finalize \
-  --effort "<effort_id>" \
-  --opinion "<artifact id 1>" \
-  --opinion "<artifact id 2>" \
-  --opinion "<artifact id 3>" \
-  --bundle "<absolute path to proposal.json>"
+orchestrate --root "<root>" reconcile adopt --effort "<effort>" \
+  --reconciled "<artifact-id>" --authorization-label "<user label>"
 ```
 
-Pass exactly the artifact IDs resolved in step 2. Add one `--opinion` per cohort slot.
-
-## 8. Report the finalized document
-
-- On `NO_CONSENSUS`, report it plainly, explain why no implementation-ready package survived, and
-  stop.
-- On `ELIGIBLE_CANDIDATE`, capture `details.agreement.artifact_id`. Locate and show the final
-  document:
-
-```sh
-ls -d "<store root>"/projects/*/efforts/"<effort_id>"/agreement/"<agreement id>"/agreement.md
-```
-
-Show the Agreement to the user and report its path. Do not adopt the Agreement.
+Never adopt automatically. A blocked Reconciled Discovery cannot be adopted.

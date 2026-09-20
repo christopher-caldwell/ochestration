@@ -15,10 +15,8 @@ use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
 struct WorkspaceContext {
-    cohort_id: String,
     context_id: String,
     request_kind: RequestKind,
-    slot: String,
     baseline_commit: String,
     baseline_tree: String,
 }
@@ -48,28 +46,17 @@ pub struct ValidatedDiscovery {
 pub fn prepare(
     store: &Store,
     effort: &Effort,
-    slot: &str,
     provenance: Provenance,
 ) -> Result<(String, std::path::PathBuf)> {
-    ensure!(
-        effort
-            .cohort
-            .slots
-            .iter()
-            .any(|candidate| candidate == slot),
-        "unknown discovery slot {slot}"
-    );
-    let run_id = format!("discovery-{}-{}", slot, suffix());
+    let run_id = format!("discovery-{}", suffix());
     let run = DiscoveryRun {
         run_id: run_id.clone(),
         phase: "discovery".into(),
-        slot: slot.into(),
         effort_id: effort.id.clone(),
-        cohort_id: effort.cohort.id.clone(),
         context_id: effort.context.id.clone(),
         request_kind: effort.context.request_kind.clone(),
-        baseline_commit: effort.cohort.baseline_commit.clone(),
-        baseline_tree: effort.cohort.baseline_tree.clone(),
+        baseline_commit: effort.baseline_commit.clone(),
+        baseline_tree: effort.baseline_tree.clone(),
         host: provenance.host,
         provider: provenance.provider,
         model: provenance.model,
@@ -89,29 +76,22 @@ pub fn validate(store: &Store, effort: &Effort, run_id: &str) -> Result<Validate
     ensure!(
         run.run_id == run_id
             && run.phase == "discovery"
-            && effort
-                .cohort
-                .slots
-                .iter()
-                .any(|candidate| candidate == &run.slot)
             && run.effort_id == effort.id
-            && run.cohort_id == effort.cohort.id
             && run.context_id == effort.context.id
             && run.request_kind == effort.context.request_kind
-            && run.baseline_commit == effort.cohort.baseline_commit
-            && run.baseline_tree == effort.cohort.baseline_tree,
-        "Discovery run belongs to another effort, cohort, context, or baseline"
+            && run.baseline_commit == effort.baseline_commit
+            && run.baseline_tree == effort.baseline_tree,
+        "Discovery run belongs to another effort, context, or baseline"
     );
     let context: WorkspaceContext = orchestrate_contracts::decode(
         &fs::read(root.join("context.json")).context("Discovery workspace lacks context.json")?,
     )?;
     ensure!(
-        context.cohort_id == effort.cohort.id
-            && context.context_id == effort.context.id
+        context.context_id == effort.context.id
             && context.request_kind == effort.context.request_kind
-            && context.baseline_commit == effort.cohort.baseline_commit
-            && context.baseline_tree == effort.cohort.baseline_tree,
-        "Discovery workspace belongs to another cohort or baseline"
+            && context.baseline_commit == effort.baseline_commit
+            && context.baseline_tree == effort.baseline_tree,
+        "Discovery workspace belongs to another effort or baseline"
     );
     let technical_bytes = fs::read(root.join("technical-spec.md"))
         .context("Discovery workspace lacks technical-spec.md")?;
@@ -159,10 +139,8 @@ pub fn validate(store: &Store, effort: &Effort, run_id: &str) -> Result<Validate
     };
     let summary = DiscoverySummary {
         context_id: context.context_id,
-        cohort_id: context.cohort_id,
         baseline_commit: context.baseline_commit,
         baseline_tree: context.baseline_tree,
-        slot: context.slot,
         outcome: outcome.into(),
         node_ids: nodes.iter().map(|n| n.id.clone()).collect(),
     };

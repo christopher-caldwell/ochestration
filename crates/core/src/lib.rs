@@ -34,25 +34,13 @@ pub struct ContextRevision {
     pub digest: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Cohort {
-    pub id: String,
-    pub project_id: String,
-    pub effort_id: String,
-    pub context_id: String,
-    pub baseline_commit: String,
-    pub baseline_tree: String,
-    #[serde(default = "default_slots")]
-    pub slots: Vec<String>,
-    #[serde(default = "default_quorum")]
-    pub quorum: usize,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Effort {
     pub id: String,
     pub slug: String,
     pub project_id: String,
     pub context: ContextRevision,
-    pub cohort: Cohort,
+    pub baseline_commit: String,
+    pub baseline_tree: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct StoreMarker {
@@ -90,7 +78,6 @@ pub struct JournalEvent {
     pub event: String,
     pub ts_ms: u128,
     pub effort_id: String,
-    pub cohort_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     pub details: serde_json::Value,
@@ -120,12 +107,23 @@ impl Store {
                 stored.format_version,
                 STORE_FORMAT_VERSION
             );
-        } else if fs::read_dir(&root)?.next().is_some() {
-            bail!(
-                "legacy orchestration store at {}; this version does not migrate prior stores",
-                root.display()
-            );
         } else {
+            let has_legacy_content =
+                fs::read_dir(&root)?
+                    .filter_map(|entry| entry.ok())
+                    .any(|entry| {
+                        let name = entry.file_name();
+                        let name = name.to_string_lossy();
+                        name != ".staging" && !name.starts_with(".store.json.tmp-")
+                    });
+            if has_legacy_content {
+                bail!(
+                    "legacy orchestration store at {}; this version does not migrate prior stores",
+                    root.display()
+                );
+            }
+            // Multiple model windows may create a fresh store simultaneously. All contenders
+            // write the same marker; temporary marker files are explicitly ignored above.
             write_json_atomic(
                 &marker,
                 &StoreMarker {
@@ -145,11 +143,8 @@ impl Store {
         request_kind: RequestKind,
         request: String,
         constraints: Vec<String>,
-        slots: Vec<String>,
-        quorum: usize,
     ) -> Result<Effort> {
         validate_label(slug)?;
-        validate_slots_and_quorum(&slots, quorum)?;
         let canonical_repo = fs::canonicalize(repo)
             .with_context(|| format!("cannot canonicalize repository {}", repo.display()))?;
         ensure!(
@@ -185,51 +180,65 @@ impl Store {
             slugify(slug),
             &short_digest(format!("{}:{}", project_id, context.id).as_bytes())[..10]
         );
-        let cohort = Cohort {
-            id: format!("cohort-{}", unique_id()),
-            project_id: project_id.clone(),
-            effort_id: effort_id.clone(),
-            context_id: context.id.clone(),
-            baseline_commit: baseline.commit,
-            baseline_tree: baseline.tree,
-            slots,
-            quorum,
-        };
         let effort = Effort {
             id: effort_id,
             slug: slug.into(),
             project_id,
             context,
-            cohort,
+            baseline_commit: baseline.commit,
+            baseline_tree: baseline.tree,
         };
         let dir = self.effort_dir(&effort.project_id, &effort.id);
         if dir.exists() {
-            ensure!(
-                dir.join("effort.json").is_file(),
-                "effort directory already exists but is malformed: {}",
-                dir.display()
-            );
-            let existing: Effort = read_json(&dir.join("effort.json"))?;
-            ensure!(
-                existing.slug == effort.slug
-                    && existing.project_id == effort.project_id
-                    && existing.context.request_kind == effort.context.request_kind
-                    && existing.context.request == effort.context.request
-                    && existing.context.constraints == effort.context.constraints
-                    && existing.cohort.slots == effort.cohort.slots
-                    && existing.cohort.quorum == effort.cohort.quorum,
-                "effort already exists with a different identity: {}; choose a new effort slug or reuse the same prepared request unchanged",
-                effort.id
-            );
-            return Ok(existing);
+            return self.verify_existing_effort(&dir, &effort);
         }
-        fs::create_dir_all(&dir)?;
-        write_json_atomic(&dir.join("project.json"), &project)?;
-        write_json_atomic(&dir.join("effort.json"), &effort)?;
-        write_bytes_sync(&dir.join("request.md"), effort.context.request.as_bytes())?;
-        self.materialize_snapshot(&canonical_repo, &effort.cohort.baseline_commit)?;
-        self.append_journal(&effort, "cohort_created", None, serde_json::json!({"commit": effort.cohort.baseline_commit, "tree": effort.cohort.baseline_tree}))?;
-        Ok(effort)
+        // Write the complete effort off to the side, then atomically publish it.  Concurrent
+        // model windows either win this rename or read the complete effort the winner wrote.
+        self.materialize_snapshot(&canonical_repo, &effort.baseline_commit)?;
+        let stage = self
+            .root
+            .join(".staging")
+            .join(format!("effort-{}", unique_id()));
+        fs::create_dir_all(&stage)?;
+        write_json_atomic(&stage.join("project.json"), &project)?;
+        write_json_atomic(&stage.join("effort.json"), &effort)?;
+        write_bytes_sync(&stage.join("request.md"), effort.context.request.as_bytes())?;
+        sync_dir(&stage)?;
+        fs::create_dir_all(dir.parent().context("effort directory has no parent")?)?;
+        match fs::rename(&stage, &dir) {
+            Ok(()) => {
+                sync_dir(dir.parent().context("effort directory has no parent")?)?;
+                self.append_journal(
+                    &effort,
+                    "effort_created",
+                    None,
+                    serde_json::json!({"commit": effort.baseline_commit, "tree": effort.baseline_tree}),
+                )?;
+                Ok(effort)
+            }
+            Err(_error) if dir.exists() => self.verify_existing_effort(&dir, &effort),
+            Err(error) => {
+                Err(error).with_context(|| format!("cannot initialize effort {}", effort.id))
+            }
+        }
+    }
+    fn verify_existing_effort(&self, dir: &Path, expected: &Effort) -> Result<Effort> {
+        ensure!(
+            dir.join("effort.json").is_file(),
+            "effort directory already exists but is malformed: {}",
+            dir.display()
+        );
+        let existing: Effort = read_json(&dir.join("effort.json"))?;
+        ensure!(
+            existing.slug == expected.slug
+                && existing.project_id == expected.project_id
+                && existing.context.request_kind == expected.context.request_kind
+                && existing.context.request == expected.context.request
+                && existing.context.constraints == expected.context.constraints,
+            "effort already exists with a different frozen identity: {}; choose a new effort slug or reuse the same prepared request unchanged",
+            expected.id
+        );
+        Ok(existing)
     }
     pub fn load_effort(&self, effort_id: &str) -> Result<Effort> {
         validate_id(effort_id)?;
@@ -274,7 +283,6 @@ impl Store {
             event: event.into(),
             ts_ms: now_ms(),
             effort_id: effort.id.clone(),
-            cohort_id: effort.cohort.id.clone(),
             run_id: run_id.map(str::to_owned),
             details,
         };
@@ -358,18 +366,12 @@ impl Store {
         validate_id(&run.run_id)?;
         ensure!(run.phase == "discovery", "run phase must be discovery");
         ensure!(
-            effort.cohort.slots.iter().any(|slot| slot == &run.slot),
-            "unknown discovery slot {}",
-            run.slot
-        );
-        ensure!(
             run.effort_id == effort.id
-                && run.cohort_id == effort.cohort.id
                 && run.context_id == effort.context.id
                 && run.request_kind == effort.context.request_kind
-                && run.baseline_commit == effort.cohort.baseline_commit
-                && run.baseline_tree == effort.cohort.baseline_tree,
-            "Discovery run belongs to another effort, cohort, context, or baseline"
+                && run.baseline_commit == effort.baseline_commit
+                && run.baseline_tree == effort.baseline_tree,
+            "Discovery run belongs to another effort, context, or baseline"
         );
         let root = self.phase_dir(effort, "discovery")?.join(&run.run_id);
         ensure!(
@@ -401,7 +403,7 @@ impl Store {
         );
         ensure!(
             git(&source, ["rev-parse", "HEAD"])? == run.baseline_commit,
-            "Discovery source checkout does not match cohort baseline"
+            "Discovery source checkout does not match frozen baseline"
         );
         ensure!(
             git(&source, ["status", "--porcelain"])?.is_empty(),
@@ -411,7 +413,7 @@ impl Store {
         write_bytes_sync(&root.join("request.md"), effort.context.request.as_bytes())?;
         write_json_atomic(
             &root.join("context.json"),
-            &serde_json::json!({"cohort_id": effort.cohort.id, "context_id": effort.context.id, "request_kind": effort.context.request_kind, "request": effort.context.request, "constraints": effort.context.constraints, "slot": run.slot, "baseline_commit": effort.cohort.baseline_commit, "baseline_tree": effort.cohort.baseline_tree}),
+            &serde_json::json!({"context_id": effort.context.id, "request_kind": effort.context.request_kind, "request": effort.context.request, "constraints": effort.context.constraints, "baseline_commit": effort.baseline_commit, "baseline_tree": effort.baseline_tree}),
         )?;
         write_bytes_sync(
             &root.join("technical-spec.md"),
@@ -422,7 +424,7 @@ impl Store {
             effort,
             "discovery_workspace_prepared",
             Some(&run.run_id),
-            serde_json::json!({"slot":run.slot}),
+            serde_json::json!({}),
         )?;
         Ok(root)
     }
@@ -483,7 +485,6 @@ impl Store {
             run_id: run_id.clone(),
             project_id: effort.project_id.clone(),
             effort_id: effort.id.clone(),
-            cohort_id: Some(effort.cohort.id.clone()),
             outcome: outcome.clone(),
             created_at_ms: now_ms(),
             finalized_at_ms: now_ms(),
@@ -615,7 +616,7 @@ impl Store {
     }
     pub fn list_artifacts(&self, effort: &Effort) -> Result<Vec<ArtifactRef>> {
         let mut out = Vec::new();
-        for phase in ["discovery", "consensus", "agreement", "build", "audit"] {
+        for phase in ["discovery", "reconcile", "adoption", "build", "audit"] {
             let dir = self.effort_dir(&effort.project_id, &effort.id).join(phase);
             if !dir.exists() {
                 continue;
@@ -688,7 +689,7 @@ impl Store {
     fn find_artifact_dir(&self, effort: &Effort, artifact_id: &str) -> Result<PathBuf> {
         validate_id(artifact_id)?;
         let mut found = Vec::new();
-        for phase in ["discovery", "consensus", "agreement", "build", "audit"] {
+        for phase in ["discovery", "reconcile", "adoption", "build", "audit"] {
             let path = self
                 .effort_dir(&effort.project_id, &effort.id)
                 .join(phase)
@@ -761,8 +762,9 @@ fn git<const N: usize>(repo: &Path, args: [&str; N]) -> Result<String> {
 }
 fn unique_id() -> String {
     format!(
-        "{}-{}",
+        "{}-{}-{}",
         now_ms(),
+        std::process::id(),
         ID_COUNTER.fetch_add(1, Ordering::Relaxed)
     )
 }
@@ -793,29 +795,6 @@ fn validate_label(v: &str) -> Result<()> {
 }
 fn validate_id(v: &str) -> Result<()> {
     validate_label(v)
-}
-fn default_slots() -> Vec<String> {
-    vec!["a".into(), "b".into(), "c".into()]
-}
-fn default_quorum() -> usize {
-    2
-}
-fn validate_slots_and_quorum(slots: &[String], quorum: usize) -> Result<()> {
-    ensure!(
-        slots.len() >= 2,
-        "a cohort requires at least two Discovery slots"
-    );
-    let mut seen = std::collections::HashSet::new();
-    for slot in slots {
-        validate_label(slot)?;
-        ensure!(seen.insert(slot), "duplicate Discovery slot {slot}");
-    }
-    ensure!(
-        (2..=slots.len()).contains(&quorum),
-        "quorum must be between 2 and the number of Discovery slots ({})",
-        slots.len()
-    );
-    Ok(())
 }
 fn with_journal_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let lock_path = path.with_extension("jsonl.lock");
