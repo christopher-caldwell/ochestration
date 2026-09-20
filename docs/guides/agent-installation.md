@@ -1,15 +1,21 @@
-# Agent-led installation
+# Install Orchestrate
 
-Install only when the user explicitly asks to install or update Orchestrate.
+The easiest installation is agent-led. You should not need to manually decide which files belong
+where.
 
-Install the CLI from this checkout:
+## Recommended: let the model install it
 
-```sh
-cargo install --path "/actual/checkout/crates/cli" --locked
-```
+Open the Orchestrate checkout in the model host you want to use — Codex, Claude Code, or Cursor —
+and send:
 
-Copy exactly these five folders from `<checkout>/skills/` into the current host's personal skill
-directory, preserving their provider metadata:
+> Install Orchestrate from this checkout for the model host I am using. Install the CLI and exactly
+> these five checked-in skills: `prep-discovery-ticket`, `prep-discovery-freeform`,
+> `discovery`, `reconcile`, and `audit`. Preserve unrelated existing skills and verify the
+> installation when finished.
+
+The model should follow this guide and perform the commands itself.
+
+Afterward, verify that these skills are available:
 
 ```text
 prep-discovery-ticket
@@ -19,20 +25,52 @@ reconcile
 audit
 ```
 
-Typical locations are `~/.codex/skills`, `~/.claude/skills`, and `~/.cursor/skills`. Preserve
-unrelated skills and avoid overwriting a locally modified Orchestrate skill without a backup or
-user direction.
+That is all you need for normal use.
 
-Verify without starting a workflow:
+## Manual fallback
+
+Install the CLI from the checkout:
+
+```sh
+cargo install --path "/absolute/path/to/ochestration/crates/cli" --locked
+```
+
+Then copy exactly these five directories from `skills/` into the current host's personal skill
+directory:
+
+```text
+prep-discovery-ticket
+prep-discovery-freeform
+discovery
+reconcile
+audit
+```
+
+Typical skill directories are:
+
+```text
+Codex       ~/.codex/skills
+Claude Code ~/.claude/skills
+Cursor      ~/.cursor/skills
+```
+
+Preserve unrelated skills. If an Orchestrate skill already exists and may have local edits, back it
+up before replacing it.
+
+## Verification
+
+Installation is good when these commands succeed:
 
 ```sh
 orchestrate --version
-orchestrate init --help
 orchestrate discovery --help
 orchestrate reconcile --help
-orchestrate implementation register --help
 orchestrate audit --help
 orchestrate guide discovery
 orchestrate guide reconcile
 orchestrate guide audit
 ```
+
+Do not start a workflow as part of installation.
+
+Next: [Run Orchestrate](run.md).
