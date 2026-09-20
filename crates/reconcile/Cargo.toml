@@ -1,5 +1,5 @@
 [package]
-name = "orchestrate-consensus"
+name = "orchestrate-reconcile"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,6 @@ anyhow.workspace = true
 orchestrate-contracts = { path = "../contracts" }
 orchestrate-core = { path = "../core" }
 orchestrate-discovery = { path = "../discovery" }
-serde.workspace = true
 serde_json.workspace = true
 
 [lints]

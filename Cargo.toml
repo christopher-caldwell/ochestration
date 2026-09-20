@@ -4,7 +4,7 @@ members = [
   "crates/contracts",
   "crates/core",
   "crates/discovery",
-  "crates/consensus",
+  "crates/reconcile",
   "crates/audit",
   "crates/cli",
 ]

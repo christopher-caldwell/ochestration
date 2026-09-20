@@ -1,13 +1,13 @@
 //! Versioned public contracts for Orchestrate phase boundaries.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 use sha2::{Digest, Sha256};
 
-pub const SCHEMA_VERSION: u32 = 4;
-pub const STORE_FORMAT_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
+pub const STORE_FORMAT_VERSION: u32 = 5;
 pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -21,8 +21,7 @@ pub struct ArtifactRef {
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
     Discovery,
-    ConsensusComparison,
-    Agreement,
+    ReconciledDiscovery,
     Adoption,
     Implementation,
     Audit,
@@ -63,9 +62,7 @@ pub enum RequestKind {
 pub struct DiscoveryRun {
     pub run_id: String,
     pub phase: String,
-    pub slot: String,
     pub effort_id: String,
-    pub cohort_id: String,
     pub context_id: String,
     pub request_kind: RequestKind,
     pub baseline_commit: String,
@@ -99,7 +96,6 @@ pub struct Envelope {
     pub run_id: String,
     pub project_id: String,
     pub effort_id: String,
-    pub cohort_id: Option<String>,
     pub outcome: String,
     pub created_at_ms: u128,
     pub finalized_at_ms: u128,
@@ -160,51 +156,58 @@ pub struct EvidenceNode {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DiscoverySummary {
     pub context_id: String,
-    pub cohort_id: String,
     pub baseline_commit: String,
     pub baseline_tree: String,
-    pub slot: String,
     pub outcome: String,
     pub node_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ConsensusRequirement {
+pub struct DiscoverySourceRef {
+    pub discovery_artifact_id: String,
+    #[serde(default)]
+    pub node_id: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ReconciledRequirement {
     pub requirement: Requirement,
     #[serde(default)]
-    pub supporters: Vec<String>,
-    #[serde(default)]
-    pub source_refs: BTreeMap<String, Vec<String>>,
+    pub source_refs: Vec<DiscoverySourceRef>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct ConsensusProposal {
-    pub requirements: Vec<ConsensusRequirement>,
-    pub comparison_md: String,
-    pub selection_rationale: String,
+pub struct TechnicalSuggestion {
+    pub id: String,
+    pub text: String,
     #[serde(default)]
-    pub dissent: Vec<String>,
-    pub counterexample_blocks: bool,
+    pub source_refs: Vec<DiscoverySourceRef>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct AgreementRequirement {
-    pub requirement: Requirement,
+pub struct ReconcileProposal {
+    pub core_result: String,
+    pub requirements: Vec<ReconciledRequirement>,
     #[serde(default)]
-    pub supporters: Vec<String>,
+    pub technical_suggestions: Vec<TechnicalSuggestion>,
     #[serde(default)]
-    pub source_refs: BTreeMap<String, Vec<String>>,
+    pub blocking_issues: Vec<String>,
+    pub reconciliation_md: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Agreement {
-    pub agreement_id: String,
+pub struct ReconciledDiscovery {
+    pub reconciled_id: String,
     pub context_id: String,
-    pub cohort_id: String,
     pub baseline_commit: String,
+    pub baseline_tree: String,
     pub goal: String,
-    pub requirements: Vec<AgreementRequirement>,
+    pub core_result: String,
+    pub requirements: Vec<ReconciledRequirement>,
+    #[serde(default)]
+    pub technical_suggestions: Vec<TechnicalSuggestion>,
+    #[serde(default)]
+    pub blocking_issues: Vec<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Adoption {
-    pub agreement: ArtifactRef,
+    pub reconciled: ArtifactRef,
     pub authorization_label: String,
     pub adopted_at_ms: u128,
 }
@@ -218,7 +221,7 @@ pub enum ImplementationStatus {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Implementation {
     pub adoption: ArtifactRef,
-    pub agreement: ArtifactRef,
+    pub reconciled: ArtifactRef,
     pub starting_baseline: String,
     pub target_commit: String,
     pub target_tree: String,
@@ -243,7 +246,7 @@ pub struct Coverage {
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AuditAssessment {
-    pub agreement: ArtifactRef,
+    pub reconciled: ArtifactRef,
     pub adoption: ArtifactRef,
     pub implementation: ArtifactRef,
     pub coverage: Vec<Coverage>,
@@ -367,30 +370,42 @@ pub fn validate_requirement(requirement: &Requirement) -> Result<()> {
     );
     Ok(())
 }
-pub fn validate_agreement(agreement: &Agreement) -> Result<()> {
+pub fn validate_reconciled_discovery(reconciled: &ReconciledDiscovery) -> Result<()> {
     ensure!(
-        !agreement.agreement_id.is_empty()
-            && !agreement.goal.trim().is_empty()
-            && !agreement.requirements.is_empty(),
-        "agreement needs identity, goal, and requirements"
+        !reconciled.reconciled_id.is_empty()
+            && !reconciled.goal.trim().is_empty()
+            && !reconciled.core_result.trim().is_empty(),
+        "reconciled Discovery needs identity, goal, and a core result"
     );
     let mut ids = HashSet::new();
-    for item in &agreement.requirements {
+    for item in &reconciled.requirements {
         validate_requirement(&item.requirement)?;
         ensure!(
             ids.insert(&item.requirement.id),
-            "duplicate agreement requirement id {}",
+            "duplicate reconciled requirement id {}",
             item.requirement.id
+        );
+    }
+    let mut suggestion_ids = HashSet::new();
+    for suggestion in &reconciled.technical_suggestions {
+        ensure!(
+            !suggestion.id.trim().is_empty() && !suggestion.text.trim().is_empty(),
+            "technical suggestions need an id and text"
+        );
+        ensure!(
+            suggestion_ids.insert(&suggestion.id),
+            "duplicate technical suggestion id {}",
+            suggestion.id
         );
     }
     Ok(())
 }
 pub fn derive_verdict(
-    agreement: &Agreement,
+    reconciled: &ReconciledDiscovery,
     assessment: &AuditAssessment,
     implementation_status: &ImplementationStatus,
 ) -> Result<Verdict> {
-    let required: HashSet<_> = agreement
+    let required: HashSet<_> = reconciled
         .requirements
         .iter()
         .map(|item| item.requirement.id.as_str())
@@ -514,16 +529,17 @@ fn reject_duplicate_json_keys(bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn agreement() -> Agreement {
-        Agreement {
-            agreement_id: "agreement".into(),
+    fn reconciled() -> ReconciledDiscovery {
+        ReconciledDiscovery {
+            reconciled_id: "reconciled".into(),
             context_id: "context".into(),
-            cohort_id: "cohort".into(),
             baseline_commit: "baseline".into(),
+            baseline_tree: "tree".into(),
             goal: "goal".into(),
+            core_result: "result".into(),
             requirements: vec!["R-1", "R-2"]
                 .into_iter()
-                .map(|id| AgreementRequirement {
+                .map(|id| ReconciledRequirement {
                     requirement: Requirement {
                         id: id.into(),
                         text: "required behavior".into(),
@@ -531,10 +547,11 @@ mod tests {
                         condition: None,
                         governing: false,
                     },
-                    supporters: vec!["a".into(), "b".into()],
-                    source_refs: BTreeMap::new(),
+                    source_refs: vec![],
                 })
                 .collect(),
+            technical_suggestions: vec![],
+            blocking_issues: vec![],
         }
     }
 
@@ -545,7 +562,7 @@ mod tests {
             digest: "d".repeat(64),
         };
         AuditAssessment {
-            agreement: reference(ArtifactKind::Agreement, "agreement"),
+            reconciled: reference(ArtifactKind::ReconciledDiscovery, "reconciled"),
             adoption: reference(ArtifactKind::Adoption, "adoption"),
             implementation: reference(ArtifactKind::Implementation, "implementation"),
             coverage,
@@ -583,7 +600,7 @@ mod tests {
         failed.correction = "Fix the required behavior.".into();
         assert_eq!(
             derive_verdict(
-                &agreement(),
+                &reconciled(),
                 &assessment(vec![failed, row("R-2", CoverageState::Pass)]),
                 &ImplementationStatus::Submitted,
             )
@@ -598,7 +615,7 @@ mod tests {
         passed.evidence = vec![" ".into()];
         assert!(
             derive_verdict(
-                &agreement(),
+                &reconciled(),
                 &assessment(vec![passed, row("R-2", CoverageState::Pass)]),
                 &ImplementationStatus::Submitted,
             )
@@ -613,7 +630,7 @@ mod tests {
         failed.correction = "Fix the requirement.".into();
         assert!(
             derive_verdict(
-                &agreement(),
+                &reconciled(),
                 &assessment(vec![failed, row("R-2", CoverageState::Pass)]),
                 &ImplementationStatus::Submitted,
             )
@@ -626,7 +643,7 @@ mod tests {
         let failed = row("R-1", CoverageState::Fail);
         assert!(
             derive_verdict(
-                &agreement(),
+                &reconciled(),
                 &assessment(vec![failed, row("R-2", CoverageState::Pass)]),
                 &ImplementationStatus::Submitted,
             )
@@ -638,7 +655,7 @@ mod tests {
     fn unknown_requirement_cannot_pass() {
         assert_eq!(
             derive_verdict(
-                &agreement(),
+                &reconciled(),
                 &assessment(vec![
                     row("R-1", CoverageState::Unknown),
                     row("R-2", CoverageState::Pass)
@@ -654,7 +671,7 @@ mod tests {
     fn missing_coverage_cannot_pass() {
         assert_eq!(
             derive_verdict(
-                &agreement(),
+                &reconciled(),
                 &assessment(vec![row("R-1", CoverageState::Pass)]),
                 &ImplementationStatus::Submitted,
             )
@@ -667,7 +684,7 @@ mod tests {
     fn partial_implementation_cannot_pass() {
         assert_eq!(
             derive_verdict(
-                &agreement(),
+                &reconciled(),
                 &assessment(vec![
                     row("R-1", CoverageState::Pass),
                     row("R-2", CoverageState::Pass)
@@ -685,7 +702,7 @@ mod tests {
         not_applicable.rationale = "requirement does not apply to this target".into();
         assert_eq!(
             derive_verdict(
-                &agreement(),
+                &reconciled(),
                 &assessment(vec![row("R-1", CoverageState::Pass), not_applicable]),
                 &ImplementationStatus::Submitted,
             )
