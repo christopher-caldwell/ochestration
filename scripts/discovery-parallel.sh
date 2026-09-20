@@ -27,11 +27,13 @@ for i in $(seq 0 $((count - 1))); do
     if [ "$interactive" = "true" ]; then
         cmd="$(jq -r ".providers[$i].command | join(\" \")" "$launch_json")"
         printf '\n[interactive] slot=%s\n' "$slot"
+        printf '  effort:     %s\n' "$effort"
+        printf '  store root: %s\n' "$root"
         printf '  workspace: %s\n' "$workspace"
         printf '  run:       %s\n' "$run"
         printf '  command:   %s\n' "$cmd"
         printf '  prompt:    %s\n' "$prompt"
-        printf '  Open the provider in the workspace, follow the prompt, then finalize manually.\n'
+        printf '  Open the provider in the workspace, invoke orchestrate-discovery with these values, then finalize.\n'
         continue
     fi
 

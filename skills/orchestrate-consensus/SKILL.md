@@ -29,16 +29,16 @@ Rust resolves the exact eligible finalized Discovery artifact for every cohort s
 
 Do the resolution first. Never write `proposal.json`, and never begin reconciling, before the exact artifact set is known.
 
-If Rust reports a missing slot, or several candidates for one slot, stop and show the error with its candidate artifact IDs to the user. Ask which artifact that slot should use, then confirm the complete set with the same read-only command, which validates it and freezes it:
+If Rust reports a missing slot, or several candidates for one slot, stop and show the error with its candidate artifact IDs to the user. Ask which artifact that slot should use, then confirm the complete set with the same read-only command, which validates it and freezes it. Pass one `--opinion` for every cohort slot:
 
 ```sh
 orchestrate consensus inputs --effort "<effort>" \
-  --opinion "<a artifact id>" \
-  --opinion "<b artifact id>" \
-  --opinion "<c artifact id>"
+  --opinion "<artifact id for cohort slot 1>" \
+  --opinion "<artifact id for cohort slot 2>" \
+  --opinion "<artifact id for cohort slot 3>"
 ```
 
-Never guess, never silently select one of several candidates, and never reconcile against one set of Discovery artifacts and then finalize against another.
+For a cohort larger than three slots, add one more `--opinion` line per slot. Never guess, never silently select one of several candidates, and never reconcile against one set of Discovery artifacts and then finalize against another.
 
 ## 4. Read those exact artifacts
 
@@ -72,13 +72,13 @@ Do not manufacture supporter sets to force a package through. Do not add unrelat
 
 ```sh
 orchestrate consensus finalize --effort "<effort>" \
-  --opinion "<a artifact id>" \
-  --opinion "<b artifact id>" \
-  --opinion "<c artifact id>" \
+  --opinion "<artifact id for cohort slot 1>" \
+  --opinion "<artifact id for cohort slot 2>" \
+  --opinion "<artifact id for cohort slot 3>" \
   --bundle "<absolute path to proposal.json>"
 ```
 
-Always pass the artifact IDs resolved in step 3. Automatic inference stays available for manual CLI use, but this session must not re-infer its parents after reconciliation: a Discovery artifact that becomes eligible in the meantime must not change what this proposal is finalized against. If finalization rejects the explicit artifacts, show the error to the user instead of substituting different inputs.
+Pass exactly the artifact IDs resolved in step 3, one `--opinion` per cohort slot; for a cohort larger than three slots, add the remaining `--opinion` lines. Automatic inference stays available for manual CLI use, but this session must not re-infer its parents after reconciliation: a Discovery artifact that becomes eligible in the meantime must not change what this proposal is finalized against. If finalization rejects the explicit artifacts, show the error to the user instead of substituting different inputs.
 
 ## 8. Report and stop
 

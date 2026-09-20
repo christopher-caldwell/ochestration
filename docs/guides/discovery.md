@@ -4,6 +4,10 @@ Discovery answers:
 
 > **What should be built, and why?**
 
+For the shortest ticket-driven path, use `$discovery "<prepared-file>"`; see
+[Ticket workflow](ticket-workflow.md). This guide describes the underlying workflow and manual
+commands.
+
 One effort contains a set of independent Discovery slots. By default a new effort uses
 `codex`, `claude`, and `cursor`; explicit slot names (for example a custom `provider-x`) are frozen
 at `orchestrate init` with `--slot` or `--providers`.
@@ -19,6 +23,9 @@ cursor → Cursor
 Every slot receives the same reviewed request and Git baseline. Slots do not receive one another's
 private reasoning or outputs.
 
+Run workspaces, generated prompts, logs, and published artifacts all live under the Orchestrate
+store. Discovery never writes into the target repository it is investigating.
+
 For the first-class parallel launch flow (one `prepare-all`, then concurrent provider runs), see
 [Parallel Discovery](parallel-discovery.md).
 
@@ -33,7 +40,8 @@ export EFFORT_ID="PASTE-EFFORT-ID"
 Open one fresh provider session per slot and invoke `orchestrate-discovery` in each. Give each session:
 
 - the effort ID;
-- its own slot (`a`, `b`, or `c`);
+- its own slot name (`codex`, `claude`, `cursor`, or the names you chose with
+  `--slot`/`--providers`);
 - the store root, if it is not `~/.orchestration`;
 - host/provider/model metadata, if you want it recorded truthfully in the artifact.
 
@@ -118,7 +126,9 @@ Use `orchestrate status --effort "$EFFORT_ID"` to list the finalized artifacts, 
 
 You can run Discovery by hand when debugging, inspecting a workspace, or working manually with a model.
 
-Prepare all runs first so the parallel boundary is explicit:
+Prepare all runs first so the parallel boundary is explicit. Run `orchestrate discovery prepare`
+once per cohort slot; the commands below show the default three-slot cohort, and additional slots
+use the same pattern with their own `--slot` value:
 
 ```sh
 orchestrate discovery prepare --effort "$EFFORT_ID" --slot codex \

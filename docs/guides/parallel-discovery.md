@@ -4,6 +4,9 @@ This is the first-class workflow for the sentence:
 
 > Codex, Claude, Cursor, Provider X — run the same request for Discovery.
 
+If you want the shorter skill-driven ticket path instead, see
+[Ticket workflow](ticket-workflow.md).
+
 Preparation happens once, in sequence. The actual provider agents then run concurrently in
 isolated workspaces, and a single reconciler consumes every result afterwards.
 
@@ -11,13 +14,17 @@ isolated workspaces, and a single reconciler consumes every result afterwards.
 
 - `orchestrate` is installed and on your `PATH`.
 - Each headless provider CLI you plan to use is installed (`codex`, `claude`).
-- For interactive providers (Cursor), you have a way to open the workspace and run `orchestrate guide discovery`.
+- For interactive providers (Cursor), you have a way to open the workspace and invoke the `orchestrate-discovery` skill with the pre-prepared run ID and workspace.
 - `jq` is available if you use the bundled launcher script.
+- The store, provider plan, launch directory, prompts, and logs must all be outside the target repository. `orchestrate` never writes into the repository it is investigating, and it rejects a store root or explicit launch directory that is inside the target repository.
 
 ## 1. Declare the providers
 
-Create `orchestrate.providers.toml` (copy `providers.example.toml` as a starting point). Slot names
-are provider names and are frozen into the cohort:
+Create `orchestrate.providers.toml` outside the target repository. Copy
+[`docs/examples/providers.example.toml`](../examples/providers.example.toml) as a starting point.
+Slot names are provider names and are frozen into the cohort. If the file is named
+`orchestrate.providers.toml` in the directory where you run `orchestrate`, the `--providers`
+argument can be omitted; otherwise pass its absolute path explicitly.
 
 ```toml
 quorum = "majority"           # or an integer in 2..N
@@ -56,6 +63,10 @@ Codex uses `--dangerously-bypass-approvals-and-sandbox` because the generated pr
 Use it only for locally trusted parallel runs; isolation is still enforced by distinct workspaces,
 logs, environment, and the prompt rule against reading sibling workspaces.
 
+The Codex flags below are spelled for the installed Codex CLI in this repository. Verify the Claude
+flags against your installed `claude --help`; the isolation and finalize semantics stay the same
+even if a flag spelling differs.
+
 Available command placeholders: `{slot}`, `{effort}`, `{run}`, `{root}`, `{workspace}`,
 `{source}`, `{prompt}`, and `{log}`.
 
@@ -72,6 +83,15 @@ orchestrate init \
   --providers "./orchestrate.providers.toml"
 ```
 
+If you already prepared a reviewed request file, combine the same `--providers` flag with
+`--from-file` instead of repeating `--project`, `--effort`, or `--request`:
+
+```sh
+orchestrate init \
+  --from-file "/absolute/path/to/request.prepared.md" \
+  --providers "/absolute/path/to/orchestrate.providers.toml"
+```
+
 Copy the returned effort ID and export it:
 
 ```sh
@@ -86,7 +106,9 @@ strict threshold.
 ## 3. Prepare every slot in sequence
 
 This is the only sequential step. It creates one isolated run workspace per provider and emits a
-launch manifest:
+launch manifest. If `--launch-dir` is omitted, the manifest is written under the store's effort
+directory (never into the target repository). If you pass it explicitly, choose a path outside the
+target repository:
 
 ```sh
 orchestrate discovery prepare-all \
@@ -94,6 +116,8 @@ orchestrate discovery prepare-all \
   --providers "./orchestrate.providers.toml" \
   --launch-dir "/absolute/path/to/launch"
 ```
+
+The CLI verifies this launch directory is outside the target repository before it writes anything.
 
 `prepare-all` prints the launch directory. Inside it you will find:
 
@@ -124,8 +148,10 @@ directory, environment (`ORCHESTRATE_SLOT`, `ORCHESTRATE_EFFORT`, `ORCHESTRATE_R
 `ORCHESTRATE_WORKSPACE`), and `stdout.log`/`stderr.log`/`exit` files under its log directory.
 
 For every `interactive = true` provider it prints the exact workspace, run ID, prompt path, and
-command instead of spawning it. Open the provider in that workspace, run
-`orchestrate guide discovery`, and follow the prompt.
+command instead of spawning it. Open the provider in that workspace and invoke the
+`orchestrate-discovery` skill with the printed effort ID, slot, run ID, workspace, and store root.
+The skill will load `orchestrate guide discovery`, use the already-prepared run, and finalize
+without running `orchestrate discovery prepare` again.
 
 The launcher waits for the headless jobs, then runs `orchestrate status --effort` and prints which
 slots have finalized. It never runs Consensus.
@@ -156,14 +182,15 @@ Manual equivalent:
 orchestrate consensus inputs --effort "$EFFORT_ID"
 orchestrate consensus finalize \
   --effort "$EFFORT_ID" \
-  --opinion "$A_ARTIFACT" \
-  --opinion "$B_ARTIFACT" \
-  --opinion "$C_ARTIFACT" \
+  --opinion "$CODEX_ARTIFACT" \
+  --opinion "$CLAUDE_ARTIFACT" \
+  --opinion "$CURSOR_ARTIFACT" \
   --bundle "/absolute/path/to/proposal.json"
 ```
 
 Consensus now resolves one eligible Discovery artifact per cohort slot and applies the cohort
-quorum from initialization.
+quorum from initialization. Add one `--opinion` line per additional cohort slot; run
+`orchestrate status --effort "$EFFORT_ID"` to see the exact slot names and artifact IDs.
 
 ## Non-interference guarantees
 

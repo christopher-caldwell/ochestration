@@ -19,13 +19,22 @@ project: /absolute/path/to/target-repository
 effort: example-effort
 request_kind: freeform
 constraints: []
+slots: [codex, claude, cursor]
+quorum: majority
 ---
 ```
 
+Ask the user for the provider slot names and quorum if they are not obvious; otherwise use the
+defaults shown above.
+
 Organize the whole supplied request with headings appropriate to its content, such as Goal, Context, Explicit Unknowns, and Supporting Information. Do not add a ticket placeholder. Preserve every substantive supplied statement, speaker, uncertainty, condition, exception, scope, and conflict. A direct, unmistakable user instruction may also be copied verbatim to `constraints`; do not turn attributed statements, hypotheses, or interpretations into constraints. Before saving, check for omissions, invented requirements, altered certainty, merged speakers, or lost conditions.
 
-Read the saved file back. In chat, provide its absolute path, ask the user to review/edit it, and give this command shell-quoted for the actual path. Do not run it:
+Read the saved file back. In chat, provide its absolute path, ask the user to review/edit it, then
+run Discovery in each provider session with the `discovery` skill:
 
-```sh
-orchestrate init --from-file "/actual/path/request.prepared.md"
+```text
+Codex:        $discovery "/actual/path/request.prepared.md"
+Claude/Cursor: /discovery "/actual/path/request.prepared.md"
 ```
+
+Do not initialize an effort or run `orchestrate init` yourself.

@@ -203,7 +203,26 @@ impl Store {
             cohort,
         };
         let dir = self.effort_dir(&effort.project_id, &effort.id);
-        ensure!(!dir.exists(), "effort already exists: {}", effort.id);
+        if dir.exists() {
+            ensure!(
+                dir.join("effort.json").is_file(),
+                "effort directory already exists but is malformed: {}",
+                dir.display()
+            );
+            let existing: Effort = read_json(&dir.join("effort.json"))?;
+            ensure!(
+                existing.slug == effort.slug
+                    && existing.project_id == effort.project_id
+                    && existing.context.request_kind == effort.context.request_kind
+                    && existing.context.request == effort.context.request
+                    && existing.context.constraints == effort.context.constraints
+                    && existing.cohort.slots == effort.cohort.slots
+                    && existing.cohort.quorum == effort.cohort.quorum,
+                "effort already exists with a different identity: {}; choose a new effort slug or reuse the same prepared request unchanged",
+                effort.id
+            );
+            return Ok(existing);
+        }
         fs::create_dir_all(&dir)?;
         write_json_atomic(&dir.join("project.json"), &project)?;
         write_json_atomic(&dir.join("effort.json"), &effort)?;

@@ -9,12 +9,16 @@ prepared request → init → one Discovery skill per slot → Consensus skill
 
 Use the focused guides when you need more detail:
 
+- [Ticket workflow](ticket-workflow.md) — the shortest skill-driven path for a ticket.
 - [Request preparation](request-preparation.md)
 - [Discovery](discovery.md)
 - [Consensus and Agreement](consensus.md)
 - [Build and Audit](build-and-audit.md)
 
 Raw command sequences for manual or debugging use are in [Advanced and manual operation](#advanced-and-manual-operation) at the end of this guide.
+
+Orchestrate keeps its store, run workspaces, prompts, logs, and manifests outside the target
+repository. The target repository is frozen and read only during Discovery.
 
 ## 1. Prepare and review the request
 
@@ -34,6 +38,12 @@ Copy the returned effort ID. If the prepared file's `root` is not `~/.orchestrat
 export EFFORT_ID="PASTE-EFFORT-ID"
 ```
 
+When the prepared file uses a non-default root, pass it on every command in the global position:
+
+```sh
+orchestrate --root "/absolute/path/to/.orchestration" status --effort "$EFFORT_ID"
+```
+
 ## 2. Run independent Discovery sessions
 
 Open one fresh provider session per slot:
@@ -50,7 +60,8 @@ For a one-shot parallel launch, use the provider plan and
 Give each session only:
 
 - the effort ID;
-- its slot (`a`, `b`, or `c`);
+- its own slot name (`codex`, `claude`, `cursor`, or the names you chose with
+  `--slot`/`--providers`);
 - the store root, if it is not `~/.orchestration`.
 
 The skill runs `orchestrate guide discovery`, prepares its own run workspace, investigates the frozen baseline interactively, asks you about material ambiguity, writes `technical-spec.md` and the evidence graph, and finalizes the run. It then reports the run ID, the finalized Discovery artifact ID, and the outcome (`IMPLEMENTATION_READY` or `BLOCKED`, with any blocked questions).
@@ -173,28 +184,30 @@ orchestrate discovery finalize --effort "$EFFORT_ID" --run "RUN-ID"
 orchestrate consensus inputs --effort "$EFFORT_ID"
 ```
 
-`consensus inputs` is read-only: it resolves the single eligible Discovery artifact per slot, or stops and lists what it found when a slot has none or several. Resolve the exact artifacts first, reconcile against exactly those artifacts, and finalize against the same set:
+`consensus inputs` is read-only: it resolves the single eligible Discovery artifact per slot, or stops and lists what it found when a slot has none or several. Resolve the exact artifacts first, reconcile against exactly those artifacts, and finalize against the same set. Pass exactly one `--opinion` per cohort slot; the default three-slot example below repeats for any additional slots:
 
 ```sh
 orchestrate consensus finalize \
   --effort "$EFFORT_ID" \
-  --opinion "$A_DISCOVERY_ARTIFACT" \
-  --opinion "$B_DISCOVERY_ARTIFACT" \
-  --opinion "$C_DISCOVERY_ARTIFACT" \
+  --opinion "$CODEX_DISCOVERY_ARTIFACT" \
+  --opinion "$CLAUDE_DISCOVERY_ARTIFACT" \
+  --opinion "$CURSOR_DISCOVERY_ARTIFACT" \
   --bundle "/absolute/path/to/proposal.json"
 ```
+
+Add one more `--opinion` line for each additional cohort slot; `orchestrate status --effort "$EFFORT_ID"` lists the exact slot names and artifact IDs.
 
 `consensus inputs` also accepts explicit selectors and validates the set without publishing anything. When a slot has no candidate or several candidates, it stops and lists them, so you can choose and check the set before reconciling:
 
 ```sh
 orchestrate consensus inputs \
   --effort "$EFFORT_ID" \
-  --opinion "$A_DISCOVERY_ARTIFACT" \
-  --opinion "$B_DISCOVERY_ARTIFACT" \
-  --opinion "$C_DISCOVERY_ARTIFACT"
+  --opinion "$CODEX_DISCOVERY_ARTIFACT" \
+  --opinion "$CLAUDE_DISCOVERY_ARTIFACT" \
+  --opinion "$CURSOR_DISCOVERY_ARTIFACT"
 ```
 
-Omit `--opinion` on `consensus finalize` to infer the single eligible Discovery artifact per slot; explicit selection is all-or-nothing.
+Omit `--opinion` on `consensus finalize` to infer the single eligible Discovery artifact per slot; explicit selection is all-or-nothing. Use `orchestrate status --effort "$EFFORT_ID"` to see the exact slot list and artifact IDs.
 
 The result is `ELIGIBLE_CANDIDATE` with an Agreement artifact, or `NO_CONSENSUS`. Do not force `NO_CONSENSUS` forward.
 

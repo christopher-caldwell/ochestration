@@ -38,6 +38,8 @@ project: /Users/me/code/my-project
 effort: age-377-rerun
 request_kind: ticket
 constraints: []
+slots: [codex, claude, cursor]
+quorum: majority
 ---
 
 # Discovery Request
@@ -57,7 +59,7 @@ constraints: []
 
 The prep skill does **not** fetch, summarize, reproduce, or reinterpret the original ticket.
 
-### Before initialization
+### Before Discovery
 
 Open the prepared file and:
 
@@ -68,13 +70,20 @@ Open the prepared file and:
 
 Orchestrate rejects a ticket file while the literal ticket placeholder is still present.
 
-Then initialize:
+Then run Discovery in each provider session. The `discovery` skill initializes or reuses the
+shared effort for you:
+
+```text
+$discovery "/absolute/path/to/request.prepared.md"
+```
+
+In Claude Code or Cursor, invoke `/discovery` with the same path.
+
+For manual or debugging use, the same file can be initialized directly:
 
 ```sh
 orchestrate init --from-file "/absolute/path/to/request.prepared.md"
 ```
-
-Do not add `--root`, `--project`, `--effort`, or other init arguments to this command. Those values already come from the frontmatter.
 
 ## Freeform requests
 
@@ -100,11 +109,13 @@ It must preserve:
 
 It must not invent requirements or silently resolve ambiguity.
 
-Review the generated file and initialize it with the same command:
+Review the generated file, then run Discovery in each provider session:
 
-```sh
-orchestrate init --from-file "/absolute/path/to/request.prepared.md"
+```text
+$discovery "/absolute/path/to/request.prepared.md"
 ```
+
+In Claude Code or Cursor, invoke `/discovery` with the same path.
 
 ## Frontmatter fields
 
@@ -116,6 +127,8 @@ project: /absolute/path/to/target-repository
 effort: short-effort-name
 request_kind: ticket
 constraints: []
+slots: [codex, claude, cursor]
+quorum: majority
 ```
 
 `root` and `project` must be absolute paths.
@@ -123,6 +136,10 @@ constraints: []
 `request_kind` is either `ticket` or `freeform`.
 
 `constraints` should normally be empty. Use it only for direct user instructions that should govern the workflow independently of Discovery voting.
+
+`slots` is the ordered provider slot list; it defaults to `codex`, `claude`, `cursor` when omitted.
+
+`quorum` is `majority` or an integer from `2` through the slot count; it defaults to strict majority when omitted.
 
 The Markdown body after the closing `---` is preserved as the actual request.
 
@@ -136,7 +153,7 @@ The Markdown body after the closing `---` is preserved as the actual request.
 - target repository identity;
 - the target repository's current committed Git commit and tree.
 
-That baseline becomes the common source for Discovery A, B, and C.
+That baseline becomes the common source for every Discovery slot in the cohort.
 
 If you are intentionally reproducing an earlier run, make sure the target repository is checked out at the desired baseline before initialization.
 

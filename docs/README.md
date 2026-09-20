@@ -10,13 +10,15 @@ Use these docs based on what you are trying to do.
 
 ## Run Orchestrate
 
-- [Complete run guide](guides/run.md) — the shortest end-to-end path from a prepared request through Audit.
+- [Complete run guide](guides/run.md) — the full manual end-to-end command path from a prepared request through Audit.
+- [Ticket workflow](guides/ticket-workflow.md) — the recommended fast path for tickets using `$prep-discovery-ticket`, `$discovery`, and `$reconcile`.
 - [Prepare a request](guides/request-preparation.md) — use the ticket or freeform prep skill, review the generated Markdown, and initialize an effort.
 - [Parallel Discovery](guides/parallel-discovery.md) — run the same request across Codex, Claude Code, Cursor, and any Provider X concurrently, then reconcile.
+- [Example provider plan](examples/providers.example.toml) — commented TOML template for Codex, Claude Code, Cursor, and Provider X.
 - [Discovery](guides/discovery.md) — prepare and run independent Discovery investigations, handle questions, validate, and finalize them.
 - [Consensus and Agreement](guides/consensus.md) — reconcile the finalized Discovery results, review the Agreement, and adopt it.
 - [Build and Audit](guides/build-and-audit.md) — implement outside Orchestrate, register the exact Git commit, and audit it against the adopted Agreement.
-- [Agent-led installation](guides/agent-installation.md) — install the CLI and five checked-in skills for Codex, Claude Code, or Cursor.
+- [Agent-led installation](guides/agent-installation.md) — install the CLI and checked-in skills for Codex, Claude Code, or Cursor.
 
 ## Understand Orchestrate
 

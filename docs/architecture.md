@@ -5,9 +5,10 @@ Orchestrate is intentionally a small deterministic shell around capable engineer
 The product is the authority chain:
 
 ```text
-Discovery codex  ─┐
-Discovery claude ─┼─→ Consensus → adopted Agreement → external Build → Audit
-Discovery cursor ─┘
+Discovery slots (codex, claude, cursor, ...)
+            │
+            ▼
+        Consensus → adopted Agreement → external Build → Audit
 ```
 
 Models perform semantic engineering work. Rust freezes inputs, validates mechanical invariants, binds exact artifacts together, and prevents a later phase from quietly changing what an earlier phase established.
@@ -30,6 +31,7 @@ A useful way to divide responsibility is:
 
 - which exact request and constraints define the effort;
 - which exact Git commit every Discovery inspects;
+- that the Orchestrate store and any explicit launch directory stay outside the target repository;
 - whether a Discovery graph is structurally valid;
 - whether a blocked question makes the Discovery blocked;
 - whether every Consensus input belongs to the same cohort;
@@ -84,6 +86,8 @@ project: /absolute/path/to/repository
 effort: example-effort
 request_kind: ticket
 constraints: []
+slots: [codex, claude, cursor]
+quorum: majority
 ---
 
 # Discovery Request
@@ -207,10 +211,10 @@ intersection must itself contain at least `quorum` slots.
 For example:
 
 ```text
-R1 supporters = {A, B}
-R2 supporters = {B, C}
+R1 supporters = {codex, claude}
+R2 supporters = {claude, cursor}
 
-common intersection = {B}
+common intersection = {claude}
 ```
 
 Each row individually has a majority, but the package does not. Orchestrate therefore rejects it as an implementation-ready package. This prevents a Consensus model from assembling a plan that no two Discovery runs actually support as a whole.
@@ -304,9 +308,10 @@ Conceptually:
 Audit
 ├── Agreement
 │   └── Consensus
-│       ├── Discovery A
-│       ├── Discovery B
-│       └── Discovery C
+│       ├── Discovery codex
+│       ├── Discovery claude
+│       └── Discovery cursor
+│           (one Discovery artifact per cohort slot)
 ├── Adoption
 │   └── Agreement
 └── Implementation
@@ -318,6 +323,11 @@ Audit
 ## 11. Storage and journal
 
 The default store is `~/.orchestration`.
+
+The store and any explicit parallel Discovery launch directory must be outside the target
+repository. `orchestrate init` and `orchestrate discovery prepare-all` reject those paths when they
+fall inside the repository being investigated, so Orchestrate does not write generated workspace,
+prompt, log, or manifest files into the codebase it is studying.
 
 Conceptually it contains:
 

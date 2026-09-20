@@ -19,6 +19,8 @@ project: /absolute/path/to/target-repository
 effort: example-effort
 request_kind: ticket
 constraints: []
+slots: [codex, claude, cursor]
+quorum: majority
 ---
 
 # Discovery Request
@@ -30,12 +32,20 @@ constraints: []
 ## Additional User Context
 ```
 
+Ask the user for the provider slot names and quorum if they are not obvious; otherwise use the
+defaults shown above.
+
 Organize only supplemental material under useful headings such as Additional User Context, Explicit Unknowns, and Supporting Context. Do not ask for, fetch, reproduce, rewrite, summarize, or reconstruct the original ticket. If the raw file contains an explicitly labelled ticket excerpt, leave it out of the output and tell the user to paste the original ticket themselves; if the boundary is unclear, ask which material is supplemental.
 
 Preserve every substantive supplied statement, speaker, uncertainty, condition, exception, scope, and conflict. A direct, unmistakable user instruction may also be copied verbatim to `constraints`; do not turn attributed statements, hypotheses, or interpretations into constraints. Before saving, check for omissions, invented requirements, altered certainty, merged speakers, or lost conditions.
 
-Read the saved file back. In chat, provide its absolute path and exactly this form of command, shell-quoted for the actual path. Tell the user to paste the original ticket verbatim into the placeholder and review/edit the file before running it. Do not run the command:
+Read the saved file back. In chat, provide its absolute path. Tell the user to paste the original
+ticket verbatim into the placeholder and review/edit the file, then run Discovery in each provider
+session with the `discovery` skill:
 
-```sh
-orchestrate init --from-file "/actual/path/request.prepared.md"
+```text
+Codex:        $discovery "/actual/path/request.prepared.md"
+Claude/Cursor: /discovery "/actual/path/request.prepared.md"
 ```
+
+Do not initialize an effort or run `orchestrate init` yourself.

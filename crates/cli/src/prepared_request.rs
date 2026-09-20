@@ -15,6 +15,8 @@ pub struct PreparedRequest {
     pub effort: String,
     pub request_kind: RequestKind,
     pub constraints: Vec<String>,
+    pub slots: Vec<String>,
+    pub quorum: Option<crate::provider_plan::QuorumValue>,
     pub body: String,
 }
 
@@ -27,6 +29,10 @@ struct Frontmatter {
     request_kind: RequestKind,
     #[serde(default)]
     constraints: Vec<String>,
+    #[serde(default)]
+    slots: Vec<String>,
+    #[serde(default)]
+    quorum: Option<crate::provider_plan::QuorumValue>,
 }
 
 pub fn read(path: &Path) -> Result<PreparedRequest> {
@@ -76,6 +82,8 @@ pub fn read(path: &Path) -> Result<PreparedRequest> {
         effort: parsed.effort,
         request_kind: parsed.request_kind,
         constraints: parsed.constraints,
+        slots: parsed.slots,
+        quorum: parsed.quorum,
         body,
     })
 }

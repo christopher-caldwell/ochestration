@@ -1,6 +1,6 @@
 # Agent-led installation
 
-Install Orchestrate from an agent session when you want the CLI and the five checked-in skills available to the provider you are currently using.
+Install Orchestrate from an agent session when you want the CLI and the checked-in skills available to the provider you are currently using.
 
 Installation does not prepare a request or start a workflow.
 
@@ -9,7 +9,7 @@ Installation does not prepare a request or start a workflow.
 Open the Orchestrate checkout in Codex, Claude Code, or Cursor and say:
 
 ```text
-Install the Orchestration CLI and all five skills from this checkout for the provider I am using now. Follow docs/guides/agent-installation.md. Verify the installation without preparing a request or starting an investigation.
+Install the Orchestration CLI and all checked-in skills from this checkout for the provider I am using now. Follow docs/guides/agent-installation.md. Verify the installation without preparing a request or starting an investigation.
 ```
 
 ## Instructions for the installing agent
@@ -34,7 +34,7 @@ For an explicit refresh of a confirmed existing installation from this project, 
 
 Do not overwrite a different executable merely because it has the same name.
 
-### 3. Install the five checked-in skills
+### 3. Install the checked-in skills
 
 Copy every folder under:
 
@@ -47,16 +47,20 @@ into the current provider's personal skill directory.
 Default locations:
 
 ```text
-Codex       ~/.agents/skills/
+Codex       ~/.codex/skills/
 Claude Code ~/.claude/skills/
 Cursor      ~/.cursor/skills/
 ```
 
-The five skills are:
+Create the directory first if it does not already exist, then copy the skill folders into it.
+
+The skills are:
 
 ```text
 prep-discovery-ticket
 prep-discovery-freeform
+discovery
+reconcile
 orchestrate-discovery
 orchestrate-consensus
 orchestrate-audit
@@ -82,7 +86,7 @@ orchestrate guide audit
 
 Confirm that `init --help` includes `--from-file`.
 
-Confirm that all five skill directories are present in the selected provider's personal skill location.
+Confirm that every listed skill directory is present in the selected provider's personal skill location.
 
 Do not run `orchestrate init` merely to test installation.
 
@@ -92,7 +96,7 @@ Tell the user:
 
 - the installed `orchestrate` executable path;
 - the skill directory used;
-- which five skills were installed or refreshed;
+- which skills were installed or refreshed;
 - whether CLI verification passed;
 - that a fresh provider session may be necessary before new skills appear.
 

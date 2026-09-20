@@ -4,6 +4,10 @@ Consensus answers:
 
 > **What implementation direction do the finalized Discovery investigations genuinely agree on?**
 
+For the shortest path from finalized output directories, use `$reconcile "<dir>" "<dir>" ...`; see
+[Ticket workflow](ticket-workflow.md). This guide describes the underlying workflow and manual
+commands.
+
 Consensus is reconciliation, not another repository investigation.
 
 ## 1. Run the Consensus skill
@@ -32,9 +36,9 @@ The skill reads exactly those artifacts, writes `proposal.json`, and finalizes a
 ```sh
 orchestrate consensus finalize \
   --effort "$EFFORT_ID" \
-  --opinion "$A_DISCOVERY_ARTIFACT" \
-  --opinion "$B_DISCOVERY_ARTIFACT" \
-  --opinion "$C_DISCOVERY_ARTIFACT" \
+  --opinion "$CODEX_DISCOVERY_ARTIFACT" \
+  --opinion "$CLAUDE_DISCOVERY_ARTIFACT" \
+  --opinion "$CURSOR_DISCOVERY_ARTIFACT" \
   --bundle "/absolute/path/to/proposal.json"
 ```
 
@@ -111,7 +115,7 @@ A simplified `proposal.json` requirement entry looks like:
     "condition": null,
     "governing": false
   },
-  "supporters": ["a", "b"],
+  "supporters": ["codex", "claude"],
   "source_refs": {}
 }
 ```
@@ -128,20 +132,20 @@ or raised with `--quorum`.
 Valid example:
 
 ```text
-R1 = {A, B}
-R2 = {A, B, C}
-R3 = {A, B}
+R1 = {codex, claude}
+R2 = {codex, claude, cursor}
+R3 = {codex, claude}
 
-common = {A, B}
+common = {codex, claude}
 ```
 
 Invalid rotating-majority example:
 
 ```text
-R1 = {A, B}
-R2 = {B, C}
+R1 = {codex, claude}
+R2 = {claude, cursor}
 
-common = {B}
+common = {claude}
 ```
 
 The second package is rejected even though each row separately meets the per-row threshold. Explicit user constraints are appended as governing requirements; they are not Consensus votes.
@@ -151,13 +155,15 @@ Finalize against the artifacts you resolved and reconciled:
 ```sh
 orchestrate consensus finalize \
   --effort "$EFFORT_ID" \
-  --opinion "$A_DISCOVERY_ARTIFACT" \
-  --opinion "$B_DISCOVERY_ARTIFACT" \
-  --opinion "$C_DISCOVERY_ARTIFACT" \
+  --opinion "$CODEX_DISCOVERY_ARTIFACT" \
+  --opinion "$CLAUDE_DISCOVERY_ARTIFACT" \
+  --opinion "$CURSOR_DISCOVERY_ARTIFACT" \
   --bundle "/absolute/path/to/proposal.json"
 ```
 
-Explicit selection is all-or-nothing: pass one selector per cohort slot, or omit `--opinion` entirely.
+Explicit selection is all-or-nothing: pass one selector per cohort slot, or omit `--opinion`
+entirely. For a cohort larger than three slots, add one `--opinion` line for each additional slot;
+`orchestrate status --effort "$EFFORT_ID"` prints the exact slot names and artifact IDs.
 
 ## Next step
 

@@ -1,0 +1,109 @@
+# Example provider plan for first-class parallel Discovery.
+#
+# What this file is
+# -----------------
+# It declares the provider cohort for one Orchestrate effort: every [[provider]]
+# block becomes one named Discovery slot, and the launcher uses each block's
+# `command` template to run that provider in its own isolated workspace.
+#
+# How to use it
+# -------------
+# Copy this file to a location OUTSIDE the target repository (the repository
+# being investigated). If you name the copy `orchestrate.providers.toml` in the
+# directory where you run the CLI, `--providers` can be omitted. Otherwise pass
+# the file explicitly:
+#
+#   orchestrate init ... --providers "/absolute/path/orchestrate.providers.toml"
+#   orchestrate discovery prepare-all --effort "$EFFORT_ID" \
+#     --providers "/absolute/path/orchestrate.providers.toml" \
+#     --launch-dir "/absolute/path/OUTSIDE/the/target/repository"
+#
+# Orchestrate itself never writes into the target repository. Keep the store,
+# provider plan, launch directory, prompts, and logs outside the target
+# repository as well.
+
+# Consensus threshold for the whole cohort.
+#
+# "majority" means floor(N/2)+1 slots must support each mandatory Consensus
+# requirement and the common package intersection. For three slots that is two;
+# for four slots it is three. You may also set an explicit integer from 2 to N,
+# for example `quorum = 2`.
+quorum = "majority"
+
+# Each [[provider]] block is one slot. `name` is the frozen slot label and must
+# be unique, label-safe, and match the name used in every downstream command.
+#
+# `interactive = false` means the bundled launcher can start the provider as a
+# headless process. `interactive = true` means the launcher only prints the
+# exact workspace, prompt, and command for a human to run (Cursor is the normal
+# interactive example).
+#
+# Supported placeholders in `command`:
+#   {slot}      provider/slot name
+#   {effort}    frozen effort ID
+#   {run}       prepared Discovery run ID
+#   {root}      Orchestrate store root (usually ~/.orchestration)
+#   {workspace} this provider's private run workspace
+#   {source}    clean detached Git checkout inside {workspace}/source
+#   {prompt}    generated prompt file for this provider
+#   {log}       this provider's private launch/log directory
+# Unknown placeholders are rejected.
+
+[[provider]]
+name = "codex"
+host = "codex"
+
+# Optional provenance recorded on the finalized Discovery artifact. Leave these
+# values unset if you do not know them; never invent provider or model values.
+provider = "deepseek"
+model = "deepseek-v4-pro"
+model_effort = "high"
+
+# Headless Codex run. The generated prompt calls `orchestrate discovery
+# finalize`, which writes to the shared Orchestrate store outside this run
+# workspace. Therefore this example bypasses Codex's approval/sandbox controls.
+# Use it only for a locally trusted parallel run.
+interactive = false
+command = [
+  "codex", "exec", "--skip-git-repo-check",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "-C", "{workspace}", "--output-last-message", "{log}/last-message.json",
+  "{prompt}",
+]
+
+[[provider]]
+name = "claude"
+host = "claude-code"
+provider = "anthropic"
+model = "claude-sonnet-4-5"
+
+# Headless Claude Code run. Adjust the exact flags to your installed `claude`
+# CLI (`claude --help`) if your version differs; keep the same isolation model.
+interactive = false
+command = ["claude", "-p", "{prompt}", "--add-dir", "{workspace}", "--output-format", "json"]
+
+[[provider]]
+name = "cursor"
+host = "cursor"
+
+# Cursor is interactive. The launcher will not spawn it. It prints the exact
+# workspace, run ID, prompt path, and command, then you open Cursor in that
+# workspace and run `orchestrate guide discovery`.
+interactive = true
+command = ["cursor", "{workspace}"]
+
+# Provider X template. Uncomment the block below, replace every value, and keep
+# the slot name unique. `host` is the harness identity recorded for provenance;
+# `provider`, `model`, and `model_effort` are optional provenance metadata.
+# `interactive = false` means the command must exit after the Discovery work is
+# finalized; `interactive = true` means the launcher will print instructions
+# instead of spawning the process.
+#
+# [[provider]]
+# name = "provider-x"
+# host = "provider-x"
+# provider = "your-provider-family"      # optional
+# model = "your-model"                    # optional
+# model_effort = "high"                   # optional
+# interactive = false
+# command = ["your-provider-cli", "run", "--cwd", "{workspace}", "--prompt", "{prompt}", "--log-dir", "{log}"]

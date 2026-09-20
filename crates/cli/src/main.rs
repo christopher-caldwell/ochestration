@@ -12,7 +12,7 @@ use std::{
 };
 
 mod prepared_request;
-mod provider_plan;
+pub(crate) mod provider_plan;
 
 const DISCOVERY_GUIDE: &str = include_str!("../resources/guides/discovery.md");
 const CONSENSUS_GUIDE: &str = include_str!("../resources/guides/consensus.md");
@@ -265,6 +265,11 @@ fn run() -> Result<()> {
         Command::Skills { command } => skills(command),
         Command::Init(args) => {
             let input = resolve_init_input(root, args)?;
+            let canonical_repo = fs::canonicalize(&input.project).with_context(|| {
+                format!("cannot canonicalize repository {}", input.project.display())
+            })?;
+            let store_root = normalized_absolute_path(&input.root)?;
+            ensure_outside_project(&store_root, &canonical_repo, "orchestration store root")?;
             let store = Store::open(&input.root)?;
             initialize(&store, input)
         }
@@ -282,9 +287,16 @@ struct InitInput {
     quorum: usize,
 }
 fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
-    let (root, project, effort, request_kind, request, constraints) = if let Some(path) =
-        args.from_file
-    {
+    let (
+        root,
+        project,
+        effort,
+        request_kind,
+        request,
+        constraints,
+        prepared_slots,
+        prepared_quorum,
+    ) = if let Some(path) = args.from_file {
         ensure!(
             root.is_none()
                 && args.project.is_none()
@@ -303,6 +315,8 @@ fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
             prepared.request_kind,
             prepared.body,
             prepared.constraints,
+            prepared.slots,
+            prepared.quorum,
         )
     } else {
         let project = args
@@ -334,12 +348,16 @@ fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
             request_kind,
             request,
             args.constraints,
+            Vec::new(),
+            None,
         )
     };
     let (slots, quorum) = resolve_slots_and_quorum(
         args.providers.as_deref(),
         &args.slots,
         args.quorum.as_deref(),
+        &prepared_slots,
+        prepared_quorum,
     )?;
     Ok(InitInput {
         root,
@@ -353,8 +371,11 @@ fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
     })
 }
 fn initialize(store: &Store, input: InitInput) -> Result<()> {
+    let canonical_repo = fs::canonicalize(&input.project)
+        .with_context(|| format!("cannot canonicalize repository {}", input.project.display()))?;
+    ensure_outside_project(store.root(), &canonical_repo, "orchestration store root")?;
     let effort = store.init_effort(
-        &input.project,
+        &canonical_repo,
         &input.effort,
         input.request_kind,
         input.request,
@@ -366,6 +387,16 @@ fn initialize(store: &Store, input: InitInput) -> Result<()> {
         "SUCCESS",
         "COHORT_CREATED",
         serde_json::json!({"effort":effort.id,"cohort":effort.cohort.id,"baseline":effort.cohort.baseline_commit,"slots":effort.cohort.slots,"quorum":effort.cohort.quorum}),
+    );
+    Ok(())
+}
+
+fn ensure_outside_project(path: &Path, project: &Path, label: &str) -> Result<()> {
+    ensure!(
+        !path.starts_with(project),
+        "{label} must be outside the target repository {}; got {}",
+        project.display(),
+        path.display()
     );
     Ok(())
 }
@@ -604,6 +635,8 @@ fn resolve_slots_and_quorum(
     providers: Option<&Path>,
     explicit_slots: &[String],
     quorum_flag: Option<&str>,
+    prepared_slots: &[String],
+    prepared_quorum: Option<provider_plan::QuorumValue>,
 ) -> Result<(Vec<String>, usize)> {
     let (slots, plan_quorum) = if let Some(path) = providers {
         ensure!(
@@ -614,10 +647,14 @@ fn resolve_slots_and_quorum(
         (plan.slots(), plan.quorum)
     } else {
         let slots: Vec<String> = if explicit_slots.is_empty() {
-            DEFAULT_SLOTS
-                .iter()
-                .map(|slot| (*slot).to_owned())
-                .collect()
+            if prepared_slots.is_empty() {
+                DEFAULT_SLOTS
+                    .iter()
+                    .map(|slot| (*slot).to_owned())
+                    .collect()
+            } else {
+                prepared_slots.to_vec()
+            }
         } else {
             explicit_slots.to_vec()
         };
@@ -628,6 +665,15 @@ fn resolve_slots_and_quorum(
             .map_err(|message| anyhow::anyhow!(message))?
             .resolve(slots.len())
     } else if let Some(raw) = plan_quorum {
+        match raw {
+            provider_plan::QuorumValue::Text(text) => QuorumSpec::parse(&text)
+                .map_err(|message| anyhow::anyhow!(message))?
+                .resolve(slots.len()),
+            provider_plan::QuorumValue::Count(count) => {
+                QuorumSpec::Count(count).resolve(slots.len())
+            }
+        }
+    } else if let Some(raw) = prepared_quorum {
         match raw {
             provider_plan::QuorumValue::Text(text) => QuorumSpec::parse(&text)
                 .map_err(|message| anyhow::anyhow!(message))?
@@ -663,6 +709,12 @@ fn prepare_all(
     providers: Option<PathBuf>,
     launch_dir: Option<PathBuf>,
 ) -> Result<()> {
+    let project = store.project_for(effort)?;
+    ensure_outside_project(
+        store.root(),
+        &project.canonical_locator,
+        "orchestration store root",
+    )?;
     let plan_path = resolve_providers_path(providers);
     let plan = provider_plan::ProviderPlan::read(&plan_path)?;
 
@@ -675,12 +727,17 @@ fn prepare_all(
         "provider plan slots do not match the cohort slots"
     );
 
-    let launch_dir = launch_dir.unwrap_or_else(|| {
+    let launch_dir = normalized_absolute_path(&launch_dir.unwrap_or_else(|| {
         store
             .effort_dir(&effort.project_id, &effort.id)
             .join(".launch")
             .join(orchestrate_core::now_ms().to_string())
-    });
+    }))?;
+    ensure_outside_project(
+        &launch_dir,
+        &project.canonical_locator,
+        "Discovery launch directory",
+    )?;
     fs::create_dir_all(&launch_dir)?;
 
     let mut entries = Vec::new();
@@ -740,6 +797,35 @@ fn prepare_all(
         }),
     );
     Ok(())
+}
+
+fn normalized_absolute_path(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    if absolute.exists() {
+        return fs::canonicalize(&absolute)
+            .with_context(|| format!("cannot canonicalize {}", absolute.display()));
+    }
+
+    let mut existing = absolute.clone();
+    let mut suffix = Vec::new();
+    while !existing.exists() {
+        suffix.push(existing.file_name().map(ToOwned::to_owned));
+        if !existing.pop() {
+            break;
+        }
+    }
+    let mut normalized = fs::canonicalize(&existing)
+        .with_context(|| format!("cannot canonicalize {}", existing.display()))?;
+    for component in suffix.iter().rev() {
+        if let Some(component) = component {
+            normalized.push(component);
+        }
+    }
+    Ok(normalized)
 }
 
 fn discovery_prompt(vars: &HashMap<String, String>) -> String {

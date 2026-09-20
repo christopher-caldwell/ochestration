@@ -518,6 +518,42 @@ fn prepared_file_init_uses_its_values_and_preserves_body_bytes() {
 }
 
 #[test]
+fn prepared_file_frontmatter_defines_slots_and_quorum_and_init_is_idempotent() {
+    let root = temporary("prepared-slots-store");
+    let repo = temporary("prepared-slots-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let prepared = temporary("prepared-slots-file").join("request.prepared.md");
+    fs::write(
+        &prepared,
+        format!(
+            "---\nroot: {}\nproject: {}\neffort: slot-cohort\nrequest_kind: freeform\nconstraints: []\nslots: [codex, claude, cursor, provider-x]\nquorum: 3\n---\n# Request\n\nInvestigate exactly this.\n",
+            root.display(),
+            repo.display()
+        ),
+    )
+    .unwrap();
+
+    let first = command_without_root(&["init", "--from-file", prepared.to_str().unwrap()]);
+    assert_eq!(
+        first["details"]["slots"],
+        serde_json::json!(["codex", "claude", "cursor", "provider-x"])
+    );
+    assert_eq!(first["details"]["quorum"], 3);
+    let effort_id = first["details"]["effort"].as_str().unwrap();
+
+    let second = command_without_root(&["init", "--from-file", prepared.to_str().unwrap()]);
+    assert_eq!(second["details"]["effort"], effort_id);
+    assert_eq!(second["details"]["slots"], first["details"]["slots"]);
+    assert_eq!(second["details"]["quorum"], 3);
+}
+
+#[test]
 fn prepared_file_rejects_conflicts_and_invalid_input_before_opening_a_store() {
     let parent = temporary("prepared-invalid-parent");
     let root = parent.join("unopened-store");
@@ -1795,6 +1831,80 @@ fn init_rejects_invalid_slots_and_quorum() {
         out_of_range.contains("quorum must be between"),
         "{out_of_range}"
     );
+}
+
+#[test]
+fn init_rejects_a_store_root_inside_the_target_repository() {
+    let repo = temporary("init-root-inside-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let error = command_error(
+        &repo,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "root-inside",
+            "--request",
+            "change fixture",
+        ],
+    );
+    assert!(error.contains("outside the target repository"), "{error}");
+}
+
+#[test]
+fn prepare_all_rejects_a_launch_dir_inside_the_target_repository() {
+    let root = temporary("prepare-all-root-inside-store");
+    let aux = temporary("prepare-all-root-inside-aux");
+    let repo = temporary("prepare-all-root-inside-repo");
+    git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    fs::write(repo.join("source.txt"), "committed\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "baseline"]);
+
+    let plan = write_providers(
+        &aux,
+        "providers.toml",
+        "[[provider]]\nname = \"codex\"\nhost = \"codex\"\ninteractive = false\ncommand = [\"/bin/true\"]\n\n\
+         [[provider]]\nname = \"claude\"\nhost = \"claude-code\"\ninteractive = false\ncommand = [\"/bin/true\"]\n",
+    );
+    let init = command(
+        &root,
+        &[
+            "init",
+            "--project",
+            repo.to_str().unwrap(),
+            "--effort",
+            "root-inside-launch",
+            "--request",
+            "change fixture",
+            "--providers",
+            plan.to_str().unwrap(),
+        ],
+    );
+    let effort = init["details"]["effort"].as_str().unwrap().to_owned();
+    let error = command_error(
+        &root,
+        &[
+            "discovery",
+            "prepare-all",
+            "--effort",
+            &effort,
+            "--providers",
+            plan.to_str().unwrap(),
+            "--launch-dir",
+            repo.join("launch").to_str().unwrap(),
+        ],
+    );
+    assert!(error.contains("outside the target repository"), "{error}");
 }
 
 #[test]
