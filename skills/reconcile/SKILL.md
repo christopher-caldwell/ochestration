@@ -25,10 +25,19 @@ workspaces. Reconcile may preserve a strong minority finding; agreement count is
 an eligibility rule.
 
 Write `reconcile-proposal.json` outside the repository and artifact store. It must distinguish
-binding requirements from advisory `technical_suggestions`. Every model-derived requirement and
-suggestion needs at least one source reference to a selected Discovery artifact; a referenced node
-ID must exist there. If the selected evidence cannot settle a material decision, ask the user when
-appropriate or use `blocking_issues` rather than inventing an answer.
+binding requirements from advisory `technical_suggestions`. `core_result` is the concise answer to
+what will be done, and `requirements` are its exhaustive auditable decomposition: every
+implementation-affecting obligation needs a binding requirement with acceptance criteria.
+
+Every ordinary model-derived requirement and every suggestion needs at least one source reference
+to a selected Discovery artifact; a referenced node ID must exist there. The model must not set a
+requirement's `governing` flag: Rust rejects that assertion of authority. Frozen effort constraints
+are added mechanically as governing requirements. If an explicit user answer during this Reconcile
+conversation resolves a material intent choice, represent the requirement with an empty
+`source_refs` list and an explicit `user_clarification` containing the exact clarification text.
+That is user authority, not new engineering evidence, and does not permit inspecting source, Git, tests, web documentation,
+private chats, or mutable workspaces. If the selected evidence cannot settle a material decision,
+ask the user when appropriate or use `blocking_issues` rather than inventing an answer.
 
 Finalize against the same exact IDs:
 
@@ -38,9 +47,10 @@ orchestrate --root "<root>" reconcile finalize --effort "<effort>" \
   --bundle "<absolute path to reconcile-proposal.json>"
 ```
 
-Show the resulting `reconciled-discovery.md` to the user. Explain the binding result separately
-from advisory technical suggestions. Ask whether they explicitly approve Build against this exact
-artifact. Only after an affirmative answer may you run:
+Show the resulting `reconciled-discovery.md` to the user. It is rendered deterministically from
+the one structured contract that Audit reads; do not supply separate contract Markdown. Explain
+the binding result separately from advisory technical suggestions. Ask whether they explicitly
+approve Build against this exact artifact. Only after an affirmative answer may you run:
 
 ```sh
 orchestrate --root "<root>" reconcile adopt --effort "<effort>" \

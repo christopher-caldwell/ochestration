@@ -73,11 +73,32 @@ pub fn finalize(
     )?;
 
     let result = (|| -> Result<ArtifactRef> {
-        ensure!(
-            !proposal.reconciliation_md.trim().is_empty(),
-            "a Reconciled Discovery needs a nonempty reconciled-discovery.md"
-        );
         let mut requirements = proposal.requirements.clone();
+        for requirement in &mut requirements {
+            ensure!(
+                !requirement.requirement.governing,
+                "Reconcile proposals cannot declare requirement {} governing",
+                requirement.requirement.id
+            );
+            ensure!(
+                !requirement.frozen_user_constraint,
+                "Reconcile proposals cannot declare requirement {} a frozen user constraint",
+                requirement.requirement.id
+            );
+            if let Some(clarification) = &requirement.user_clarification {
+                ensure!(
+                    !clarification.trim().is_empty(),
+                    "user clarification for requirement {} must not be empty",
+                    requirement.requirement.id
+                );
+                ensure!(
+                    requirement.source_refs.is_empty(),
+                    "user-clarification requirement {} cannot cite Discovery sources",
+                    requirement.requirement.id
+                );
+                requirement.requirement.governing = true;
+            }
+        }
         for (index, text) in effort.context.constraints.iter().enumerate() {
             requirements.push(ReconciledRequirement {
                 requirement: Requirement {
@@ -90,6 +111,8 @@ pub fn finalize(
                     governing: true,
                 },
                 source_refs: vec![],
+                user_clarification: None,
+                frozen_user_constraint: true,
             });
         }
         validate_sources(
@@ -123,17 +146,10 @@ pub fn finalize(
         } else {
             "BLOCKED"
         };
-        let mut reconciliation_md = proposal.reconciliation_md;
-        if !effort.context.constraints.is_empty() {
-            reconciliation_md.push_str("\n\n## Governing user constraints\n");
-            for constraint in &effort.context.constraints {
-                reconciliation_md.push_str(&format!("\n- {constraint}\n"));
-            }
-        }
         let mut files = BTreeMap::new();
         files.insert(
             "reconciled-discovery.md".into(),
-            reconciliation_md.into_bytes(),
+            render_reconciled_discovery(&reconciled).into_bytes(),
         );
         files.insert(
             "reconciled-discovery.json".into(),
@@ -181,15 +197,15 @@ fn validate_sources(
         .map(|reference| reference.artifact_id.as_str())
         .collect::<HashSet<_>>();
     for requirement in requirements {
-        if !requirement.requirement.governing {
+        if requirement.user_clarification.is_none() && !requirement.frozen_user_constraint {
             ensure!(
                 !requirement.source_refs.is_empty(),
                 "binding requirement {} needs a selected Discovery source reference",
                 requirement.requirement.id
             );
-        }
-        for source in &requirement.source_refs {
-            validate_source(store, effort, &selected_ids, source)?;
+            for source in &requirement.source_refs {
+                validate_source(store, effort, &selected_ids, source)?;
+            }
         }
     }
     for suggestion in suggestions {
@@ -203,6 +219,74 @@ fn validate_sources(
         }
     }
     Ok(())
+}
+
+/// Render the one human-readable Reconciled Discovery from its authoritative structured contract.
+pub fn render_reconciled_discovery(reconciled: &ReconciledDiscovery) -> String {
+    let mut markdown = format!(
+        "# Reconciled Discovery\n\n## Goal\n\n{}\n\n## Core result\n\n{}\n\n## Binding requirements\n",
+        reconciled.goal, reconciled.core_result
+    );
+    if reconciled.requirements.is_empty() {
+        markdown.push_str("\nNone.\n");
+    }
+    for item in &reconciled.requirements {
+        let requirement = &item.requirement;
+        markdown.push_str(&format!(
+            "\n### {}\n\n{}\n\n**Acceptance criteria:** {}\n",
+            requirement.id, requirement.text, requirement.acceptance
+        ));
+        if let Some(condition) = &requirement.condition {
+            markdown.push_str(&format!("\n**Condition:** {condition}\n"));
+        }
+        match (&item.user_clarification, item.frozen_user_constraint) {
+            (None, false) => {
+                markdown.push_str("\n**Authority:** Selected Discovery evidence\n");
+                for source in &item.source_refs {
+                    let node = source
+                        .node_id
+                        .as_deref()
+                        .map_or(String::new(), |node| format!(" / {node}"));
+                    markdown.push_str(&format!("\n- {}{}\n", source.discovery_artifact_id, node));
+                }
+            }
+            (Some(clarification), false) => {
+                markdown.push_str(&format!(
+                    "\n**Authority:** Explicit Reconcile-time user clarification\n\n> {clarification}\n"
+                ));
+            }
+            (None, true) => {
+                markdown.push_str("\n**Authority:** Frozen explicit user constraint\n");
+            }
+            (Some(_), true) => unreachable!("validated reconciled requirement authority"),
+        }
+    }
+    markdown.push_str("\n## Advisory technical suggestions\n");
+    if reconciled.technical_suggestions.is_empty() {
+        markdown.push_str("\nNone.\n");
+    }
+    for suggestion in &reconciled.technical_suggestions {
+        markdown.push_str(&format!(
+            "\n### {}\n\n{}\n\n**Discovery evidence:**\n",
+            suggestion.id, suggestion.text
+        ));
+        for source in &suggestion.source_refs {
+            let node = source
+                .node_id
+                .as_deref()
+                .map_or(String::new(), |node| format!(" / {node}"));
+            markdown.push_str(&format!("\n- {}{}\n", source.discovery_artifact_id, node));
+        }
+    }
+    markdown.push_str("\n## Blocking issues\n");
+    if reconciled.blocking_issues.is_empty() {
+        markdown.push_str("\nNone.\n");
+    } else {
+        for issue in &reconciled.blocking_issues {
+            markdown.push_str(&format!("\n- {issue}\n"));
+        }
+    }
+    markdown
 }
 
 fn validate_source(

@@ -73,20 +73,24 @@ fn create_repo(name: &str) -> PathBuf {
     repo
 }
 fn new_effort(name: &str) -> (PathBuf, PathBuf, String) {
+    new_effort_with_constraints(name, &[])
+}
+fn new_effort_with_constraints(name: &str, constraints: &[&str]) -> (PathBuf, PathBuf, String) {
     let root = temporary(&format!("{name}-store"));
     let repo = create_repo(name);
-    let result = command(
-        &root,
-        &[
-            "init",
-            "--project",
-            repo.to_str().unwrap(),
-            "--effort",
-            name,
-            "--request",
-            "change fixture",
-        ],
-    );
+    let mut args = vec![
+        "init",
+        "--project",
+        repo.to_str().unwrap(),
+        "--effort",
+        name,
+        "--request",
+        "change fixture",
+    ];
+    for constraint in constraints {
+        args.extend(["--constraint", constraint]);
+    }
+    let result = command(&root, &args);
     (
         root,
         repo,
@@ -194,12 +198,29 @@ fn proposal(source: &ArtifactRef) -> ReconcileProposal {
     ReconcileProposal {
         core_result: "Deliver the requested behavior while preserving existing behavior.".into(),
         requirements: vec![ReconciledRequirement {
-            requirement: Requirement { id: "R-1".into(), text: "The required behavior is delivered.".into(), acceptance: "A focused implementation check demonstrates it.".into(), condition: None, governing: false },
-            source_refs: vec![DiscoverySourceRef { discovery_artifact_id: source.artifact_id.clone(), node_id: Some("R-1".into()) }],
+            requirement: Requirement {
+                id: "R-1".into(),
+                text: "The required behavior is delivered.".into(),
+                acceptance: "A focused implementation check demonstrates it.".into(),
+                condition: None,
+                governing: false,
+            },
+            source_refs: vec![DiscoverySourceRef {
+                discovery_artifact_id: source.artifact_id.clone(),
+                node_id: Some("R-1".into()),
+            }],
+            user_clarification: None,
+            frozen_user_constraint: false,
         }],
-        technical_suggestions: vec![TechnicalSuggestion { id: "TS-1".into(), text: "An optional implementation technique.".into(), source_refs: vec![DiscoverySourceRef { discovery_artifact_id: source.artifact_id.clone(), node_id: Some("F-1".into()) }] }],
+        technical_suggestions: vec![TechnicalSuggestion {
+            id: "TS-1".into(),
+            text: "An optional implementation technique.".into(),
+            source_refs: vec![DiscoverySourceRef {
+                discovery_artifact_id: source.artifact_id.clone(),
+                node_id: Some("F-1".into()),
+            }],
+        }],
         blocking_issues: vec![],
-        reconciliation_md: "# Reconciled Discovery\n\n## Binding result\n\nDeliver the requested behavior.\n\n## Advisory technical suggestions\n\nAn optional technique.\n".into(),
     }
 }
 fn write_proposal(root: &Path, proposal: &ReconcileProposal) -> PathBuf {
@@ -513,6 +534,177 @@ fn reconciliation_rejects_unselected_or_missing_evidence_sources() {
             ]
         )
         .contains("unselected Discovery")
+    );
+}
+
+#[test]
+fn reconciliation_rejects_model_supplied_governing_requirements() {
+    let (root, _repo, effort) = new_effort("governing-bypass");
+    let selected = [
+        finalize_discovery(&root, &effort),
+        finalize_discovery(&root, &effort),
+    ];
+    let mut invalid = proposal(&selected[0]);
+    invalid.requirements[0].requirement.governing = true;
+    let path = write_proposal(&root, &invalid);
+    assert!(
+        command_error(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &selected[0].artifact_id,
+                "--discovery",
+                &selected[1].artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        )
+        .contains("cannot declare requirement R-1 governing")
+    );
+}
+
+#[test]
+fn reconciliation_requires_discovery_authority_for_ordinary_requirements() {
+    let (root, _repo, effort) = new_effort("ordinary-requirement-source");
+    let selected = [
+        finalize_discovery(&root, &effort),
+        finalize_discovery(&root, &effort),
+    ];
+    let mut invalid = proposal(&selected[0]);
+    invalid.requirements[0].source_refs = vec![];
+    let path = write_proposal(&root, &invalid);
+    assert!(
+        command_error(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &selected[0].artifact_id,
+                "--discovery",
+                &selected[1].artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        )
+        .contains("needs a selected Discovery source reference")
+    );
+}
+
+#[test]
+fn reconciliation_preserves_frozen_constraints_as_governing_authority() {
+    let (root, _repo, effort) = new_effort_with_constraints(
+        "frozen-governing",
+        &["Staging behavior must remain unchanged."],
+    );
+    let selected = [
+        finalize_discovery(&root, &effort),
+        finalize_discovery(&root, &effort),
+    ];
+    let reconciled = reconcile(&root, &effort, &selected);
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    let (_, payload): (_, ReconciledDiscovery) = store
+        .load_json(&effort_state, &reconciled, "reconciled-discovery.json")
+        .unwrap();
+    let constraint = payload
+        .requirements
+        .iter()
+        .find(|item| item.requirement.id == "GOV-1")
+        .unwrap();
+    assert!(constraint.requirement.governing);
+    assert!(constraint.frozen_user_constraint);
+}
+
+#[test]
+fn reconciliation_accepts_explicit_user_clarification_as_direct_authority() {
+    let (root, _repo, effort) = new_effort("user-clarification");
+    let selected = [
+        finalize_discovery(&root, &effort),
+        finalize_discovery(&root, &effort),
+    ];
+    let mut clarified = proposal(&selected[0]);
+    clarified.requirements[0].source_refs = vec![];
+    clarified.requirements[0].user_clarification =
+        Some("The user chose patient-local time for patient-facing timestamps.".into());
+    let path = write_proposal(&root, &clarified);
+    let reconciled = reference(
+        &command(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &selected[0].artifact_id,
+                "--discovery",
+                &selected[1].artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        ),
+        "reconciled",
+    );
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    let (_, payload): (_, ReconciledDiscovery) = store
+        .load_json(&effort_state, &reconciled, "reconciled-discovery.json")
+        .unwrap();
+    let requirement = &payload.requirements[0];
+    assert!(requirement.requirement.governing);
+    assert_eq!(
+        requirement.user_clarification.as_deref(),
+        Some("The user chose patient-local time for patient-facing timestamps.")
+    );
+}
+
+#[test]
+fn reconciled_markdown_is_rendered_only_from_the_structured_contract() {
+    let (root, _repo, effort) = new_effort("rendered-contract");
+    let selected = [
+        finalize_discovery(&root, &effort),
+        finalize_discovery(&root, &effort),
+    ];
+    let reconciled = reconcile(&root, &effort, &selected);
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    let (_, payload): (_, ReconciledDiscovery) = store
+        .load_json(&effort_state, &reconciled, "reconciled-discovery.json")
+        .unwrap();
+    let (_, files) = store.load_bundle(&effort_state, &reconciled).unwrap();
+    assert_eq!(
+        String::from_utf8(files["reconciled-discovery.md"].clone()).unwrap(),
+        orchestrate_reconcile::render_reconciled_discovery(&payload)
+    );
+
+    let mut invalid = serde_json::to_value(proposal(&selected[0])).unwrap();
+    invalid["reconciliation_md"] = serde_json::json!("An unstructured binding obligation.");
+    let path = root.join("invalid-reconcile-proposal.json");
+    fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+    assert!(
+        command_error(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &selected[0].artifact_id,
+                "--discovery",
+                &selected[1].artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        )
+        .contains("unknown field `reconciliation_md`")
     );
 }
 

@@ -173,6 +173,10 @@ pub struct ReconciledRequirement {
     pub requirement: Requirement,
     #[serde(default)]
     pub source_refs: Vec<DiscoverySourceRef>,
+    #[serde(default)]
+    pub user_clarification: Option<String>,
+    #[serde(default)]
+    pub frozen_user_constraint: bool,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TechnicalSuggestion {
@@ -182,6 +186,7 @@ pub struct TechnicalSuggestion {
     pub source_refs: Vec<DiscoverySourceRef>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ReconcileProposal {
     pub core_result: String,
     pub requirements: Vec<ReconciledRequirement>,
@@ -189,7 +194,6 @@ pub struct ReconcileProposal {
     pub technical_suggestions: Vec<TechnicalSuggestion>,
     #[serde(default)]
     pub blocking_issues: Vec<String>,
-    pub reconciliation_md: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ReconciledDiscovery {
@@ -385,6 +389,29 @@ pub fn validate_reconciled_discovery(reconciled: &ReconciledDiscovery) -> Result
             "duplicate reconciled requirement id {}",
             item.requirement.id
         );
+        match (&item.user_clarification, item.frozen_user_constraint) {
+            (None, false) => ensure!(
+                !item.requirement.governing && !item.source_refs.is_empty(),
+                "Discovery-derived requirement {} needs Discovery authority and cannot be governing",
+                item.requirement.id
+            ),
+            (Some(clarification), false) => ensure!(
+                item.requirement.governing
+                    && !clarification.trim().is_empty()
+                    && item.source_refs.is_empty(),
+                "user-clarification requirement {} needs explicit governing authority",
+                item.requirement.id
+            ),
+            (None, true) => ensure!(
+                item.requirement.governing && item.source_refs.is_empty(),
+                "frozen user constraint {} needs governing authority",
+                item.requirement.id
+            ),
+            (Some(_), true) => bail!(
+                "requirement {} cannot be both a user clarification and frozen user constraint",
+                item.requirement.id
+            ),
+        }
     }
     let mut suggestion_ids = HashSet::new();
     for suggestion in &reconciled.technical_suggestions {
@@ -547,7 +574,12 @@ mod tests {
                         condition: None,
                         governing: false,
                     },
-                    source_refs: vec![],
+                    source_refs: vec![DiscoverySourceRef {
+                        discovery_artifact_id: "discovery".into(),
+                        node_id: None,
+                    }],
+                    user_clarification: None,
+                    frozen_user_constraint: false,
                 })
                 .collect(),
             technical_suggestions: vec![],

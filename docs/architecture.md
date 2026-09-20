@@ -39,10 +39,14 @@ chats, or mutable workspaces.
 
 One Reconciled Discovery bundle contains `reconciled-discovery.md`,
 `reconciled-discovery.json`, and `manifest.json`; its parents are exactly the selected Discovery
-artifacts. The machine-readable contract separates `requirements` from
-`technical_suggestions`. Every model-derived requirement and suggestion must trace to at least one
-selected Discovery artifact (and, when supplied, an existing graph node). One source is enough;
-this is provenance, not voting. Explicit user constraints are governing direct authority.
+artifacts. `reconciled-discovery.json` is the one authoritative contract and deterministically
+renders `reconciled-discovery.md`; the reviewed document cannot add obligations outside it. The
+contract separates exhaustive binding `requirements` from advisory `technical_suggestions`.
+Every ordinary model-derived requirement and suggestion must trace to at least one selected
+Discovery artifact (and, when supplied, an existing graph node). One source is enough; this is
+provenance, not voting. Frozen explicit user constraints are mechanically added as governing
+authority. An explicit Reconcile-time user clarification is distinct direct user authority; a
+model cannot manufacture governing authority with a flag.
 
 An empty `blocking_issues` list produces an implementation-ready result. Non-empty issues produce
 `BLOCKED`; a blocked result cannot be adopted.
