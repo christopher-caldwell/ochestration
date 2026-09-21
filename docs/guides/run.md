@@ -5,7 +5,7 @@ This is the canonical day-to-day workflow.
 You normally interact with Orchestrate through model skills, not raw CLI commands.
 
 ```text
-Prepare → Discovery × N → Reconcile → approve → Build → Audit
+Prepare → Discovery × N → Reconcile → approve → Build → done
 ```
 
 ## 1. Prepare the request
@@ -157,12 +157,6 @@ For more detail, see [Reconcile](reconcile.md).
 Use `$build` with the exact effort and approved detailed implementation plan. It prepares the
 contained Build files; you do not hand-author the controller JSON/TOML.
 
-Then, from the target repository, run:
-
-```sh
-orchestrate build
-```
-
 The process runs every delivery phase, independent reviews, corrections, implementation
 registration, and fresh final Audits until it reaches a published Audit PASS or a real external
 blocker. There are no normal `next`, `accept`, `continue`, or Audit-window steps. Technical
@@ -189,7 +183,6 @@ Once installed:
 
 5. $build with the approved detailed implementation plan.
 
-6. From the target repository: orchestrate build
 ```
 
 Everything else in the docs is explanation or reference.

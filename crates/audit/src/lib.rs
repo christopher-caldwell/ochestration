@@ -116,6 +116,7 @@ pub fn register_implementation(
 /// Register an implementation using a caller-owned stable operation identity.
 /// Build uses this to make a publish recoverable if the process dies after the
 /// immutable bundle has been committed but before its controller state updates.
+#[allow(clippy::too_many_arguments)]
 pub fn register_implementation_with_run_id(
     store: &Store,
     effort: &Effort,

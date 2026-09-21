@@ -10,7 +10,7 @@
 - [Request preparation](guides/request-preparation.md) — prepare a ticket or freeform request.
 - [Discovery](guides/discovery.md) — run independent investigations and collect their outputs.
 - [Reconcile](guides/reconcile.md) — turn selected Discovery outputs into one final contract.
-- [Build and Audit](guides/build-and-audit.md) — hand off to Build, register it, then verify it.
+- [Build and Audit](guides/build-and-audit.md) — run the unattended Build loop through registration and final verification.
 - [Ticket workflow](guides/ticket-workflow.md) — compact ticket-specific checklist.
 
 ## Reference

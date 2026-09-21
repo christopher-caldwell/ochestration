@@ -9,9 +9,8 @@ Open the Orchestrate checkout in the model host you want to use — Codex, Claud
 and send:
 
 > Install Orchestrate from this checkout for the model host I am using. Install the CLI and exactly
-> these ten checked-in skills: `prep-discovery-ticket`, `prep-discovery-freeform`,
-> `discovery`, `reconcile`, `build`, `work`, `review`, `work-follow-up`, `review-follow-up`, and
-> `audit`. Preserve unrelated existing skills and verify the
+> these six checked-in skills: `prep-discovery-ticket`, `prep-discovery-freeform`,
+> `discovery`, `reconcile`, `build`, and `audit`. Preserve unrelated existing skills and verify the
 > installation when finished.
 
 The model should follow this guide and perform the commands itself.
@@ -36,7 +35,7 @@ Install the CLI from the checkout:
 cargo install --path "/absolute/path/to/ochestration/crates/cli" --locked
 ```
 
-Then copy exactly these ten directories from `skills/` into the current host's personal skill
+Then copy exactly these six directories from `skills/` into the current host's personal skill
 directory:
 
 ```text
@@ -46,10 +45,6 @@ discovery
 reconcile
 audit
 build
-work
-review
-work-follow-up
-review-follow-up
 ```
 
 Typical skill directories are:

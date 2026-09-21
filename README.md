@@ -3,7 +3,7 @@
 Orchestrate is deterministic machinery for an interactive model-window workflow:
 
 ```text
-Prepare → Discovery × N → Reconcile → explicit approval → Build → Audit
+Prepare → Discovery × N → Reconcile → explicit approval → Build → done
 ```
 
 The model does the engineering work. Orchestrate keeps the request, Discovery runs, reconciled
@@ -28,23 +28,20 @@ The short version is:
 
 4. Review and approve the Reconciled Discovery.
 
-5. Give the reconciled document to your Build model.
-   Have that model commit and register the implementation.
-
-6. In a fresh model window:
-   $audit
-   Effort: <effort-id>
+5. In the model window, run `$build` with the approved detailed implementation plan.
+   It prepares Build, drives work/review/correction, registers the implementation, and runs the
+   final Audit until completion or a genuine external requirement.
 ```
 
-You normally do **not** operate the Orchestrate CLI yourself. The `discovery`, `reconcile`, and
-`audit` skills call it for you.
+You normally do **not** operate the Orchestrate CLI yourself. The `discovery`, `reconcile`,
+`build`, and `audit` skills call it for you.
 
 ## Easiest installation
 
 Open this checkout in Codex, Claude Code, or Cursor and tell the model:
 
 > Install Orchestrate from this checkout for the model host I am using. Follow
-> `docs/guides/agent-installation.md`, install the CLI and all ten checked-in skills, and verify
+> `docs/guides/agent-installation.md`, install the CLI and all six checked-in user-facing skills, and verify
 > the installation.
 
 The user-facing skills are:
@@ -56,10 +53,6 @@ discovery
 reconcile
 audit
 build
-work
-review
-work-follow-up
-review-follow-up
 ```
 
 See the [installation guide](docs/guides/agent-installation.md) for the manual fallback.
@@ -70,7 +63,8 @@ See the [installation guide](docs/guides/agent-installation.md) for the manual f
 - **Reconcile** analyzes only the Discovery outputs you explicitly give it and produces the
   authoritative answer to "what are we actually going to do?"
 - **Build** is an unattended Rust-driven worker/reviewer loop for an approved phased plan.
-- **Audit** checks the exact registered implementation against the binding reconciled requirements.
+- **Audit** checks the exact registered implementation against the binding reconciled requirements;
+  unattended Build invokes it automatically.
 
 For deeper details, see the [documentation index](docs/README.md) and
 [architecture](docs/architecture.md).
