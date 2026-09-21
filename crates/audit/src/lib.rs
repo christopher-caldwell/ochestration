@@ -101,6 +101,32 @@ pub fn register_implementation(
     status: ImplementationStatus,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
+    register_implementation_with_run_id(
+        store,
+        effort,
+        adoption_ref,
+        commit,
+        declaration,
+        status,
+        provenance,
+        format!("implementation-{}", now_ms()),
+    )
+}
+
+/// Register an implementation using a caller-owned stable operation identity.
+/// Build uses this to make a publish recoverable if the process dies after the
+/// immutable bundle has been committed but before its controller state updates.
+#[allow(clippy::too_many_arguments)]
+pub fn register_implementation_with_run_id(
+    store: &Store,
+    effort: &Effort,
+    adoption_ref: ArtifactRef,
+    commit: &str,
+    declaration: String,
+    status: ImplementationStatus,
+    provenance: Provenance,
+    run_id: String,
+) -> Result<ArtifactRef> {
     ensure!(
         adoption_ref.kind == ArtifactKind::Adoption,
         "implementation needs an adoption receipt"
@@ -147,7 +173,7 @@ pub fn register_implementation(
         effort,
         "build",
         ArtifactKind::Implementation,
-        format!("implementation-{}", now_ms()),
+        run_id,
         "REGISTERED_EXTERNAL".into(),
         vec![adoption_ref],
         provenance,
@@ -160,6 +186,41 @@ pub fn register_implementation(
         serde_json::json!({"artifact":reference.artifact_id,"commit":implementation.target_commit}),
     )?;
     Ok(reference)
+}
+
+/// Locate one already-published submitted implementation for the exact adopted
+/// authority and commit.  More than one is an ambiguity rather than a recency
+/// choice.
+pub fn find_implementation(
+    store: &Store,
+    effort: &Effort,
+    adoption: &ArtifactRef,
+    commit: &str,
+) -> Result<Option<ArtifactRef>> {
+    let mut matches = Vec::new();
+    for reference in store.list_artifacts(effort)? {
+        if reference.kind != ArtifactKind::Implementation {
+            continue;
+        }
+        let (_, implementation): (_, Implementation) =
+            store.load_json(effort, &reference, "implementation.json")?;
+        if implementation.adoption == *adoption
+            && implementation.target_commit == commit
+            && implementation.status == ImplementationStatus::Submitted
+        {
+            matches.push(reference);
+        }
+    }
+    match matches.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(only.clone())),
+        many => bail!(
+            "multiple registered implementations match adoption {} and commit {}: {}",
+            adoption.artifact_id,
+            commit,
+            artifact_ids(many)
+        ),
+    }
 }
 
 fn eligible_artifacts<F>(store: &Store, effort: &Effort, eligible: &F) -> Result<Vec<ArtifactRef>>
@@ -214,6 +275,23 @@ pub fn finalize_audit(
     assessment: AuditAssessment,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
+    finalize_audit_with_run_id(
+        store,
+        effort,
+        assessment,
+        provenance,
+        format!("audit-{}", now_ms()),
+    )
+}
+
+/// Publish an Audit result with a stable Build-owned identity.
+pub fn finalize_audit_with_run_id(
+    store: &Store,
+    effort: &Effort,
+    assessment: AuditAssessment,
+    provenance: Provenance,
+    run_id: String,
+) -> Result<ArtifactRef> {
     ensure!(
         assessment.reconciled.kind == ArtifactKind::ReconciledDiscovery
             && assessment.adoption.kind == ArtifactKind::Adoption
@@ -251,7 +329,7 @@ pub fn finalize_audit(
         effort,
         "audit",
         ArtifactKind::Audit,
-        format!("audit-{}", now_ms()),
+        run_id,
         outcome.into(),
         vec![
             report.assessment.reconciled.clone(),
@@ -268,4 +346,32 @@ pub fn finalize_audit(
         serde_json::json!({"artifact":reference.artifact_id,"outcome":outcome}),
     )?;
     Ok(reference)
+}
+
+/// Find a finalized Audit bundle for one exact implementation.  The caller is
+/// responsible for checking the derived verdict it wants to reuse.
+pub fn find_audit(
+    store: &Store,
+    effort: &Effort,
+    implementation: &ArtifactRef,
+) -> Result<Option<ArtifactRef>> {
+    let mut matches = Vec::new();
+    for reference in store.list_artifacts(effort)? {
+        if reference.kind != ArtifactKind::Audit {
+            continue;
+        }
+        let (_, report): (_, AuditReport) = store.load_json(effort, &reference, "audit.json")?;
+        if report.assessment.implementation == *implementation {
+            matches.push(reference);
+        }
+    }
+    match matches.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(only.clone())),
+        many => bail!(
+            "multiple Audit bundles match implementation {}: {}",
+            implementation.artifact_id,
+            artifact_ids(many)
+        ),
+    }
 }

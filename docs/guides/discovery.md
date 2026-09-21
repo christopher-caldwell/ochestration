@@ -1,6 +1,6 @@
 # Discovery
 
-Discovery is the investigation phase.
+Discovery is the investigation phase. Exact model instructions are `orchestrate discovery guide`.
 
 The easiest way to use it is to open several fresh model windows and give each one the same
 prepared request.

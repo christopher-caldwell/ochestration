@@ -6,13 +6,25 @@ Discovery 2 ─┼──→ Reconciled Discovery → Adoption → Implementation
 Discovery N ─┘
 ```
 
+## Instruction ownership
+
+Checked-in skills are stable dispatchers. Each one runs `orchestrate <action> guide` and follows
+whatever the installed binary prints. Those guides, and the Build `plan.json` / `config.toml`
+templates, are Markdown and text compiled into the binary. Host files (`AGENTS.md`, `CLAUDE.md`,
+and the Cursor orchestration rule) only explain how to install or update that CLI and those
+dispatchers.
+
+Work, review, final Audit, and unblock are internal Build roles. They are not installed skills.
+Whenever Build starts or resumes, the driver writes the role guides embedded in the running
+CLI into the Build directory, replacing any previously generated copies.
+
 ## Authority boundaries
 
 The model window owns interaction: it investigates, asks the user material questions, reconciles
 meaning, and evaluates implementation. Rust is a referee: it freezes exact inputs, creates
-workspaces, validates structure and provenance, publishes immutable bundles, binds lineage, and
-derives Audit verdicts. Rust never votes, ranks models, assigns confidence, launches a provider,
-or determines engineering truth.
+workspaces, validates structure and provenance, publishes immutable bundles, binds lineage,
+drives the fixed Build work/review loop, and derives Audit verdicts. Rust never votes, ranks
+models, assigns confidence, or determines engineering truth.
 
 An effort freezes a reviewed request, explicit constraints, canonical target project, baseline
 commit, and baseline tree. It intentionally does not freeze Discovery count, provider identity,
@@ -32,36 +44,35 @@ Reconcile binds an explicit set of at least two unique finalized `IMPLEMENTATION
 artifacts. Rust rejects duplicates, blocked artifacts, and cross-effort/context/baseline inputs;
 the read-only binding publishes nothing. No later Discovery is inferred or added.
 
-Reconcile is closed-world. Its allowed evidence is the frozen request/constraints and those exact
-public Discovery artifacts. It may deeply compare agreement, disagreement, silence, omissions,
-and strong minority evidence. It may not inspect source, Git, tests, web documentation, private
-chats, or mutable workspaces.
+Reconcile is closed-world. Its evidence is the frozen request, explicit constraints, and the exact
+public Discovery artifacts that were selected. Exact model limits are supplied by
+`orchestrate reconcile guide`.
 
 One Reconciled Discovery bundle contains `reconciled-discovery.md`,
 `reconciled-discovery.json`, and `manifest.json`; its parents are exactly the selected Discovery
 artifacts. `reconciled-discovery.json` is the one authoritative contract and deterministically
 renders `reconciled-discovery.md`; the reviewed document cannot add obligations outside it. The
 contract separates exhaustive binding `requirements` from advisory `technical_suggestions`.
-Every ordinary model-derived requirement and suggestion must trace to at least one selected
-Discovery artifact (and, when supplied, an existing graph node). One source is enough; this is
-provenance, not voting. Frozen explicit user constraints are mechanically added as governing
-authority. An explicit Reconcile-time user clarification is distinct direct user authority; a
-model cannot manufacture governing authority with a flag.
+Rust requires each ordinary requirement and suggestion to trace to a selected Discovery artifact.
+One source is provenance, not a vote. Rust adds frozen explicit user constraints as governing
+authority. An explicit Reconcile-time user clarification is recorded as direct user authority.
 
 An empty `blocking_issues` list produces an implementation-ready result. Non-empty issues produce
 `BLOCKED`; a blocked result cannot be adopted.
 
 ## Adoption, Build, and Audit
 
-Adoption is a human authorization receipt for one exact Reconciled Discovery. Build remains
-external. Registration records the adoption, reconciled artifact, starting baseline, exact target
-commit/tree, producer declaration, and status while retaining an immutable snapshot.
+Adoption is a human authorization receipt for one exact Reconciled Discovery. A prepared Build
+stores only its exact adoption, phase/task grouping, host settings, controller state, and durable
+role reports in the external store. Rust moves one worker and independent reviewer through whole
+delivery phases; task IDs do not create extra stops. Registration records the adoption, reconciled
+artifact, starting baseline, exact target commit/tree, producer declaration, and status while
+retaining an immutable snapshot.
 
-Audit evaluates only the binding requirements from the exact Reconciled Discovery against that
-exact implementation. It can inspect the snapshot and run tests, but cannot invent product
-requirements or elevate advisory suggestions. One coverage row is required per binding
-requirement. Any failure gives `CHANGES_REQUIRED`; otherwise unknown or missing coverage gives
-`BLOCKED`; otherwise a submitted implementation passes.
+Audit evaluates the binding requirements from the exact Reconciled Discovery against that exact
+implementation. Rust requires one coverage row per binding requirement and derives the verdict:
+any failure gives `CHANGES_REQUIRED`; otherwise unknown or missing coverage gives `BLOCKED`;
+otherwise a submitted implementation passes.
 
 ## Storage
 

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "adoption": {
+    "kind": "adoption",
+    "artifact_id": "replace-with-exact-adoption-artifact-id",
+    "digest": "replace-with-exact-adoption-manifest-digest"
+  },
+  "detailed_plan": "implementation-plan.md",
+  "delivery_phases": [
+    {
+      "id": "D1",
+      "tasks": ["T1"]
+    }
+  ]
+}

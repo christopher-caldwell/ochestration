@@ -100,13 +100,7 @@ impl Store {
         let root = fs::canonicalize(root)?;
         let marker = root.join("store.json");
         if marker.exists() {
-            let stored: StoreMarker = read_json(&marker)?;
-            ensure!(
-                stored.format_version == STORE_FORMAT_VERSION,
-                "unsupported orchestration store format {}; expected {}",
-                stored.format_version,
-                STORE_FORMAT_VERSION
-            );
+            validate_marker(&marker)?;
         } else {
             let has_legacy_content =
                 fs::read_dir(&root)?
@@ -114,7 +108,9 @@ impl Store {
                     .any(|entry| {
                         let name = entry.file_name();
                         let name = name.to_string_lossy();
-                        name != ".staging" && !name.starts_with(".store.json.tmp-")
+                        name != "store.json"
+                            && name != ".staging"
+                            && !name.starts_with(".store.json.tmp-")
                     });
             if has_legacy_content {
                 bail!(
@@ -123,13 +119,19 @@ impl Store {
                 );
             }
             // Multiple model windows may create a fresh store simultaneously. All contenders
-            // write the same marker; temporary marker files are explicitly ignored above.
-            write_json_atomic(
-                &marker,
-                &StoreMarker {
-                    format_version: STORE_FORMAT_VERSION,
-                },
-            )?;
+            // write the same marker, so temporary marker files and a marker committed by a
+            // contender that finished since the scan above are both ignored rather than
+            // mistaken for a legacy store.
+            if marker.exists() {
+                validate_marker(&marker)?;
+            } else {
+                write_json_atomic(
+                    &marker,
+                    &StoreMarker {
+                        format_version: STORE_FORMAT_VERSION,
+                    },
+                )?;
+            }
         }
         Ok(Self { root })
     }
@@ -248,6 +250,52 @@ impl Store {
             [] => bail!("unknown effort {effort_id}"),
             _ => bail!("ambiguous effort {effort_id}"),
         }
+    }
+    /// Return every effort for one canonical project identity.  Callers that need to
+    /// select an effort must still apply their own explicit eligibility rules; this
+    /// deliberately does not infer a "latest" effort.
+    pub fn efforts_for_project(&self, project: &Project) -> Result<Vec<Effort>> {
+        let root = self.root.join("projects").join(&project.id).join("efforts");
+        if !root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut efforts: Vec<Effort> = Vec::new();
+        for entry in fs::read_dir(root)? {
+            let path = entry?.path();
+            if path.join("effort.json").is_file() {
+                efforts.push(read_json(&path.join("effort.json"))?);
+            }
+        }
+        efforts.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(efforts)
+    }
+    /// Resolve an effort project by its canonical checkout location without using a
+    /// presentation slug.  This is intentionally read-only and returns no match
+    /// when the store has not seen the checkout.
+    pub fn project_by_locator(&self, locator: &Path) -> Result<Option<Project>> {
+        let projects = self.root.join("projects");
+        if !projects.exists() {
+            return Ok(None);
+        }
+        for entry in fs::read_dir(projects)? {
+            let project_path = entry?.path();
+            let file = project_path.join("efforts");
+            if !file.exists() {
+                continue;
+            }
+            for effort in fs::read_dir(file)? {
+                let effort_path = effort?.path();
+                let project_file = effort_path.join("project.json");
+                if project_file.is_file() {
+                    let project: Project = read_json(&project_file)?;
+                    if project.canonical_locator == locator {
+                        return Ok(Some(project));
+                    }
+                    break;
+                }
+            }
+        }
+        Ok(None)
     }
     pub fn project_for(&self, effort: &Effort) -> Result<Project> {
         read_json(
@@ -823,6 +871,16 @@ fn with_journal_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T>
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_bytes_sync(path, &encode(value)?)
 }
+fn validate_marker(marker: &Path) -> Result<()> {
+    let stored: StoreMarker = read_json(marker)?;
+    ensure!(
+        stored.format_version == STORE_FORMAT_VERSION,
+        "unsupported orchestration store format {}; expected {}",
+        stored.format_version,
+        STORE_FORMAT_VERSION
+    );
+    Ok(())
+}
 fn read_json<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<T> {
     decode(&fs::read(path).with_context(|| format!("cannot read {}", path.display()))?)
 }
@@ -887,5 +945,26 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(line).unwrap();
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_store_creation_never_reports_a_legacy_store() {
+        // Contenders race between the marker probe and the legacy scan, so a marker committed by
+        // a peer must not be read back as legacy content.
+        for _ in 0..32 {
+            let dir = std::env::temp_dir().join(format!("store-open-{}", unique_id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let dir = dir.clone();
+                    std::thread::spawn(move || Store::open(&dir).map(|store| store.root).is_ok())
+                })
+                .collect();
+            for handle in handles {
+                assert!(handle.join().unwrap());
+            }
+            assert!(dir.join("store.json").is_file());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

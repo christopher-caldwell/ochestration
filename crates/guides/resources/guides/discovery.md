@@ -1,6 +1,15 @@
 # Orchestrate Discovery
 
-Discovery answers: **what should be built, and why?** Work only in the run workspace supplied by `orchestrate discovery prepare`. The workspace's `source/` directory is a clean detached checkout of the frozen baseline with Git history. Do not inspect sibling runs, parent records, a dirty checkout, or unrelated paths.
+Input is one absolute prepared-request path. Resolve `orchestrate`, read the request frontmatter, then run:
+
+```sh
+orchestrate --root "<root>" init --from-file "<prepared-request>"
+orchestrate --root "<root>" discovery prepare --effort "<effort>"
+```
+
+`<root>` comes from the prepared-request frontmatter. Use the `effort` id printed by `init` for every later command. That id is not the frontmatter slug by itself. Initialization is safe to repeat from independent model windows. Every `discovery prepare` creates a new run and isolated workspace; no slot, provider plan, or quorum is involved. The command prints the run id and the workspace path. The workspace's `source/` directory is a clean detached checkout of the frozen baseline with Git history.
+
+Discovery answers: **what should be built, and why?** Work only in that run workspace. Do not inspect sibling runs, parent records, previous Discovery results, a dirty checkout, the live target repository, or unrelated paths. Do not implement the change.
 
 Start by reading `run.json`, `request.md`, and `context.json`. `run.json` defines this Discovery run: its effort, baseline, host, provider, model, and model effort. `request.md` is the original user input and must be read as written. `context.json` supplies the same frozen request for convenience plus explicit user-supplied constraints. Constraints are explicit user-supplied clarifications or governing instructions; do not extract new immutable constraints from a ticket.
 
@@ -8,7 +17,25 @@ When `request_kind` is `ticket`, the ticket is the best available authority for 
 
 When `request_kind` is `freeform`, treat the request as the user's stated goal and context, without inventing requirements that are not there. Ask the user when missing information creates a material product or engineering choice. A later explicit user clarification takes precedence over a conflicting earlier ticket statement; preserve and document the conflict.
 
-Record important questions, findings, decisions, and requirements in `graph/*.md`. Each node needs valid frontmatter and explicit dependency links. Every accepted finding needs at least one source reference. Question states are only `open`, `answered`, `no_change`, and `blocked`:
+Record important questions, findings, decisions, and requirements as `graph/<id>.md`. Each file is Markdown with YAML frontmatter:
+
+```markdown
+---
+id: Q-1
+kind: question
+status: open
+depends_on: []
+sources: []
+required: true
+mandatory: false
+---
+
+# Title
+
+Body.
+```
+
+`kind` is `question`, `finding`, `decision`, or `requirement`. Ids use the prefixes `Q-`, `F-`, `D-`, and `R-`. Question statuses are only `open`, `answered`, `no_change`, and `blocked`. Findings use `accepted`, `rejected`, or `invalidated`. Decisions and requirements use `accepted` or `rejected`. Only a question may set `required: true`. Only a requirement may set `mandatory: true`. Link dependencies through `depends_on`. Every accepted finding needs at least one source reference.
 
 - `answered` means the question has an evidence-supported answer the Discovery can rely on. A required answered Question needs an accepted Finding that directly depends on it.
 - `no_change` means the investigation establishes no implementation change or requirement.
@@ -21,4 +48,18 @@ If evidence answers a material question, record the answer. If it materially con
 
 Use `technical-spec.md` as the public result. It must stand alone and cover the interpreted request, current behavior, recommendation, required and unchanged behavior, decisions and rationale, requirements and acceptance criteria, conditions, alternatives or disagreement, limitations, and verification.
 
-Run `orchestrate discovery validate` whenever an intermediate check is useful. You do not have to run it before finalization: `orchestrate discovery finalize` validates the workspace before it publishes anything. The outcome is derived mechanically and cannot be overridden. Any `blocked` Question produces a blocked result that is ineligible for Reconcile; otherwise the workspace must be implementation-ready, which requires every required Question to be `answered` or `no_change` and every mandatory Requirement to trace to accepted evidence. Do not start Reconcile or edit the target repository. Stop after this phase.
+Run `orchestrate discovery validate` whenever an intermediate check is useful:
+
+```sh
+orchestrate --root "<root>" discovery validate --effort "<effort>" --run "<run>"
+```
+
+You do not have to run it before finalization: `orchestrate discovery finalize` validates the workspace before it publishes anything.
+
+```sh
+orchestrate --root "<root>" discovery finalize --effort "<effort>" --run "<run>"
+```
+
+The outcome is derived mechanically and cannot be overridden. Any `blocked` Question produces a blocked result that is ineligible for Reconcile; otherwise the workspace must be implementation-ready, which requires every required Question to be `answered` or `no_change` and every mandatory Requirement to trace to accepted evidence.
+
+Report the run ID, artifact ID, outcome, and published Discovery directory. `orchestrate status --effort "<effort-id>"` prints the effort, including `project_id`. The directory is `<root>/projects/<project-id>/efforts/<effort-id>/discovery/<artifact-id>`. A blocked Discovery is valid but cannot be reconciled. Do not start Reconcile or edit the target repository. Stop after this phase.

@@ -12,15 +12,11 @@ use std::{
 
 mod prepared_request;
 
-const DISCOVERY_GUIDE: &str = include_str!("../resources/guides/discovery.md");
-const RECONCILE_GUIDE: &str = include_str!("../resources/guides/reconcile.md");
-const AUDIT_GUIDE: &str = include_str!("../resources/guides/audit.md");
-
 #[derive(Parser)]
 #[command(
     name = "orchestrate",
     version,
-    about = "Inspectable Discovery × N → Reconcile → external Build → Audit"
+    about = "Inspectable Discovery × N → Reconcile → Build → Audit"
 )]
 struct Cli {
     #[arg(long, global = true)]
@@ -47,13 +43,45 @@ enum Command {
         #[command(subcommand)]
         command: AuditCommand,
     },
+    /// Run a prepared Build, print the Build guide, or materialize Build templates.
+    #[command(args_conflicts_with_subcommands = true)]
+    Build {
+        #[arg(
+            long,
+            help = "Prepared effort; inferred only when exactly one Build is eligible"
+        )]
+        effort: Option<String>,
+        #[command(subcommand)]
+        command: Option<BuildCommand>,
+    },
+    PrepDiscoveryTicket {
+        #[command(subcommand)]
+        command: GuideOnly,
+    },
+    PrepDiscoveryFreeform {
+        #[command(subcommand)]
+        command: GuideOnly,
+    },
+    Work {
+        #[command(subcommand)]
+        command: GuideOnly,
+    },
+    Review {
+        #[command(subcommand)]
+        command: GuideOnly,
+    },
+    FinalAudit {
+        #[command(subcommand)]
+        command: GuideOnly,
+    },
+    Unblock {
+        #[command(subcommand)]
+        command: GuideOnly,
+    },
     Journal(SelectEffort),
     Status(SelectEffort),
     Inspect(Inspect),
     Lineage(Inspect),
-    Guide {
-        phase: Option<String>,
-    },
 }
 #[derive(Args)]
 struct Init {
@@ -85,7 +113,24 @@ struct Inspect {
     artifact: String,
 }
 #[derive(Subcommand)]
+enum GuideOnly {
+    /// Print the current embedded guide and exit.
+    Guide,
+}
+#[derive(Subcommand)]
+enum BuildCommand {
+    /// Print the current embedded Build guide and exit.
+    Guide,
+    /// Write plan.json and config.toml into the effort Build directory.
+    Scaffold {
+        #[arg(long)]
+        effort: String,
+    },
+}
+#[derive(Subcommand)]
 enum Discovery {
+    /// Print the current embedded Discovery guide and exit.
+    Guide,
     Prepare {
         #[arg(long)]
         effort: String,
@@ -107,6 +152,8 @@ enum Discovery {
 }
 #[derive(Subcommand)]
 enum Reconcile {
+    /// Print the current embedded Reconcile guide and exit.
+    Guide,
     Inputs {
         #[arg(long)]
         effort: String,
@@ -167,6 +214,8 @@ enum ImplementationCommand {
 }
 #[derive(Subcommand)]
 enum AuditCommand {
+    /// Print the current embedded Audit guide and exit.
+    Guide,
     Finalize {
         #[arg(long)]
         effort: String,
@@ -198,8 +247,14 @@ fn main() {
 }
 fn run() -> Result<()> {
     let Cli { root, command } = Cli::parse();
+    if let Some(action) = command.guide_action() {
+        print!(
+            "{}",
+            orchestrate_guides::guide(action).expect("registered guide")
+        );
+        return Ok(());
+    }
     match command {
-        Command::Guide { phase } => guide(phase),
         Command::Init(args) => {
             let input = resolve_init_input(root, args)?;
             let canonical_repo = fs::canonicalize(&input.project).with_context(|| {
@@ -295,7 +350,26 @@ fn initialize(store: &Store, input: InitInput) -> Result<()> {
 
 fn execute(store: Store, command: Command) -> Result<()> {
     match command {
-        Command::Init(_) | Command::Guide { .. } => unreachable!(),
+        Command::Init(_)
+        | Command::Discovery {
+            command: Discovery::Guide,
+        }
+        | Command::Reconcile {
+            command: Reconcile::Guide,
+        }
+        | Command::Audit {
+            command: AuditCommand::Guide,
+        }
+        | Command::Build {
+            command: Some(BuildCommand::Guide),
+            ..
+        }
+        | Command::PrepDiscoveryTicket { .. }
+        | Command::PrepDiscoveryFreeform { .. }
+        | Command::Work { .. }
+        | Command::Review { .. }
+        | Command::FinalAudit { .. }
+        | Command::Unblock { .. } => unreachable!(),
         Command::Discovery {
             command: Discovery::Prepare { effort, provenance },
         } => {
@@ -303,7 +377,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
             let (run, workspace) = orchestrate_discovery::prepare(
                 &store,
                 &effort,
-                provenance.for_guide(DISCOVERY_GUIDE),
+                provenance.for_guide(orchestrate_guides::DISCOVERY),
             )?;
             output(
                 "SUCCESS",
@@ -369,7 +443,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 &effort,
                 inputs,
                 proposal,
-                provenance.for_guide(RECONCILE_GUIDE),
+                provenance.for_guide(orchestrate_guides::RECONCILE),
             )?;
             let outcome = store.load_envelope(&effort, &reference)?.outcome;
             output(
@@ -397,7 +471,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 &effort,
                 reconciled,
                 authorization_label,
-                provenance.for_guide(RECONCILE_GUIDE),
+                provenance.for_guide(orchestrate_guides::RECONCILE),
             )?;
             output(
                 "SUCCESS",
@@ -428,7 +502,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 &commit,
                 declaration,
                 parse_status(&status)?,
-                provenance.for_guide(AUDIT_GUIDE),
+                provenance.for_guide(orchestrate_guides::AUDIT),
             )?;
             output(
                 "SUCCESS",
@@ -450,13 +524,45 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 &store,
                 &effort,
                 assessment,
-                provenance.for_guide(AUDIT_GUIDE),
+                provenance.for_guide(orchestrate_guides::AUDIT),
             )?;
             let verdict = store.load_envelope(&effort, &reference)?.outcome;
             output(
                 "SUCCESS",
                 "ASSESSMENT_FINALIZED",
                 serde_json::json!({"audit": reference, "verdict": verdict}),
+            );
+        }
+        Command::Build {
+            effort,
+            command: None,
+        } => match orchestrate_build::run(
+            &store,
+            orchestrate_build::BuildRequest {
+                effort,
+                project: std::env::current_dir()?,
+            },
+        )? {
+            orchestrate_build::BuildResult::Completed(done) => output(
+                "SUCCESS",
+                "BUILD_COMPLETE",
+                serde_json::json!({"implementation": done.implementation, "audit": done.audit}),
+            ),
+            orchestrate_build::BuildResult::Blocked { detail, state } => output(
+                "STOPPED",
+                "BLOCKED",
+                serde_json::json!({"detail": detail, "state": state}),
+            ),
+        },
+        Command::Build {
+            command: Some(BuildCommand::Scaffold { effort }),
+            ..
+        } => {
+            let directory = orchestrate_build::scaffold(&store, &effort)?;
+            output(
+                "SUCCESS",
+                "SCAFFOLDED",
+                serde_json::json!({"build_dir": directory}),
             );
         }
         Command::Journal(args) => {
@@ -469,10 +575,11 @@ fn execute(store: Store, command: Command) -> Result<()> {
         }
         Command::Status(args) => {
             let effort = store.load_effort(&args.effort)?;
+            let build_dir = store.phase_dir(&effort, "build")?;
             output(
                 "SUCCESS",
                 "READ_ONLY",
-                serde_json::json!({"effort": effort, "artifacts": store.list_artifacts(&effort)?}),
+                serde_json::json!({"effort": effort, "build_dir": build_dir, "artifacts": store.list_artifacts(&effort)?}),
             );
         }
         Command::Inspect(args) => {
@@ -533,15 +640,45 @@ fn output(operation_status: &str, semantic_outcome: &str, details: serde_json::V
         serde_json::json!({"operation_status": operation_status, "semantic_outcome": semantic_outcome, "details": details})
     )
 }
-fn guide(phase: Option<String>) -> Result<()> {
-    match phase.as_deref() {
-        None => println!("available guides: discovery, reconcile, audit"),
-        Some("discovery") => print!("{DISCOVERY_GUIDE}"),
-        Some("reconcile") => print!("{RECONCILE_GUIDE}"),
-        Some("audit") => print!("{AUDIT_GUIDE}"),
-        Some(other) => bail!("unknown guide phase {other}; Build execution is external"),
-    };
-    Ok(())
+impl Command {
+    /// The action whose embedded guide this command prints, if it is a guide lookup.
+    /// Guide lookup must not open a store, so `run` handles it before any other work.
+    fn guide_action(&self) -> Option<&'static str> {
+        match self {
+            Command::Discovery {
+                command: Discovery::Guide,
+            } => Some("discovery"),
+            Command::Reconcile {
+                command: Reconcile::Guide,
+            } => Some("reconcile"),
+            Command::Audit {
+                command: AuditCommand::Guide,
+            } => Some("audit"),
+            Command::Build {
+                command: Some(BuildCommand::Guide),
+                ..
+            } => Some("build"),
+            Command::PrepDiscoveryTicket {
+                command: GuideOnly::Guide,
+            } => Some("prep-discovery-ticket"),
+            Command::PrepDiscoveryFreeform {
+                command: GuideOnly::Guide,
+            } => Some("prep-discovery-freeform"),
+            Command::Work {
+                command: GuideOnly::Guide,
+            } => Some("work"),
+            Command::Review {
+                command: GuideOnly::Guide,
+            } => Some("review"),
+            Command::FinalAudit {
+                command: GuideOnly::Guide,
+            } => Some("final-audit"),
+            Command::Unblock {
+                command: GuideOnly::Guide,
+            } => Some("unblock"),
+            _ => None,
+        }
+    }
 }
 impl ProvenanceArgs {
     fn for_guide(self, guide: &str) -> Provenance {

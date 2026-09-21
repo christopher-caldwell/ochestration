@@ -40,20 +40,10 @@ Keep the reconciled document path and effort ID.
 
 ## 4. Build
 
-Give the reconciled document to your coding model.
+Use `$build` with the effort and the approved detailed implementation plan.
 
-Tell it to implement the binding requirements, run tests, commit, and register the implementation
-with Orchestrate for the effort.
-
-## 5. Audit
-
-Open a fresh model window:
-
-```text
-$audit
-```
-
-Give it the effort ID.
+Build runs the delivery phases, reviews, corrections, implementation registration, and the final
+Audit until it finishes or needs something only you can provide.
 
 That is the full ticket workflow.
 
