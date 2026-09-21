@@ -120,8 +120,10 @@ Pass every finalized Discovery directory you want included:
 $reconcile   "/path/to/discovery-1"   "/path/to/discovery-2"   "/path/to/discovery-3"   "/path/to/discovery-4"   "/path/to/discovery-5"
 ```
 
-Reconcile analyzes only those selected Discovery outputs. It does not reopen the repository and
-does not become another Discovery lane.
+Reconcile's only engineering evidence is those selected Discovery outputs. Frozen explicit
+constraints remain direct user authority and the frozen request/context remain available for goal,
+identity, and lineage; neither permits another engineering investigation. It does not reopen the
+repository or become another Discovery lane.
 
 It produces one rich **Reconciled Discovery** with:
 

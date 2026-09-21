@@ -260,24 +260,18 @@ impl Store {
         let dir = self.root.join("projects").join(&expected.storage_name);
         fs::create_dir_all(&dir)?;
         let path = dir.join("project.json");
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                file.write_all(&encode(expected)?)?;
-                file.sync_all()?;
-                sync_dir(&dir)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let existing: Project = read_json(&path)?;
-                ensure!(
-                    existing.canonical_locator == expected.canonical_locator
-                        && existing.id == expected.id,
-                    "project storage name '{}' is already used by a different canonical repository at {}; rename one repository directory before initializing",
-                    expected.storage_name,
-                    existing.canonical_locator.display()
-                );
-                Ok(())
-            }
-            Err(error) => Err(error.into()),
+        if publish_json_new_atomic(&path, expected)? {
+            Ok(())
+        } else {
+            let existing: Project = read_json(&path)?;
+            ensure!(
+                existing.canonical_locator == expected.canonical_locator
+                    && existing.id == expected.id,
+                "project storage name '{}' is already used by a different canonical repository at {}; rename one repository directory before initializing",
+                expected.storage_name,
+                existing.canonical_locator.display()
+            );
+            Ok(())
         }
     }
     fn verify_existing_effort(
@@ -947,6 +941,46 @@ fn with_journal_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T>
 }
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_bytes_sync(path, &encode(value)?)
+}
+/// Atomically publish bytes only when `path` does not yet exist.
+///
+/// A completed temporary file is linked into place, so concurrent project initializers either
+/// publish a complete `project.json` or observe the complete file published by their peer.
+/// Unlike `rename`, `hard_link` never replaces an existing destination.
+fn publish_json_new_atomic<T: Serialize>(path: &Path, value: &T) -> Result<bool> {
+    publish_bytes_new_atomic(path, &encode(value)?)
+}
+fn publish_bytes_new_atomic(path: &Path, bytes: &[u8]) -> Result<bool> {
+    let parent = path.parent().context("path has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temp = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().and_then(|v| v.to_str()).unwrap_or("file"),
+        unique_id()
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+
+    match fs::hard_link(&temp, path) {
+        Ok(()) => {
+            fs::remove_file(&temp)?;
+            sync_dir(parent)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            fs::remove_file(&temp)?;
+            Ok(false)
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temp);
+            Err(error.into())
+        }
+    }
 }
 fn validate_marker(marker: &Path) -> Result<()> {
     let stored: StoreMarker = read_json(marker)?;

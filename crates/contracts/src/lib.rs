@@ -448,11 +448,6 @@ pub fn validate_reconciled_discovery(reconciled: &ReconciledDiscovery) -> Result
         "reconciled Discovery needs identity, goal, problem, and a core result"
     );
     ensure!(
-        !reconciled.product_behavior_changed.is_empty()
-            && !reconciled.technical_behavior_changed.is_empty(),
-        "reconciled Discovery must state changed product and technical behavior"
-    );
-    ensure!(
         reconciled.discovery_attribution.len() >= 2,
         "reconciled Discovery needs at least two attributed Discovery sources"
     );

@@ -6,6 +6,12 @@ Exact model instructions are `orchestrate reconcile guide`.
 It is intentionally a separate model phase: it analyzes the Discovery outputs deeply, but it does
 not reopen the repository or perform another investigation.
 
+Its only engineering evidence is the selected finalized Discovery outputs. Frozen explicit
+constraints remain direct user authority and are mechanically preserved as governing requirements;
+the frozen request and context may establish the effort's goal, identity, and lineage. Neither is a
+second source of engineering investigation. A Reconcile-time user clarification is also direct user
+authority, not engineering evidence.
+
 ## Run Reconcile
 
 Collect at least two `IMPLEMENTATION_READY` Discovery directories, then open a fresh model window.

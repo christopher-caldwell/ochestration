@@ -8,6 +8,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, Barrier},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -337,11 +338,15 @@ fn prepared_request_has_no_slots_or_quorum_and_legacy_fields_are_rejected() {
 fn concurrent_identical_initialization_converges_on_one_frozen_effort() {
     let root = temporary("concurrent-store");
     let repo = create_repo("concurrent");
-    let handles: Vec<_> = (0..5)
+    const INITIALIZERS: usize = 24;
+    let barrier = Arc::new(Barrier::new(INITIALIZERS));
+    let handles: Vec<_> = (0..INITIALIZERS)
         .map(|_| {
             let root = root.clone();
             let repo = repo.clone();
+            let barrier = Arc::clone(&barrier);
             thread::spawn(move || {
+                barrier.wait();
                 Command::new(env!("CARGO_BIN_EXE_orchestrate"))
                     .arg("--root")
                     .arg(root)
@@ -370,6 +375,21 @@ fn concurrent_identical_initialization_converges_on_one_frozen_effort() {
         efforts.push(serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["details"]["effort"].as_str().unwrap().to_owned());
     }
     assert!(efforts.iter().all(|effort| effort == &efforts[0]));
+    let projects: Vec<_> = fs::read_dir(root.join("projects"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .collect();
+    assert_eq!(projects.len(), 1, "only one logical project is created");
+    let project: orchestrate_core::Project =
+        serde_json::from_slice(&fs::read(projects[0].join("project.json")).unwrap()).unwrap();
+    assert_eq!(project.canonical_locator, fs::canonicalize(&repo).unwrap());
+    let effort_dirs: Vec<_> = fs::read_dir(projects[0].join("efforts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.join("effort.json").is_file())
+        .collect();
+    assert_eq!(effort_dirs.len(), 1, "only one logical effort is created");
     let effort = Store::open(&root)
         .unwrap()
         .load_effort(&efforts[0])
@@ -664,6 +684,49 @@ fn reconciliation_preserves_exact_parents_and_allows_a_minority_source() {
             .iter()
             .all(|source| markdown.contains(&source.label))
     );
+}
+
+#[test]
+fn reconciliation_allows_empty_changed_behavior_categories() {
+    let (root, _repo, effort) = new_effort("reconcile-empty-behavior");
+    let selected = [
+        finalize_discovery(&root, &effort),
+        finalize_discovery(&root, &effort),
+    ];
+    for (product_changed, technical_changed) in [
+        (vec![], vec!["The implementation changes.".into()]),
+        (vec!["The product behavior changes.".into()], vec![]),
+    ] {
+        let mut proposed = proposal(&selected[0]);
+        proposed.product_behavior_changed = product_changed.clone();
+        proposed.technical_behavior_changed = technical_changed.clone();
+        let path = write_proposal(&root, &proposed);
+        let reconciled = reference(
+            &command(
+                &root,
+                &[
+                    "reconcile",
+                    "finalize",
+                    "--effort",
+                    &effort,
+                    "--discovery",
+                    &selected[0].artifact_id,
+                    "--discovery",
+                    &selected[1].artifact_id,
+                    "--bundle",
+                    path.to_str().unwrap(),
+                ],
+            ),
+            "reconciled",
+        );
+        let store = Store::open(&root).unwrap();
+        let effort_state = store.load_effort(&effort).unwrap();
+        let (_, payload): (_, ReconciledDiscovery) = store
+            .load_json(&effort_state, &reconciled, "reconciled-discovery.json")
+            .unwrap();
+        assert_eq!(payload.product_behavior_changed, product_changed);
+        assert_eq!(payload.technical_behavior_changed, technical_changed);
+    }
 }
 
 #[test]

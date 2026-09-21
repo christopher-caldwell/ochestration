@@ -47,9 +47,14 @@ Reconcile binds an explicit set of at least two unique finalized `IMPLEMENTATION
 artifacts. Rust rejects duplicates, blocked artifacts, and cross-effort/context/baseline inputs;
 the read-only binding publishes nothing. No later Discovery is inferred or added.
 
-Reconcile is closed-world. Its evidence is the frozen request, explicit constraints, and the exact
-public Discovery artifacts that were selected. Exact model limits are supplied by
-`orchestrate reconcile guide`.
+Reconcile is closed-world. Its only engineering evidence is the exact public Discovery artifacts
+that were selected. Frozen explicit constraints remain direct pre-Discovery user authority, which
+Rust mechanically preserves as governing requirements; they are not engineering evidence discovered
+by Reconcile. The frozen request and context remain available for the effort's goal, identity, and
+lineage, and to ensure the selected artifacts answer the same effort, but may not be reinterpreted
+as another source of technical investigation. Reconcile-time user clarification is likewise direct
+user authority, not engineering evidence. Exact model limits are supplied by `orchestrate reconcile
+guide`.
 
 One Reconciled Discovery bundle contains `reconciled-discovery.md`,
 `reconciled-discovery.json`, and `manifest.json`; its parents are exactly the selected Discovery
