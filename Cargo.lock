@@ -265,6 +265,7 @@ dependencies = [
  "orchestrate-contracts",
  "orchestrate-core",
  "orchestrate-discovery",
+ "orchestrate-guides",
  "orchestrate-reconcile",
  "serde",
  "serde_json",
@@ -289,6 +290,7 @@ dependencies = [
  "orchestrate-audit",
  "orchestrate-contracts",
  "orchestrate-core",
+ "orchestrate-guides",
  "serde",
  "serde_json",
  "sha2",
@@ -331,6 +333,10 @@ dependencies = [
  "serde_json",
  "serde_yaml",
 ]
+
+[[package]]
+name = "orchestrate-guides"
+version = "0.1.0"
 
 [[package]]
 name = "orchestrate-reconcile"

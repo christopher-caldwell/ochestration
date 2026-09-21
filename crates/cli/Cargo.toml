@@ -17,6 +17,7 @@ orchestrate-reconcile = { path = "../reconcile" }
 orchestrate-contracts = { path = "../contracts" }
 orchestrate-core = { path = "../core" }
 orchestrate-discovery = { path = "../discovery" }
+orchestrate-guides = { path = "../guides" }
 serde_json.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true

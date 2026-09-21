@@ -1,14 +1,15 @@
 # Build and Audit
 
-Build is an unattended, fixed Rust-driven work/review loop. The adopted Reconciled Discovery still
+Build is an unattended, fixed Rust-driven work/review loop. Exact setup instructions are
+`orchestrate build guide`. The adopted Reconciled Discovery still
 defines **what** must be delivered; the approved detailed implementation plan supplies only the
 ordered delivery-phase grouping.
 
 ## Prepare and run Build
 
-Invoke `$build` after Adoption to copy the detailed plan and write contained `build/plan.json` and
-`build/config.toml`. The Build skill uses the exact Adoption reference and never derives groups
-from Markdown. Worker and reviewer sessions may use different configured adapters.
+Invoke `$build` after Adoption. It copies the detailed plan and fills `plan.json` and `config.toml`
+from templates supplied by the installed CLI. It uses the exact Adoption reference and never
+derives groups from Markdown. Worker and reviewer sessions may use different configured adapters.
 
 Supported adapters are `codex`, `claude`, and `cursor`. Their host configuration must already
 permit unattended edits and checks; Build never adds force or permission-bypass flags. OpenCode is

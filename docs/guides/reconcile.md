@@ -1,6 +1,7 @@
 # Reconcile
 
 Reconcile turns the independent Discovery results you select into one final decision contract.
+Exact model instructions are `orchestrate reconcile guide`.
 
 It is intentionally a separate model phase: it analyzes the Discovery outputs deeply, but it does
 not reopen the repository or perform another investigation.

@@ -6,6 +6,17 @@ Discovery 2 ─┼──→ Reconciled Discovery → Adoption → Implementation
 Discovery N ─┘
 ```
 
+## Instruction ownership
+
+Checked-in skills are stable dispatchers. Each one runs `orchestrate <action> guide` and follows
+whatever the installed binary prints. Those guides, and the Build `plan.json` / `config.toml`
+templates, are Markdown and text compiled into the binary. Host files (`AGENTS.md`, `CLAUDE.md`,
+and the Cursor orchestration rule) only explain how to install or update that CLI and those
+dispatchers.
+
+Work, review, final Audit, and unblock are internal Build roles. They are not installed skills.
+The driver materializes the same embedded guides into the Build directory.
+
 ## Authority boundaries
 
 The model window owns interaction: it investigates, asks the user material questions, reconciles

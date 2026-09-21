@@ -33,8 +33,9 @@ The short version is:
    final Audit until completion or a genuine external requirement.
 ```
 
-You normally do **not** operate the Orchestrate CLI yourself. The `discovery`, `reconcile`,
-`build`, and `audit` skills call it for you.
+You normally do **not** operate the Orchestrate CLI yourself. The installed skills only load the
+current instructions with `orchestrate <action> guide` and then follow them. Updating the CLI
+updates that behavior; reinstalling skills is not part of a normal methodology change.
 
 ## Easiest installation
 

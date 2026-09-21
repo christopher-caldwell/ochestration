@@ -1,6 +1,7 @@
 # Request preparation
 
-Preparation creates the one file that every Discovery run will receive.
+Preparation creates the one file that every Discovery run will receive. Exact model instructions
+are `orchestrate prep-discovery-ticket guide` or `orchestrate prep-discovery-freeform guide`.
 
 You normally use one of two skills:
 

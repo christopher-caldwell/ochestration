@@ -28,10 +28,10 @@ pub const BUILD_PLAN_VERSION: u32 = 1;
 pub const BUILD_CONFIG_VERSION: u32 = 2;
 pub const BUILD_STATE_VERSION: u32 = 2;
 
-const WORK_GUIDE: &str = include_str!("../resources/work.md");
-const REVIEW_GUIDE: &str = include_str!("../resources/review.md");
-const UNBLOCK_GUIDE: &str = include_str!("../resources/unblock.md");
-const FINAL_AUDIT_GUIDE: &str = include_str!("../resources/final-audit.md");
+const WORK_GUIDE: &str = orchestrate_guides::WORK;
+const REVIEW_GUIDE: &str = orchestrate_guides::REVIEW;
+const UNBLOCK_GUIDE: &str = orchestrate_guides::UNBLOCK;
+const FINAL_AUDIT_GUIDE: &str = orchestrate_guides::FINAL_AUDIT;
 
 /// Scope of the post-phase Audit turn, which is not one of the plan's delivery phases.
 const FINAL_SCOPE: &str = "final";
@@ -521,7 +521,7 @@ fn perform_action(
                 &commit,
                 "unattended build".into(),
                 ImplementationStatus::Submitted,
-                build_provenance("build"),
+                build_provenance("build", orchestrate_guides::WORK),
                 format!(
                     "build-{}",
                     digest_bytes(format!("{}:{commit}", state.frozen.adoption.digest).as_bytes())
@@ -882,7 +882,7 @@ fn consume_receipt(
                     store,
                     effort,
                     assessment.clone(),
-                    build_provenance("audit"),
+                    build_provenance("audit", orchestrate_guides::FINAL_AUDIT),
                     format!("build-audit-{}", state.action.id),
                 )?,
             };
@@ -1065,15 +1065,35 @@ fn materialize_role_guides(build_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build_provenance(host: &str) -> Provenance {
+fn build_provenance(host: &str, guide: &str) -> Provenance {
     Provenance {
         host: host.into(),
         provider: None,
         model: None,
         model_effort: None,
-        guide_digest: digest_bytes(b"orchestrate-build"),
+        guide_digest: digest_bytes(guide.as_bytes()),
         independence: Independence::InputExcluded,
     }
+}
+
+/// Write the current Build templates into the effort Build directory.
+/// Existing files are left untouched.
+pub fn scaffold(store: &Store, effort_id: &str) -> Result<PathBuf> {
+    let effort = store.load_effort(effort_id)?;
+    let build_dir = store.phase_dir(&effort, "build")?;
+    for (name, body) in [
+        ("plan.json", orchestrate_guides::templates::PLAN_JSON),
+        ("config.toml", orchestrate_guides::templates::CONFIG_TOML),
+    ] {
+        let path = build_dir.join(name);
+        ensure!(
+            !path.exists(),
+            "{} already exists; refusing to overwrite",
+            path.display()
+        );
+        write_bytes_sync(&path, body.as_bytes())?;
+    }
+    Ok(build_dir)
 }
 
 fn save_state(path: &Path, state: &BuildState) -> Result<()> {
@@ -1292,6 +1312,37 @@ mod tests {
         assert!(!valid_id("D 1"));
     }
     #[test]
+    fn scaffold_writes_the_embedded_templates_once() {
+        let root = temp("scaffold-store");
+        let repo = temp("scaffold-repo");
+        git_ok(&repo, &["init"]);
+        git_ok(&repo, &["config", "user.email", "test@example.com"]);
+        git_ok(&repo, &["config", "user.name", "Test"]);
+        fs::write(repo.join("source.txt"), "baseline\n").unwrap();
+        git_ok(&repo, &["add", "."]);
+        git_ok(&repo, &["commit", "-m", "baseline"]);
+        let store = Store::open(&root).unwrap();
+        let effort = store
+            .init_effort(
+                &repo,
+                "scaffold",
+                RequestKind::Freeform,
+                "work".into(),
+                vec![],
+            )
+            .unwrap();
+        let dir = scaffold(&store, &effort.id).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("plan.json")).unwrap(),
+            orchestrate_guides::templates::PLAN_JSON
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("config.toml")).unwrap(),
+            orchestrate_guides::templates::CONFIG_TOML
+        );
+        assert!(scaffold(&store, &effort.id).is_err());
+    }
+    #[test]
     fn named_adapters_build_supported_local_commands() {
         let root = temp("commands");
         for (adapter, program) in [
@@ -1426,7 +1477,7 @@ mod tests {
                 "ready".into(),
                 "IMPLEMENTATION_READY".into(),
                 vec![],
-                build_provenance("test"),
+                build_provenance("test", orchestrate_guides::BUILD),
                 files,
             )
             .unwrap();
@@ -1435,7 +1486,7 @@ mod tests {
             &effort,
             reconciled_ref.clone(),
             "test".into(),
-            build_provenance("test"),
+            build_provenance("test", orchestrate_guides::BUILD),
         )
         .unwrap();
         let build = store.phase_dir(&effort, "build").unwrap();

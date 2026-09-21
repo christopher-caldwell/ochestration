@@ -2,7 +2,8 @@
 
 This is the canonical day-to-day workflow.
 
-You normally interact with Orchestrate through model skills, not raw CLI commands.
+You normally interact with Orchestrate through model skills, not raw CLI commands. Each skill loads
+its current instructions from `orchestrate <action> guide`.
 
 ```text
 Prepare → Discovery × N → Reconcile → approve → Build → done
