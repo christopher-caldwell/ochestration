@@ -56,7 +56,7 @@ audit
 Typical skill directories are:
 
 ```text
-Codex       ~/.codex/skills
+Codex       ~/.agents/skills
 Claude Code ~/.claude/skills
 Cursor      ~/.cursor/skills
 ```

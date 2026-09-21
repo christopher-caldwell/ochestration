@@ -28,11 +28,6 @@ pub const BUILD_PLAN_VERSION: u32 = 1;
 pub const BUILD_CONFIG_VERSION: u32 = 2;
 pub const BUILD_STATE_VERSION: u32 = 2;
 
-const WORK_GUIDE: &str = orchestrate_guides::WORK;
-const REVIEW_GUIDE: &str = orchestrate_guides::REVIEW;
-const UNBLOCK_GUIDE: &str = orchestrate_guides::UNBLOCK;
-const FINAL_AUDIT_GUIDE: &str = orchestrate_guides::FINAL_AUDIT;
-
 /// Scope of the post-phase Audit turn, which is not one of the plan's delivery phases.
 const FINAL_SCOPE: &str = "final";
 
@@ -521,7 +516,7 @@ fn perform_action(
                 &commit,
                 "unattended build".into(),
                 ImplementationStatus::Submitted,
-                build_provenance("build", orchestrate_guides::WORK),
+                build_provenance("build", canonical_role_guide(&ActionKind::Work)),
                 format!(
                     "build-{}",
                     digest_bytes(format!("{}:{commit}", state.frozen.adoption.digest).as_bytes())
@@ -714,7 +709,7 @@ fn write_action_file(
 
 fn invocation_prompt(build_dir: &Path, action_dir: &Path, action: &CurrentAction) -> String {
     format!(
-        "Read {} and {}. Execute only that action. Write report.md and result.json exactly at the paths in action.json; do not edit state.json.",
+        "Read {} and {}. Follow the instruction document for this action.",
         action_dir.join("action.json").display(),
         build_dir
             .join("instructions")
@@ -882,7 +877,7 @@ fn consume_receipt(
                     store,
                     effort,
                     assessment.clone(),
-                    build_provenance("audit", orchestrate_guides::FINAL_AUDIT),
+                    build_provenance("audit", canonical_role_guide(&ActionKind::FinalAudit)),
                     format!("build-audit-{}", state.action.id),
                 )?,
             };
@@ -1050,17 +1045,26 @@ fn review_checkout(project: &Project, action_dir: &Path, commit: &str) -> Result
     Ok(source)
 }
 
+fn canonical_role_guide(kind: &ActionKind) -> &'static str {
+    match kind {
+        ActionKind::Work => orchestrate_guides::WORK,
+        ActionKind::Review => orchestrate_guides::REVIEW,
+        ActionKind::FinalAudit => orchestrate_guides::FINAL_AUDIT,
+        ActionKind::Unblock => orchestrate_guides::UNBLOCK,
+    }
+}
+
+/// Role guides are generated from the running CLI. Rewrite them on every start
+/// and resume so a newer binary cannot leave a model reading the previous version.
 fn materialize_role_guides(build_dir: &Path) -> Result<()> {
-    for (name, body) in [
-        ("work.md", WORK_GUIDE),
-        ("review.md", REVIEW_GUIDE),
-        ("unblock.md", UNBLOCK_GUIDE),
-        ("final-audit.md", FINAL_AUDIT_GUIDE),
+    for kind in [
+        ActionKind::Work,
+        ActionKind::Review,
+        ActionKind::Unblock,
+        ActionKind::FinalAudit,
     ] {
-        let path = build_dir.join("instructions").join(name);
-        if !path.exists() {
-            write_bytes_sync(&path, body.as_bytes())?;
-        }
+        let path = build_dir.join("instructions").join(instruction_name(&kind));
+        write_bytes_sync(&path, canonical_role_guide(&kind).as_bytes())?;
     }
     Ok(())
 }
@@ -2307,5 +2311,127 @@ mod tests {
             BuildResult::Completed(_)
         ));
         assert_no_build_files_leaked(&repo);
+    }
+
+    #[test]
+    fn resumed_build_refreshes_stale_role_guides() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let build = store.phase_dir(&effort, "build").unwrap();
+        let instructions = build.join("instructions");
+        let user_inputs = ["plan.json", "config.toml", "implementation-plan.md"];
+        let preserved: Vec<_> = user_inputs
+            .iter()
+            .map(|name| fs::read(build.join(name)).unwrap())
+            .collect();
+
+        let host = StaleGuideHost::default();
+        let started = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(started, BuildResult::Blocked { .. }));
+        assert_role_guides_match_canonical(&instructions);
+        assert_eq!(host.invocations.lock().unwrap().len(), 1);
+
+        let stale = b"STALE GUIDE FROM AN OLDER CLI\n";
+        for kind in role_kinds() {
+            fs::write(instructions.join(instruction_name(&kind)), stale).unwrap();
+        }
+
+        let resumed = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(resumed, BuildResult::Blocked { .. }));
+        assert_role_guides_match_canonical(&instructions);
+        for (name, before) in user_inputs.iter().zip(preserved) {
+            assert_eq!(
+                fs::read(build.join(name)).unwrap(),
+                before,
+                "{name} is a Build input and must survive guide refresh"
+            );
+        }
+
+        let invocations = host.invocations.lock().unwrap();
+        assert_eq!(invocations.len(), 2);
+        let resume = &invocations[1];
+        assert_eq!(resume.body, canonical_role_guide(&ActionKind::Work));
+        assert_eq!(
+            resume.prompt,
+            format!(
+                "Read {} and {}. Follow the instruction document for this action.",
+                resume.action_json.display(),
+                resume.instruction.display(),
+            )
+        );
+        assert_eq!(
+            build_provenance("build", canonical_role_guide(&ActionKind::Work)).guide_digest,
+            digest_bytes(resume.body.as_bytes())
+        );
+        assert_eq!(
+            build_provenance("audit", canonical_role_guide(&ActionKind::FinalAudit)).guide_digest,
+            digest_bytes(canonical_role_guide(&ActionKind::FinalAudit).as_bytes())
+        );
+        assert_eq!(
+            fs::read(instructions.join("final-audit.md")).unwrap(),
+            canonical_role_guide(&ActionKind::FinalAudit).as_bytes()
+        );
+    }
+
+    fn role_kinds() -> [ActionKind; 4] {
+        [
+            ActionKind::Work,
+            ActionKind::Review,
+            ActionKind::FinalAudit,
+            ActionKind::Unblock,
+        ]
+    }
+
+    fn assert_role_guides_match_canonical(instructions: &Path) {
+        for kind in role_kinds() {
+            let path = instructions.join(instruction_name(&kind));
+            let body = fs::read(&path).unwrap();
+            let canonical = canonical_role_guide(&kind);
+            assert_eq!(
+                body,
+                canonical.as_bytes(),
+                "{} drifted from the embedded role guide",
+                path.display()
+            );
+            assert_eq!(
+                build_provenance("build", canonical).guide_digest,
+                digest_bytes(&body),
+                "provenance must hash the same guide the model reads"
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct StaleGuideHost {
+        invocations: Mutex<Vec<SeenInvocation>>,
+    }
+
+    struct SeenInvocation {
+        prompt: String,
+        action_json: PathBuf,
+        instruction: PathBuf,
+        body: String,
+    }
+
+    impl HostAdapter for StaleGuideHost {
+        fn invoke(
+            &self,
+            invocation: &Invocation,
+            _observer: &mut dyn InvocationObserver,
+        ) -> Result<InvocationResult> {
+            let action: serde_json::Value = read_json(&invocation.action.join("action.json"))?;
+            let instruction = PathBuf::from(action["instruction"].as_str().unwrap());
+            let body = fs::read_to_string(&instruction)?;
+            self.invocations.lock().unwrap().push(SeenInvocation {
+                prompt: invocation.prompt.clone(),
+                action_json: invocation.action.join("action.json"),
+                instruction,
+                body,
+            });
+            Ok(InvocationResult {
+                completion: InvocationCompletion::AcceptedButIncomplete {
+                    detail: "stop before role work".into(),
+                },
+            })
+        }
     }
 }

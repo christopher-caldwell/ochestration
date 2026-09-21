@@ -59,21 +59,57 @@ fn skills_are_dispatchers_only() {
     for name in skill_dirs(&root) {
         let text = fs::read_to_string(root.join("skills").join(&name).join("SKILL.md")).unwrap();
         let (frontmatter, body) = split_skill(&text);
-        assert!(
-            frontmatter
-                .lines()
-                .any(|line| line == format!("name: {name}")),
-            "{name} frontmatter name must match its directory"
+        let entries = flat_frontmatter(&frontmatter, &name);
+        let keys: Vec<_> = entries.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["name", "description", "disable-model-invocation"],
+            "{name} frontmatter may only carry dispatcher metadata"
         );
-        assert!(
-            frontmatter.contains("disable-model-invocation: true"),
-            "{name} must stay explicit-only for hosts that read this field"
-        );
+        assert_eq!(entries[0].1, name);
+        assert_dispatcher_description(&name, &entries[1].1);
+        assert_eq!(entries[2].1, "true");
         assert_eq!(
             body,
             format!("Run `orchestrate {name} guide` and follow the returned instructions.")
         );
     }
+}
+
+fn flat_frontmatter(frontmatter: &str, name: &str) -> Vec<(String, String)> {
+    frontmatter
+        .lines()
+        .map(|line| {
+            assert!(
+                !line.is_empty() && !line.starts_with([' ', '-', '#']),
+                "{name} frontmatter must stay flat key/value metadata"
+            );
+            let (key, value) = line.split_once(": ").unwrap_or_else(|| {
+                panic!("{name} frontmatter line must be `key: value`, got {line:?}")
+            });
+            assert!(
+                !value.contains(':'),
+                "{name} frontmatter value must not carry nested guidance"
+            );
+            (key.to_owned(), value.to_owned())
+        })
+        .collect()
+}
+
+fn assert_dispatcher_description(name: &str, description: &str) {
+    assert!(
+        description.starts_with("Load the current Orchestrate ")
+            && description.ends_with(" instructions."),
+        "{name} description must stay a dispatcher label"
+    );
+    assert!(
+        description.len() <= 72,
+        "{name} description is long enough to carry procedure"
+    );
+    assert!(
+        !description.contains('`') && !description.contains("orchestrate "),
+        "{name} description must not embed commands"
+    );
 }
 
 #[test]
@@ -92,6 +128,13 @@ fn skill_directories_hold_no_operational_assets() {
                 relative == "SKILL.md" || relative == "agents/openai.yaml",
                 "{name} contains operational asset {relative}"
             );
+            if relative == "agents/openai.yaml" {
+                assert_eq!(
+                    fs::read_to_string(&file).unwrap(),
+                    "policy:\n  allow_implicit_invocation: false\n",
+                    "{name} host metadata must stay an invocation policy"
+                );
+            }
         }
     }
 }
@@ -139,6 +182,16 @@ fn guide_commands_are_bootstrap_safe_and_canonical() {
 }
 
 #[test]
+fn codex_install_docs_use_the_current_global_skill_directory() {
+    let root = repo_root();
+    let install = fs::read_to_string(root.join("docs/guides/agent-installation.md")).unwrap();
+    assert!(install.contains("~/.agents/skills"));
+    assert!(!install.contains("~/.codex/skills"));
+    let agents = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+    assert!(agents.contains("~/.agents/skills/"));
+}
+
+#[test]
 fn the_old_guide_subcommand_is_gone() {
     let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
         .args(["guide", "discovery"])
@@ -148,29 +201,108 @@ fn the_old_guide_subcommand_is_gone() {
 }
 
 #[test]
-fn host_files_do_not_carry_runtime_commands() {
+fn host_files_are_install_pointers_only() {
     let root = repo_root();
-    let forbidden = [
-        "discovery prepare",
-        "discovery finalize",
-        "reconcile inputs",
-        "reconcile finalize",
-        "reconcile adopt",
-        "audit finalize",
-        "orchestrate init",
-        "$discovery",
-        "$reconcile",
-        "$build",
-        "$audit",
-        "prep-discovery-ticket guide",
-    ];
-    for relative in ["AGENTS.md", "CLAUDE.md", ".cursor/rules/orchestration.mdc"] {
-        let text = fs::read_to_string(root.join(relative)).unwrap();
-        for phrase in forbidden {
+    assert_install_pointer(
+        &fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+        "AGENTS.md",
+        "~/.agents/skills/",
+        "ordinary repository work.",
+    );
+    assert_install_pointer(
+        &fs::read_to_string(root.join("CLAUDE.md")).unwrap(),
+        "CLAUDE.md",
+        "~/.claude/skills/",
+        "ordinary repository work.",
+    );
+    let cursor = fs::read_to_string(root.join(".cursor/rules/orchestration.mdc")).unwrap();
+    assert!(
+        cursor.len() <= 600,
+        "orchestration.mdc is too large to stay install-only"
+    );
+    let (frontmatter, body) = split_skill(&cursor);
+    let entries = flat_frontmatter(&frontmatter, "orchestration.mdc");
+    assert_eq!(
+        entries
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<Vec<_>>(),
+        ["description", "alwaysApply"]
+    );
+    assert!(entries[0].1.len() <= 120);
+    assert!(entries[0].1.to_ascii_lowercase().contains("install"));
+    assert_eq!(entries[1].1, "false");
+    assert_install_body(
+        &body,
+        "orchestration.mdc",
+        "~/.cursor/skills/",
+        "ordinary code-editing requests.",
+    );
+}
+
+fn assert_install_pointer(text: &str, label: &str, skill_dir: &str, scope: &str) {
+    assert!(
+        text.starts_with("# "),
+        "{label} must open as a single install pointer"
+    );
+    assert_eq!(
+        text.lines().filter(|line| line.starts_with('#')).count(),
+        1,
+        "{label} must not grow workflow sections"
+    );
+    assert_install_body(text, label, skill_dir, scope);
+}
+
+fn assert_install_body(text: &str, label: &str, skill_dir: &str, scope: &str) {
+    assert!(
+        text.len() <= 600,
+        "{label} is too large to stay install-only"
+    );
+    assert!(
+        !text.contains("```"),
+        "{label} must not carry command blocks"
+    );
+    assert!(
+        !text.contains("~/.codex/skills"),
+        "{label} must use the current Codex skill location"
+    );
+    let paragraphs: Vec<_> = text
+        .trim()
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect();
+    assert!(
+        paragraphs.len() <= 3,
+        "{label} has {} paragraphs; keep it an install pointer",
+        paragraphs.len()
+    );
+    for paragraph in &paragraphs {
+        assert!(
+            paragraph.len() <= 360,
+            "{label} paragraph is {} bytes; keep it an install pointer",
+            paragraph.len()
+        );
+        for line in paragraph.lines() {
+            let trimmed = line.trim_start();
             assert!(
-                !text.contains(phrase),
-                "{relative} contains runtime instruction {phrase:?}"
+                !trimmed.starts_with(['-', '*'])
+                    && !trimmed.starts_with(|c: char| c.is_ascii_digit()),
+                "{label} must not grow a procedure list"
             );
         }
     }
+    assert!(
+        text.contains("docs/guides/agent-installation.md"),
+        "{label} must point at the shared installation guide"
+    );
+    assert!(
+        text.contains("install or update"),
+        "{label} must stay limited to installation"
+    );
+    assert!(text.contains(skill_dir), "{label} skill location drifted");
+    assert!(
+        text.contains("Do not apply") && text.contains(scope),
+        "{label} must exclude ordinary work"
+    );
 }

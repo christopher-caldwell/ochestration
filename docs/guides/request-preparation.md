@@ -64,19 +64,10 @@ The skill organizes the request without inventing new meaning and returns the pr
 
 ## What the prepared file contains
 
-Both skills create a file with frontmatter like:
-
-```yaml
----
-root: /absolute/path/to/.orchestration
-project: /absolute/path/to/repository
-effort: example-effort
-request_kind: ticket
-constraints: []
----
-```
-
-You do not normally edit the frontmatter.
+Both skills create a prepared Markdown file. Its frontmatter records the store root, the target
+project, the effort name, whether the request is a ticket or freeform, and any explicit
+constraints. You do not normally edit that frontmatter. The exact file shape is in the preparation
+guide.
 
 The important thing is simple:
 

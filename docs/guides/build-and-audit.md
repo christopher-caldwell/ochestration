@@ -8,36 +8,24 @@ ordered delivery-phase grouping.
 ## Prepare and run Build
 
 Invoke `$build` after Adoption. It copies the detailed plan and fills `plan.json` and `config.toml`
-from templates supplied by the installed CLI. It uses the exact Adoption reference and never
-derives groups from Markdown. Worker and reviewer sessions may use different configured adapters.
-
-Supported adapters are `codex`, `claude`, and `cursor`. Their host configuration must already
-permit unattended edits and checks; Build never adds force or permission-bypass flags. OpenCode is
-not supported by this release.
+from templates supplied by the installed CLI. Files you have already filled are left in place.
+Worker and reviewer sessions may use different configured adapters. Exact setup rules, including
+which adapters this CLI accepts, are supplied by `orchestrate build guide`.
 
 `$build` invokes the driver after preparation; no second routine command is required. The
-controller resolves exactly one prepared or active effort, freezes the plan/config digests,
-then continues phase work, independent phase review, corrections, implementation registration,
-and final Audit. Use `--effort` only when automation has an explicit effort identity. Multiple
-eligible efforts are reported instead of guessed.
+controller resolves exactly one prepared or active effort, then continues phase work, independent
+phase review, corrections, implementation registration, and final Audit. Use `--effort` only when
+automation has an explicit effort identity. Multiple eligible efforts are reported instead of guessed.
 
-Every role turn receives exact absolute paths to its controller-generated `action.json` and
-contained instruction. Workers commit reviewable changes; reviewers inspect a contained detached
-checkout of that exact commit. If a provider stop is incomplete or malformed, Build first resumes
-the same session, then replaces it, then asks a fresh session-less unblocker for a diagnosis. A
-remedy automatically resumes the interrupted action; only an external requirement returns control
-to the user. Each recovery step is tried once, so a failing scope reaches a decision instead of
-looping, and an invocation whose acceptance state cannot be determined is never resent — Build
-stops and names its transport log instead. The raw command is the recovery interface and does not
-repeat completed work.
+The driver gives each role the current action and the role guide from the CLI that is running.
+It owns retries and corrections. It returns to you when the Build needs something only you can
+supply, or when it cannot safely continue. You do not step the loop by hand.
 
 ## Audit
 
-After the final phase passes, Build registers the exact commit and starts a fresh Audit session.
-The Audit role locates the exact Reconciled Discovery → Adoption → Implementation chain, inspects
-the immutable implementation snapshot, and checks every binding requirement once.
-
-Technical suggestions do not create Audit requirements.
+After the final phase passes, Build registers the implementation and runs Audit against the adopted
+contract. Audit checks binding requirements. Technical suggestions stay advisory. Exact Audit
+instructions are supplied by `orchestrate audit guide`.
 
 The result is:
 
