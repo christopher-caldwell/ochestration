@@ -549,6 +549,11 @@ fn perform_action(
             );
         }
     }
+    // Generated role instructions are refreshed immediately before dispatch so an
+    // earlier role cannot alter the authority used by a later role.
+    if state.action.dispatch == DispatchState::Prepared {
+        materialize_role_guide(build_dir, &state.action.kind)?;
+    }
     let cwd = match state.action.kind {
         ActionKind::Review => review_checkout(
             project,
@@ -1054,6 +1059,13 @@ fn canonical_role_guide(kind: &ActionKind) -> &'static str {
     }
 }
 
+fn materialize_role_guide(build_dir: &Path, kind: &ActionKind) -> Result<()> {
+    write_bytes_sync(
+        &build_dir.join("instructions").join(instruction_name(kind)),
+        canonical_role_guide(kind).as_bytes(),
+    )
+}
+
 /// Role guides are generated from the running CLI. Rewrite them on every start
 /// and resume so a newer binary cannot leave a model reading the previous version.
 fn materialize_role_guides(build_dir: &Path) -> Result<()> {
@@ -1063,8 +1075,7 @@ fn materialize_role_guides(build_dir: &Path) -> Result<()> {
         ActionKind::Unblock,
         ActionKind::FinalAudit,
     ] {
-        let path = build_dir.join("instructions").join(instruction_name(&kind));
-        write_bytes_sync(&path, canonical_role_guide(&kind).as_bytes())?;
+        materialize_role_guide(build_dir, &kind)?;
     }
     Ok(())
 }
@@ -2370,6 +2381,94 @@ mod tests {
             fs::read(instructions.join("final-audit.md")).unwrap(),
             canonical_role_guide(&ActionKind::FinalAudit).as_bytes()
         );
+    }
+
+    #[test]
+    fn a_role_cannot_poison_the_next_roles_guide() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = PoisoningHost::default();
+        let result = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(result, BuildResult::Blocked { .. }));
+
+        let seen = host.review.lock().unwrap();
+        let review = seen
+            .as_ref()
+            .expect("review was invoked in the same uninterrupted run");
+        let review_guide = store
+            .phase_dir(&effort, "build")
+            .unwrap()
+            .join("instructions")
+            .join("review.md");
+        assert_eq!(review.instruction, review_guide);
+        assert_eq!(review.body, canonical_role_guide(&ActionKind::Review));
+        assert_ne!(review.body, "POISONED BY PREVIOUS ROLE");
+        assert_eq!(
+            review.prompt,
+            format!(
+                "Read {} and {}. Follow the instruction document for this action.",
+                review.action_json.display(),
+                review.instruction.display(),
+            )
+        );
+        assert!(host.poisoned.lock().unwrap().is_some());
+    }
+
+    #[derive(Default)]
+    struct PoisoningHost {
+        poisoned: Mutex<Option<String>>,
+        review: Mutex<Option<SeenInvocation>>,
+    }
+
+    impl HostAdapter for PoisoningHost {
+        fn invoke(
+            &self,
+            invocation: &Invocation,
+            _observer: &mut dyn InvocationObserver,
+        ) -> Result<InvocationResult> {
+            let action: serde_json::Value = read_json(&invocation.action.join("action.json"))?;
+            let kind = action["kind"].as_str().unwrap();
+            match kind {
+                "work" => {
+                    let review_guide = invocation.build_dir.join("instructions").join("review.md");
+                    let poison = "POISONED BY PREVIOUS ROLE";
+                    fs::write(&review_guide, poison)?;
+                    assert_eq!(fs::read_to_string(&review_guide)?, poison);
+                    *self.poisoned.lock().unwrap() = Some(poison.into());
+                    fs::write(invocation.cwd.join("work.txt"), "work\n")?;
+                    git_ok(&invocation.cwd, &["add", "."]);
+                    git_ok(&invocation.cwd, &["commit", "-m", "work"]);
+                    let receipt = serde_json::json!({
+                        "action_id": action["action_id"],
+                        "scope": action["scope"],
+                        "outcome": "complete",
+                        "commit": git(&invocation.cwd, ["rev-parse", "HEAD"])?
+                    });
+                    write_bytes_sync(
+                        &invocation.action.join("result.json"),
+                        &serde_json::to_vec_pretty(&receipt)?,
+                    )?;
+                    Ok(InvocationResult {
+                        completion: InvocationCompletion::Completed,
+                    })
+                }
+                "review" => {
+                    let instruction = PathBuf::from(action["instruction"].as_str().unwrap());
+                    let body = fs::read_to_string(&instruction)?;
+                    *self.review.lock().unwrap() = Some(SeenInvocation {
+                        prompt: invocation.prompt.clone(),
+                        action_json: invocation.action.join("action.json"),
+                        instruction,
+                        body,
+                    });
+                    Ok(InvocationResult {
+                        completion: InvocationCompletion::AcceptedButIncomplete {
+                            detail: "stop after observing review".into(),
+                        },
+                    })
+                }
+                other => bail!("poisoning host expected work then review, saw {other}"),
+            }
+        }
     }
 
     fn role_kinds() -> [ActionKind; 4] {
