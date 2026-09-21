@@ -12,6 +12,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 orchestrate-audit = { path = "../audit" }
+orchestrate-build = { path = "../build" }
 orchestrate-reconcile = { path = "../reconcile" }
 orchestrate-contracts = { path = "../contracts" }
 orchestrate-core = { path = "../core" }

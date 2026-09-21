@@ -15,7 +15,8 @@ Audit may inspect that exact implementation and run relevant tests. It must not 
 requirements, turn advisory technical suggestions into requirements, or fail implementation
 details that the binding Reconciled Discovery did not require.
 
-Write `assessment.json` outside the store. It names the exact `reconciled`, `adoption`, and
+Write `assessment.json` outside immutable published bundles. During unattended Build it may live
+under the current Build action's `artifacts/` directory; otherwise keep it outside the store. It names the exact `reconciled`, `adoption`, and
 `implementation` references and contains exactly one coverage row for every binding requirement.
 There are no coverage rows for technical suggestions. Pass and fail rows need evidence; failures
 also need a correction. Finalize with:

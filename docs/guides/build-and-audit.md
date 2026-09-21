@@ -1,67 +1,37 @@
 # Build and Audit
 
-Build is intentionally external to Orchestrate.
+Build is an unattended, fixed Rust-driven work/review loop. The adopted Reconciled Discovery still
+defines **what** must be delivered; the approved detailed implementation plan supplies only the
+ordered delivery-phase grouping.
 
-The Reconciled Discovery tells Build **what must be accomplished**. Build decides **how to
-implement it**.
+## Prepare and run Build
 
-## Build handoff
+Invoke `$build` after Adoption to copy the detailed plan and write contained `build/plan.json` and
+`build/config.toml`. The Build skill uses the exact Adoption reference and never derives groups
+from Markdown. Worker and reviewer sessions may use different configured adapters.
 
-Give your coding model:
-
-- the target repository;
-- the reconciled document path;
-- the effort ID.
-
-A useful prompt is:
-
-> Implement the adopted Reconciled Discovery at
-> `/absolute/path/to/reconciled-discovery.md`.
->
-> Treat every binding requirement as authority. Technical suggestions are advisory starting
-> points, not mandatory implementation choices unless the underlying property is also a binding
-> requirement.
->
-> Run the relevant tests. When the implementation is complete, commit it and register that exact
-> commit with Orchestrate for effort `<effort-id>`.
-
-The Build model can make its own detailed implementation plan. That plan does not replace the
-Reconciled Discovery.
-
-The underlying registration command is:
+From the target repository, run:
 
 ```sh
-orchestrate implementation register --effort "<effort-id>"
+orchestrate build
 ```
 
-You normally let the Build model run it.
+The controller resolves exactly one prepared or active effort, freezes the plan/config digests,
+then continues phase work, independent phase review, corrections, implementation registration,
+and final Audit. Use `--effort` only when automation has an explicit effort identity. Multiple
+eligible efforts are reported instead of guessed.
 
-Registration freezes the exact implementation commit and tree for Audit.
+Every role turn receives a controller-generated `action.json` and writes an immutable
+`result.json` receipt. Workers commit reviewable changes; reviewers inspect a contained detached
+checkout of that exact commit. If a provider stop is incomplete or malformed, Build first resumes,
+then replaces the session, then records a bounded unblocker diagnosis if necessary. Re-running the
+same command resumes the saved state; it does not repeat completed work.
 
 ## Audit
 
-After Build has committed and registered the implementation, open a fresh model window:
-
-```text
-$audit
-```
-
-Give it:
-
-```text
-Effort: <effort-id>
-```
-
-The Audit skill locates the exact:
-
-```text
-Reconciled Discovery
-→ Adoption
-→ Registered Implementation
-```
-
-It inspects the immutable implementation snapshot and checks every binding requirement exactly
-once.
+After the final phase passes, Build registers the exact commit and starts a fresh Audit session.
+The Audit role locates the exact Reconciled Discovery → Adoption → Implementation chain, inspects
+the immutable implementation snapshot, and checks every binding requirement once.
 
 Technical suggestions do not create Audit requirements.
 
@@ -77,7 +47,8 @@ BLOCKED
 - **CHANGES_REQUIRED** — at least one binding requirement failed.
 - **BLOCKED** — Audit could not verify the full contract.
 
-If Audit reports changes required, return to Build using the same adopted Reconciled Discovery,
-make the correction, commit it, register the new implementation, and Audit again.
+If Audit reports changes required, Build automatically routes the complete correction set to the
+worker, registers the new exact commit, and runs a fresh Audit. A final PASS is derived from the
+published Audit artifact, not a role's prose.
 
 Back to the [full run guide](run.md).

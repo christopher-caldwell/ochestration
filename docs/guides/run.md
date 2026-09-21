@@ -152,64 +152,21 @@ For more detail, see [Reconcile](reconcile.md).
 
 ---
 
-## 4. Build
+## 4. Build and final Audit
 
-Build is intentionally outside Orchestrate.
+Use `$build` with the exact effort and approved detailed implementation plan. It prepares the
+contained Build files; you do not hand-author the controller JSON/TOML.
 
-Give your coding model the reconciled document and the target repository.
-
-A useful handoff is:
-
-> Implement the adopted Reconciled Discovery at
-> `/absolute/path/to/reconciled-discovery.md`.
->
-> Treat its binding requirements as the authority. Technical suggestions are useful starting
-> points, not mandatory implementation choices unless the underlying property is itself a binding
-> requirement.
->
-> When the implementation is complete, run the relevant tests, commit the finished work, and
-> register that exact commit with Orchestrate for effort `<effort-id>`.
-
-Let the Build model run the registration command. You do not need to operate it yourself.
-
-For reference, the underlying command is:
+Then, from the target repository, run:
 
 ```sh
-orchestrate implementation register --effort "<effort-id>"
+orchestrate build
 ```
 
----
-
-## 5. Audit
-
-Open a fresh model window and invoke:
-
-```text
-$audit
-```
-
-Then give it:
-
-```text
-Effort: <effort-id>
-```
-
-Audit finds the adopted Reconciled Discovery and registered implementation, inspects the immutable
-implementation snapshot, runs relevant checks, and verifies every binding requirement.
-
-It returns:
-
-```text
-PASS
-CHANGES_REQUIRED
-BLOCKED
-```
-
-- `PASS` — every binding requirement was verified.
-- `CHANGES_REQUIRED` — at least one binding requirement failed.
-- `BLOCKED` — Audit could not establish whether every requirement was satisfied.
-
-Audit does not require Build to follow advisory technical suggestions.
+The process runs every delivery phase, independent reviews, corrections, implementation
+registration, and fresh final Audits until it reaches a published Audit PASS or a real external
+blocker. There are no normal `next`, `accept`, `continue`, or Audit-window steps. Technical
+suggestions remain advisory.
 
 For more detail, see [Build and Audit](build-and-audit.md).
 
@@ -230,11 +187,9 @@ Once installed:
 
 4. Approve the Reconciled Discovery.
 
-5. Give reconciled-discovery.md to Build.
-   Tell Build to commit and register when done.
+5. $build with the approved detailed implementation plan.
 
-6. $audit
-   Effort: <effort-id>
+6. From the target repository: orchestrate build
 ```
 
 Everything else in the docs is explanation or reference.

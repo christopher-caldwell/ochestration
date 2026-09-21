@@ -3,7 +3,7 @@
 Orchestrate is deterministic machinery for an interactive model-window workflow:
 
 ```text
-Prepare → Discovery × N → Reconcile → explicit approval → external Build → Audit
+Prepare → Discovery × N → Reconcile → explicit approval → Build → Audit
 ```
 
 The model does the engineering work. Orchestrate keeps the request, Discovery runs, reconciled
@@ -44,10 +44,10 @@ You normally do **not** operate the Orchestrate CLI yourself. The `discovery`, `
 Open this checkout in Codex, Claude Code, or Cursor and tell the model:
 
 > Install Orchestrate from this checkout for the model host I am using. Follow
-> `docs/guides/agent-installation.md`, install the CLI and all five checked-in skills, and verify
+> `docs/guides/agent-installation.md`, install the CLI and all ten checked-in skills, and verify
 > the installation.
 
-The five user-facing skills are:
+The user-facing skills are:
 
 ```text
 prep-discovery-ticket
@@ -55,6 +55,11 @@ prep-discovery-freeform
 discovery
 reconcile
 audit
+build
+work
+review
+work-follow-up
+review-follow-up
 ```
 
 See the [installation guide](docs/guides/agent-installation.md) for the manual fallback.
@@ -64,7 +69,7 @@ See the [installation guide](docs/guides/agent-installation.md) for the manual f
 - **Discovery** investigates the frozen repository and may ask you material questions.
 - **Reconcile** analyzes only the Discovery outputs you explicitly give it and produces the
   authoritative answer to "what are we actually going to do?"
-- **Build** is external and decides how to implement that reconciled result.
+- **Build** is an unattended Rust-driven worker/reviewer loop for an approved phased plan.
 - **Audit** checks the exact registered implementation against the binding reconciled requirements.
 
 For deeper details, see the [documentation index](docs/README.md) and

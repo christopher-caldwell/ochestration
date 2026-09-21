@@ -10,9 +10,9 @@ Discovery N ─┘
 
 The model window owns interaction: it investigates, asks the user material questions, reconciles
 meaning, and evaluates implementation. Rust is a referee: it freezes exact inputs, creates
-workspaces, validates structure and provenance, publishes immutable bundles, binds lineage, and
-derives Audit verdicts. Rust never votes, ranks models, assigns confidence, launches a provider,
-or determines engineering truth.
+workspaces, validates structure and provenance, publishes immutable bundles, binds lineage,
+drives the fixed Build work/review loop, and derives Audit verdicts. Rust never votes, ranks
+models, assigns confidence, or determines engineering truth.
 
 An effort freezes a reviewed request, explicit constraints, canonical target project, baseline
 commit, and baseline tree. It intentionally does not freeze Discovery count, provider identity,
@@ -53,9 +53,12 @@ An empty `blocking_issues` list produces an implementation-ready result. Non-emp
 
 ## Adoption, Build, and Audit
 
-Adoption is a human authorization receipt for one exact Reconciled Discovery. Build remains
-external. Registration records the adoption, reconciled artifact, starting baseline, exact target
-commit/tree, producer declaration, and status while retaining an immutable snapshot.
+Adoption is a human authorization receipt for one exact Reconciled Discovery. A prepared Build
+stores only its exact adoption, phase/task grouping, host settings, controller state, and durable
+role reports in the external store. Rust moves one worker and independent reviewer through whole
+delivery phases; task IDs do not create extra stops. Registration records the adoption, reconciled
+artifact, starting baseline, exact target commit/tree, producer declaration, and status while
+retaining an immutable snapshot.
 
 Audit evaluates only the binding requirements from the exact Reconciled Discovery against that
 exact implementation. It can inspect the snapshot and run tests, but cannot invent product

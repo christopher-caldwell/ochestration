@@ -20,7 +20,7 @@ const AUDIT_GUIDE: &str = include_str!("../resources/guides/audit.md");
 #[command(
     name = "orchestrate",
     version,
-    about = "Inspectable Discovery × N → Reconcile → external Build → Audit"
+    about = "Inspectable Discovery × N → Reconcile → Build → Audit"
 )]
 struct Cli {
     #[arg(long, global = true)]
@@ -47,6 +47,7 @@ enum Command {
         #[command(subcommand)]
         command: AuditCommand,
     },
+    Build(Build),
     Journal(SelectEffort),
     Status(SelectEffort),
     Inspect(Inspect),
@@ -83,6 +84,14 @@ struct Inspect {
     effort: String,
     #[arg(long)]
     artifact: String,
+}
+#[derive(Args)]
+struct Build {
+    #[arg(
+        long,
+        help = "Prepared effort; inferred only when exactly one Build is eligible"
+    )]
+    effort: Option<String>,
 }
 #[derive(Subcommand)]
 enum Discovery {
@@ -459,6 +468,24 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 serde_json::json!({"audit": reference, "verdict": verdict}),
             );
         }
+        Command::Build(args) => match orchestrate_build::run(
+            &store,
+            orchestrate_build::BuildRequest {
+                effort: args.effort,
+                project: std::env::current_dir()?,
+            },
+        )? {
+            orchestrate_build::BuildResult::Completed(done) => output(
+                "SUCCESS",
+                "BUILD_COMPLETE",
+                serde_json::json!({"implementation": done.implementation, "audit": done.audit}),
+            ),
+            orchestrate_build::BuildResult::Blocked { detail, state } => output(
+                "STOPPED",
+                "BLOCKED",
+                serde_json::json!({"detail": detail, "state": state}),
+            ),
+        },
         Command::Journal(args) => {
             let effort = store.load_effort(&args.effort)?;
             output(
@@ -469,10 +496,11 @@ fn execute(store: Store, command: Command) -> Result<()> {
         }
         Command::Status(args) => {
             let effort = store.load_effort(&args.effort)?;
+            let build_dir = store.phase_dir(&effort, "build")?;
             output(
                 "SUCCESS",
                 "READ_ONLY",
-                serde_json::json!({"effort": effort, "artifacts": store.list_artifacts(&effort)?}),
+                serde_json::json!({"effort": effort, "build_dir": build_dir, "artifacts": store.list_artifacts(&effort)?}),
             );
         }
         Command::Inspect(args) => {

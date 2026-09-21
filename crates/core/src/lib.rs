@@ -249,6 +249,52 @@ impl Store {
             _ => bail!("ambiguous effort {effort_id}"),
         }
     }
+    /// Return every effort for one canonical project identity.  Callers that need to
+    /// select an effort must still apply their own explicit eligibility rules; this
+    /// deliberately does not infer a "latest" effort.
+    pub fn efforts_for_project(&self, project: &Project) -> Result<Vec<Effort>> {
+        let root = self.root.join("projects").join(&project.id).join("efforts");
+        if !root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut efforts: Vec<Effort> = Vec::new();
+        for entry in fs::read_dir(root)? {
+            let path = entry?.path();
+            if path.join("effort.json").is_file() {
+                efforts.push(read_json(&path.join("effort.json"))?);
+            }
+        }
+        efforts.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(efforts)
+    }
+    /// Resolve an effort project by its canonical checkout location without using a
+    /// presentation slug.  This is intentionally read-only and returns no match
+    /// when the store has not seen the checkout.
+    pub fn project_by_locator(&self, locator: &Path) -> Result<Option<Project>> {
+        let projects = self.root.join("projects");
+        if !projects.exists() {
+            return Ok(None);
+        }
+        for entry in fs::read_dir(projects)? {
+            let project_path = entry?.path();
+            let file = project_path.join("efforts");
+            if !file.exists() {
+                continue;
+            }
+            for effort in fs::read_dir(file)? {
+                let effort_path = effort?.path();
+                let project_file = effort_path.join("project.json");
+                if project_file.is_file() {
+                    let project: Project = read_json(&project_file)?;
+                    if project.canonical_locator == locator {
+                        return Ok(Some(project));
+                    }
+                    break;
+                }
+            }
+        }
+        Ok(None)
+    }
     pub fn project_for(&self, effort: &Effort) -> Result<Project> {
         read_json(
             &self

@@ -3,6 +3,6 @@ description: Route explicit Orchestration skill installation and updates to the 
 alwaysApply: false
 ---
 
-For an explicit request to install or update Orchestration skills, follow `docs/guides/agent-installation.md`. In Cursor, install the five checked-in folders into `~/.cursor/skills/` or an established compatible custom skill location.
+For an explicit request to install or update Orchestration skills, follow `docs/guides/agent-installation.md`. In Cursor, install the ten checked-in folders into `~/.cursor/skills/` or an established compatible custom skill location.
 
 Do not apply this rule to ordinary code-editing requests.
