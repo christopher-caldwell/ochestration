@@ -34,13 +34,13 @@ Open a fresh model window:
 $reconcile "/path/discovery-1" "/path/discovery-2" "/path/discovery-3" ...
 ```
 
-Review the Reconciled Discovery and approve it if the binding requirements are what you want built.
+Review the Reconciled Discovery. Reconcile stops after reporting the selected direction and artifact.
 
 Keep the reconciled document path and effort ID.
 
 ## 4. Build
 
-Use `$build` with the effort and the approved detailed implementation plan.
+Later, explicitly use `$build` with the effort and detailed implementation plan.
 
 Build runs the delivery phases, reviews, corrections, implementation registration, and the final
 Audit until it finishes or needs something only you can provide.

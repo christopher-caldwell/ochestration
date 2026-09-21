@@ -1,7 +1,7 @@
 use orchestrate_contracts::{
     ArtifactKind, ArtifactRef, AuditAssessment, Coverage, CoverageState, DiscoverySourceRef,
-    EvidenceKind, EvidenceNode, EvidenceStatus, ReconcileProposal, ReconciledDiscovery,
-    ReconciledRequirement, Requirement, TechnicalSuggestion,
+    EvidenceKind, EvidenceNode, EvidenceStatus, EvidenceSynthesis, ReconcileProposal,
+    ReconciledDiscovery, ReconciledRequirement, Requirement, TechnicalSuggestion, Verification,
 };
 use orchestrate_core::Store;
 use std::{
@@ -104,6 +104,7 @@ fn node(
     depends_on: Vec<&str>,
     mandatory: bool,
 ) -> EvidenceNode {
+    let verification = matches!(kind, EvidenceKind::Finding).then_some(Verification::Inspection);
     EvidenceNode {
         id: id.into(),
         kind,
@@ -114,12 +115,14 @@ fn node(
         mandatory,
         title: id.into(),
         body: "evidence".into(),
+        verification,
     }
 }
 fn write_node(workspace: &Path, node: &EvidenceNode) {
     let front = serde_yaml::to_string(&serde_json::json!({
         "id": node.id, "kind": node.kind, "status": node.status, "depends_on": node.depends_on,
-        "sources": node.sources, "required": node.required, "mandatory": node.mandatory
+        "sources": node.sources, "required": node.required, "mandatory": node.mandatory,
+        "verification": node.verification
     }))
     .unwrap();
     fs::write(
@@ -197,6 +200,11 @@ fn finalize_blocked_discovery(root: &Path, effort: &str) -> ArtifactRef {
 fn proposal(source: &ArtifactRef) -> ReconcileProposal {
     ReconcileProposal {
         core_result: "Deliver the requested behavior while preserving existing behavior.".into(),
+        problem: "The requested behavior is not currently delivered.".into(),
+        product_behavior_changed: vec!["The requested behavior is delivered.".into()],
+        product_behavior_unchanged: vec!["Unrelated behavior remains unchanged.".into()],
+        technical_behavior_changed: vec!["The focused implementation path changes.".into()],
+        technical_behavior_unchanged: vec!["Unrelated internals remain unchanged.".into()],
         requirements: vec![ReconciledRequirement {
             requirement: Requirement {
                 id: "R-1".into(),
@@ -212,6 +220,22 @@ fn proposal(source: &ArtifactRef) -> ReconcileProposal {
             user_clarification: None,
             frozen_user_constraint: false,
         }],
+        evidence_synthesis: vec![EvidenceSynthesis {
+            id: "E-1".into(),
+            conclusion: "The requested behavior needs implementation.".into(),
+            source_refs: vec![DiscoverySourceRef {
+                discovery_artifact_id: source.artifact_id.clone(),
+                node_id: Some("F-1".into()),
+            }],
+            verification_methods: vec![Verification::Inspection],
+            evidence_summary: "The source was inspected.".into(),
+            limitations: "No controlled reproduction was needed for this fixture.".into(),
+        }],
+        disagreements: vec![],
+        rejected_alternatives: vec![],
+        implementation_risks: vec![],
+        compatibility_concerns: vec![],
+        caveats: vec![],
         technical_suggestions: vec![TechnicalSuggestion {
             id: "TS-1".into(),
             text: "An optional implementation technique.".into(),
@@ -354,6 +378,138 @@ fn concurrent_identical_initialization_converges_on_one_frozen_effort() {
 }
 
 #[test]
+fn effort_slug_freezes_request_and_constraints_but_other_slugs_are_allowed() {
+    let root = temporary("immutable-effort-store");
+    let repo = create_repo("immutable-effort");
+    let init = |slug: &str, request: &str, constraint: &str| {
+        command(
+            &root,
+            &[
+                "init",
+                "--project",
+                repo.to_str().unwrap(),
+                "--effort",
+                slug,
+                "--request",
+                request,
+                "--constraint",
+                constraint,
+            ],
+        )
+    };
+    let first = init("age-351", "request A", "constraint A");
+    let repeated = init("age-351", "request A", "constraint A");
+    assert_eq!(first["details"]["effort"], repeated["details"]["effort"]);
+    assert!(
+        command_error(
+            &root,
+            &[
+                "init",
+                "--project",
+                repo.to_str().unwrap(),
+                "--effort",
+                "age-351",
+                "--request",
+                "request B",
+                "--constraint",
+                "constraint A"
+            ]
+        )
+        .contains("prepared request is immutable")
+    );
+    assert!(
+        command_error(
+            &root,
+            &[
+                "init",
+                "--project",
+                repo.to_str().unwrap(),
+                "--effort",
+                "age-351",
+                "--request",
+                "request A",
+                "--constraint",
+                "constraint B"
+            ]
+        )
+        .contains("prepared request is immutable")
+    );
+    assert_eq!(
+        init("age-351-revised", "request B", "constraint B")["semantic_outcome"],
+        "EFFORT_READY"
+    );
+}
+
+#[test]
+fn storage_uses_human_names_while_preserving_internal_identity_and_file_provenance() {
+    let root = temporary("human-storage-store");
+    let repo = create_repo("DB_Financial_Tracker");
+    let prepared = temporary("prepared-source").join("prepared.md");
+    fs::write(&prepared, format!("---\nroot: {}\nproject: {}\neffort: add_new_endpoint_for_sales\nrequest_kind: freeform\nconstraints: []\n---\nrequest\n", root.display(), repo.display())).unwrap();
+    let result = command(&root, &["init", "--from-file", prepared.to_str().unwrap()]);
+    let effort_id = result["details"]["effort"].as_str().unwrap();
+    let store = Store::open(&root).unwrap();
+    let effort = store.load_effort(effort_id).unwrap();
+    let project_name = repo.file_name().unwrap().to_string_lossy().to_lowercase();
+    let directory = root
+        .join("projects")
+        .join(project_name)
+        .join("efforts")
+        .join("add_new_endpoint_for_sales");
+    assert!(directory.join("effort.json").is_file());
+    assert!(effort.id.starts_with("effort-") && effort.context.id.starts_with("ctx-"));
+    let source = effort.prepared_source.unwrap();
+    assert_eq!(source.absolute_path, fs::canonicalize(&prepared).unwrap());
+    assert_eq!(source.sha256.len(), 64);
+    assert!(source.initialized_at_ms > 0);
+}
+
+#[test]
+fn colliding_human_project_names_from_different_repositories_are_rejected() {
+    let root = temporary("project-collision-store");
+    let first_parent = temporary("project-collision-a");
+    let second_parent = temporary("project-collision-b");
+    let first = first_parent.join("same_name");
+    let second = second_parent.join("same_name");
+    for repo in [&first, &second] {
+        fs::create_dir_all(repo).unwrap();
+        git(repo, &["init"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        git(repo, &["config", "user.name", "Test"]);
+        fs::write(repo.join("source.txt"), "baseline\n").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "baseline"]);
+    }
+    command(
+        &root,
+        &[
+            "init",
+            "--project",
+            first.to_str().unwrap(),
+            "--effort",
+            "one",
+            "--request",
+            "one",
+        ],
+    );
+    assert!(
+        command_error(
+            &root,
+            &[
+                "init",
+                "--project",
+                second.to_str().unwrap(),
+                "--effort",
+                "two",
+                "--request",
+                "two"
+            ]
+        )
+        .contains("already used by a different canonical repository")
+    );
+}
+
+#[test]
 fn discovery_is_arbitrarily_repeatable_without_slots() {
     let (root, _repo, effort) = new_effort("many-discoveries");
     let artifacts: Vec<_> = (0..5).map(|_| finalize_discovery(&root, &effort)).collect();
@@ -371,6 +527,50 @@ fn discovery_is_arbitrarily_repeatable_without_slots() {
             .iter()
             .all(|artifact| artifact.kind == ArtifactKind::Discovery)
     );
+}
+
+#[test]
+fn discovery_verification_and_human_source_label_round_trip() {
+    let (root, _repo, effort) = new_effort("discovery-provenance");
+    let prepared = command(
+        &root,
+        &[
+            "discovery",
+            "prepare",
+            "--effort",
+            &effort,
+            "--host",
+            "Codex",
+        ],
+    );
+    let label = prepared["details"]["source_label"].as_str().unwrap();
+    assert!(label.starts_with("codex_"));
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace(&workspace);
+    let run = prepared["details"]["run"].as_str().unwrap();
+    let artifact = reference(
+        &command(
+            &root,
+            &["discovery", "finalize", "--effort", &effort, "--run", run],
+        ),
+        "artifact",
+    );
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    let (_, _, nodes) =
+        orchestrate_discovery::load_discovery(&store, &effort_state, &artifact).unwrap();
+    assert_eq!(
+        nodes
+            .iter()
+            .find(|node| node.id == "F-1")
+            .unwrap()
+            .verification,
+        Some(Verification::Inspection)
+    );
+    let (_, files) = store.load_bundle(&effort_state, &artifact).unwrap();
+    let run: orchestrate_contracts::DiscoveryRun =
+        orchestrate_contracts::decode(&files["run.json"]).unwrap();
+    assert_eq!(run.source_label, label);
 }
 
 #[test]
@@ -455,12 +655,14 @@ fn reconciliation_preserves_exact_parents_and_allows_a_minority_source() {
         "one strong Discovery source is structurally sufficient"
     );
     assert_eq!(reconciled_payload.technical_suggestions.len(), 1);
+    assert_eq!(reconciled_payload.discovery_attribution.len(), 3);
+    let files = store.load_bundle(&effort_state, &reconciled).unwrap().1;
+    let markdown = String::from_utf8(files["reconciled-discovery.md"].clone()).unwrap();
     assert!(
-        store
-            .load_bundle(&effort_state, &reconciled)
-            .unwrap()
-            .1
-            .contains_key("reconciled-discovery.md")
+        reconciled_payload
+            .discovery_attribution
+            .iter()
+            .all(|source| markdown.contains(&source.label))
     );
 }
 

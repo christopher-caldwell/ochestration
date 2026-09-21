@@ -1,54 +1,67 @@
 # Reconcile guide
 
-Input is two or more finalized Discovery output directories. Read each `manifest.json`, `discovery.json`, and public files. Require `kind: discovery`, outcome `IMPLEMENTATION_READY`, and one common effort, context, and frozen baseline. Extract exactly the supplied artifact IDs; do not add later or otherwise available Discoveries.
-
-Resolve the set before semantic work. Pass every user-supplied artifact id exactly once:
+Input is two or more explicitly selected finalized Discovery output directories. Resolve the exact set before semantic work:
 
 ```sh
 orchestrate --root "<root>" reconcile inputs --effort "<effort>" \
   --discovery "<artifact-1>" --discovery "<artifact-2>"
 ```
 
-Reconcile is a closed-world semantic phase. Determine the strongest defensible answer to **what are we actually going to do?** using only the frozen request and constraints plus the exact finalized Discovery artifacts selected by `orchestrate reconcile inputs`.
+Require `kind: discovery`, outcome `IMPLEMENTATION_READY`, and one common effort, context, and frozen baseline. Read each selected bundle's `manifest.json`, `run.json`, `discovery.json`, `technical-spec.md`, and public evidence graph. Use its stable source label—such as `claude_ab12cd34` or `codex_ef56ab78`—when discussing agreement or disagreement, and preserve the label-to-artifact mapping.
 
-Do not inspect the target repository, a `source/` checkout, Git history, tests, web or vendor documentation, private Discovery chats, or mutable workspaces. Do not acquire new engineering evidence. You may analyze the selected artifacts deeply: compare their reasoning, recognize equivalent findings, distinguish silence from disagreement, retain a strong minority finding, combine complementary findings, and identify genuine gaps. Agreement count is informative, never an acceptance rule. Reconcile may preserve a strong minority finding.
+Reconcile is synthesis only. Its engineering evidence is exactly the selected finalized public Discovery outputs. Do not inspect the target repository, any Discovery `source/` workspace, private chats, mutable workspaces, tests, Git history, vendor documentation, or the web. Do not run tests or experiments, and do not introduce a technical theory from outside the supplied outputs. Store metadata may be used only for identity, lineage, baseline, and artifact validation.
 
-Write `reconcile-proposal.json` outside the repository and published artifact directories. Its shape is:
+Answer: **given only these Discovery outputs, what do they collectively establish, and what is the best-supported direction?** Produce one leading direction. Compare agreement, evidence quality, applicability, limitations, and disagreement; agreement count is informative but is not voting. `experiment` is not an automatic winner over `inspection` or `corroborated`. Evaluate whether an experiment tested the disputed claim, used a representative fixture, encoded the answer, omitted variables, overreached its observation, or conflicts with other strong evidence.
+
+With exactly two inputs, never invent a majority or choose by model identity. Choose the better-supported direction when the evidence distinguishes them. If a genuine material tie or missing user-authority choice remains, ask the user before finalization and record the answer through `user_clarification`. If competent Discovery should have surfaced the question, identify it as a Discovery coverage failure. User answers are direct authority, not new engineering evidence. After an answer, still converge on one direction.
+
+Write `reconcile-proposal.json` outside the repository and published bundles. It is the single authoritative structured contract. Include:
 
 ```json
 {
-  "core_result": "The concise authoritative result.",
+  "core_result": "One clear selected direction.",
+  "problem": "The original problem as established by Discovery.",
+  "product_behavior_changed": ["..."],
+  "product_behavior_unchanged": ["..."],
+  "technical_behavior_changed": ["..."],
+  "technical_behavior_unchanged": ["..."],
   "requirements": [{
-    "requirement": {"id": "R-1", "text": "Binding behavior.", "acceptance": "How Audit can verify it.", "condition": null, "governing": false},
+    "requirement": {"id": "R-1", "text": "Binding behavior.", "acceptance": "Precise verification.", "condition": null, "governing": false},
     "source_refs": [{"discovery_artifact_id": "discovery-...", "node_id": "R-1"}]
   }],
+  "evidence_synthesis": [{
+    "id": "E-1",
+    "conclusion": "Significant conclusion.",
+    "source_refs": [{"discovery_artifact_id": "discovery-...", "node_id": "F-1"}],
+    "verification_methods": ["experiment"],
+    "evidence_summary": "What the selected evidence establishes and why it applies.",
+    "limitations": "What it does not establish and remaining assumptions."
+  }],
+  "disagreements": ["Important disagreement and its disposition."],
+  "rejected_alternatives": [{
+    "direction": "Strongest rejected direction.",
+    "reason": "Why the selected direction is better supported.",
+    "source_refs": [{"discovery_artifact_id": "discovery-...", "node_id": "F-2"}]
+  }],
+  "implementation_risks": ["..."],
+  "compatibility_concerns": ["..."],
+  "caveats": ["..."],
   "technical_suggestions": [{
     "id": "TS-1",
-    "text": "Optional implementation direction.",
-    "source_refs": [{"discovery_artifact_id": "discovery-...", "node_id": "F-2"}]
+    "text": "Advisory implementation direction.",
+    "source_refs": [{"discovery_artifact_id": "discovery-...", "node_id": "F-3"}]
   }],
   "blocking_issues": []
 }
 ```
 
-`core_result` is the concise authoritative answer to what will be done. `requirements` are the exhaustive, auditable decomposition of every implementation-affecting obligation in that result; each has acceptance criteria. `technical_suggestions` are advisory only.
+The requirements must exhaustively decompose every binding, implementation-affecting obligation and include precise acceptance criteria and conditions. Preserve intentionally unchanged behavior, evidence mapping, experiment summaries and limitations, credible disagreement, rejected alternatives, risks, compatibility concerns, caveats, and useful advisory suggestions. Use empty arrays when a category genuinely has nothing to report; do not omit fields.
 
-An ordinary model-derived requirement must have at least one `source_refs` entry from the exact selected input set. A technical suggestion likewise needs at least one selected Discovery source. A referenced node ID must exist in that Discovery. Never set `requirement.governing` to `true` or `frozen_user_constraint` to `true`: Rust rejects model-supplied governing authority. Frozen effort constraints are added mechanically as governing requirements.
+Ordinary requirements, evidence synthesis, rejected alternatives, and technical suggestions may cite only the exact selected Discovery artifacts, and referenced node IDs must exist. Never set `requirement.governing` or `frozen_user_constraint`; Rust adds frozen constraints mechanically. An actual Reconcile-time user answer may instead authorize a requirement with empty `source_refs` and `user_clarification` containing the exact answer. It cannot also cite Discovery sources.
 
-When an explicit answer from the user during this Reconcile conversation resolves a material intent choice, it may be represented as direct user authority instead:
+Rust deterministically renders `reconciled-discovery.md` from this contract. Do not submit separate specification Markdown. Technical suggestions remain advisory; make an architectural property binding only when it must be audited. A non-empty `blocking_issues` list is reserved for a material issue that cannot responsibly be resolved from selected evidence or user authority.
 
-```json
-"source_refs": [],
-"user_clarification": "The exact user answer that resolved this requirement."
-```
-
-Use this only for an actual Reconcile-time user answer, never for new engineering evidence. A requirement with `user_clarification` cannot also cite Discovery sources. It does not permit source, Git, tests, experiments, web, vendor documentation, private Discovery conversations, or mutable workspaces. Rust records it as governing authority only through this explicit mechanism.
-
-Rust deterministically renders `reconciled-discovery.md` from the finalized structured contract. Do not submit Markdown for that document or rely on prose outside the structured `core_result`, requirements, suggestions, and blocking issues. The document the user reviews is therefore the same contract Audit reads.
-
-Technical suggestions are advisory. Promote an architectural property to a binding requirement only when that property itself must be audited. If a material question cannot be resolved from the selected artifacts or explicit user direction, use a non-empty `blocking_issues` list rather than inventing an answer. Ask the user when appropriate.
-
-Finalize against the same exact IDs passed to `inputs`:
+Finalize against the same exact IDs:
 
 ```sh
 orchestrate --root "<root>" reconcile finalize --effort "<effort>" \
@@ -56,11 +69,14 @@ orchestrate --root "<root>" reconcile finalize --effort "<effort>" \
   --bundle "<absolute path to reconcile-proposal.json>"
 ```
 
-Show the resulting `reconciled-discovery.md` to the user. Explain the binding result separately from advisory technical suggestions. Ask whether they explicitly approve Build against this exact artifact. Only after an affirmative answer may you run:
+Then stop. Do not inspect code, create Adoption, ask for Build approval, start Build, or suggest continuing immediately. The normal chat response is concise:
 
-```sh
-orchestrate --root "<root>" reconcile adopt --effort "<effort>" \
-  --reconciled "<artifact-id>" --authorization-label "<user label>"
+```text
+Result: <one clear selected direction>
+
+Key caveat: <only if materially important>
+
+Artifact: <absolute path>
 ```
 
-Never adopt automatically. A blocked Reconciled Discovery cannot be adopted. An implementation-ready Reconciled Discovery may be adopted only after that explicit affirmative approval.
+The artifact tells Build why; chat tells the user the answer.

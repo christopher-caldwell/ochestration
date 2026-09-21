@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn templates_are_embedded() {
-        assert!(templates::PLAN_JSON.contains("\"schema_version\": 1"));
+        assert!(templates::PLAN_JSON.contains("\"schema_version\": 2"));
         assert!(templates::CONFIG_TOML.contains("schema_version = 2"));
     }
 }

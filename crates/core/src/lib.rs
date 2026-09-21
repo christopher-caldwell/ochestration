@@ -23,6 +23,7 @@ static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct Project {
     pub id: String,
     pub display_name: String,
+    pub storage_name: String,
     pub canonical_locator: PathBuf,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -41,6 +42,15 @@ pub struct Effort {
     pub context: ContextRevision,
     pub baseline_commit: String,
     pub baseline_tree: String,
+    pub project_storage_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared_source: Option<PreparedSource>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PreparedSource {
+    pub absolute_path: PathBuf,
+    pub sha256: String,
+    pub initialized_at_ms: u128,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct StoreMarker {
@@ -146,6 +156,17 @@ impl Store {
         request: String,
         constraints: Vec<String>,
     ) -> Result<Effort> {
+        self.init_effort_with_source(repo, slug, request_kind, request, constraints, None)
+    }
+    pub fn init_effort_with_source(
+        &self,
+        repo: &Path,
+        slug: &str,
+        request_kind: RequestKind,
+        request: String,
+        constraints: Vec<String>,
+        prepared_source: Option<PreparedSource>,
+    ) -> Result<Effort> {
         validate_label(slug)?;
         let canonical_repo = fs::canonicalize(repo)
             .with_context(|| format!("cannot canonicalize repository {}", repo.display()))?;
@@ -153,15 +174,17 @@ impl Store {
             canonical_repo.join(".git").exists(),
             "target is not a supported Git repository"
         );
-        let baseline = capture_git_identity(&canonical_repo)?;
         let project_id = short_digest(canonical_repo.to_string_lossy().as_bytes());
+        let display_name = canonical_repo
+            .file_name()
+            .and_then(|p| p.to_str())
+            .unwrap_or("project")
+            .to_owned();
+        let storage_name = storage_name(&display_name)?;
         let project = Project {
             id: project_id.clone(),
-            display_name: canonical_repo
-                .file_name()
-                .and_then(|p| p.to_str())
-                .unwrap_or("project")
-                .to_owned(),
+            display_name,
+            storage_name: storage_name.clone(),
             canonical_locator: canonical_repo.clone(),
         };
         let context_bytes = encode(&ContextFingerprint {
@@ -177,10 +200,20 @@ impl Store {
             constraints,
             digest: context_digest,
         };
+        let dir = self
+            .root
+            .join("projects")
+            .join(&storage_name)
+            .join("efforts")
+            .join(slug);
+        if dir.exists() {
+            return self.verify_existing_effort(&dir, &project, slug, &context);
+        }
+        self.ensure_project(&project)?;
+        let baseline = capture_git_identity(&canonical_repo)?;
         let effort_id = format!(
-            "{}-{}",
-            slugify(slug),
-            &short_digest(format!("{}:{}", project_id, context.id).as_bytes())[..10]
+            "effort-{}",
+            short_digest(format!("{}:{slug}", project_id).as_bytes())
         );
         let effort = Effort {
             id: effort_id,
@@ -189,11 +222,9 @@ impl Store {
             context,
             baseline_commit: baseline.commit,
             baseline_tree: baseline.tree,
+            project_storage_name: storage_name,
+            prepared_source,
         };
-        let dir = self.effort_dir(&effort.project_id, &effort.id);
-        if dir.exists() {
-            return self.verify_existing_effort(&dir, &effort);
-        }
         // Write the complete effort off to the side, then atomically publish it.  Concurrent
         // model windows either win this rename or read the complete effort the winner wrote.
         self.materialize_snapshot(&canonical_repo, &effort.baseline_commit)?;
@@ -202,7 +233,6 @@ impl Store {
             .join(".staging")
             .join(format!("effort-{}", unique_id()));
         fs::create_dir_all(&stage)?;
-        write_json_atomic(&stage.join("project.json"), &project)?;
         write_json_atomic(&stage.join("effort.json"), &effort)?;
         write_bytes_sync(&stage.join("request.md"), effort.context.request.as_bytes())?;
         sync_dir(&stage)?;
@@ -218,13 +248,45 @@ impl Store {
                 )?;
                 Ok(effort)
             }
-            Err(_error) if dir.exists() => self.verify_existing_effort(&dir, &effort),
+            Err(_error) if dir.exists() => {
+                self.verify_existing_effort(&dir, &project, slug, &effort.context)
+            }
             Err(error) => {
                 Err(error).with_context(|| format!("cannot initialize effort {}", effort.id))
             }
         }
     }
-    fn verify_existing_effort(&self, dir: &Path, expected: &Effort) -> Result<Effort> {
+    fn ensure_project(&self, expected: &Project) -> Result<()> {
+        let dir = self.root.join("projects").join(&expected.storage_name);
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("project.json");
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(&encode(expected)?)?;
+                file.sync_all()?;
+                sync_dir(&dir)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let existing: Project = read_json(&path)?;
+                ensure!(
+                    existing.canonical_locator == expected.canonical_locator
+                        && existing.id == expected.id,
+                    "project storage name '{}' is already used by a different canonical repository at {}; rename one repository directory before initializing",
+                    expected.storage_name,
+                    existing.canonical_locator.display()
+                );
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+    fn verify_existing_effort(
+        &self,
+        dir: &Path,
+        project: &Project,
+        slug: &str,
+        expected_context: &ContextRevision,
+    ) -> Result<Effort> {
         ensure!(
             dir.join("effort.json").is_file(),
             "effort directory already exists but is malformed: {}",
@@ -232,13 +294,17 @@ impl Store {
         );
         let existing: Effort = read_json(&dir.join("effort.json"))?;
         ensure!(
-            existing.slug == expected.slug
-                && existing.project_id == expected.project_id
-                && existing.context.request_kind == expected.context.request_kind
-                && existing.context.request == expected.context.request
-                && existing.context.constraints == expected.context.constraints,
-            "effort already exists with a different frozen identity: {}; choose a new effort slug or reuse the same prepared request unchanged",
-            expected.id
+            existing.project_id == project.id,
+            "project storage name '{}' is already used by a different canonical repository; rename one repository directory before initializing",
+            project.storage_name
+        );
+        ensure!(
+            existing.slug == slug
+                && existing.context.request_kind == expected_context.request_kind
+                && existing.context.request == expected_context.request
+                && existing.context.constraints == expected_context.constraints,
+            "Effort \"{}\" already exists with a different frozen request or constraints. An effort's prepared request is immutable. Discovery-time clarifications must be recorded inside the Discovery run, not used to initialize a different request under the same effort.",
+            slug
         );
         Ok(existing)
     }
@@ -255,7 +321,7 @@ impl Store {
     /// select an effort must still apply their own explicit eligibility rules; this
     /// deliberately does not infer a "latest" effort.
     pub fn efforts_for_project(&self, project: &Project) -> Result<Vec<Effort>> {
-        let root = self.root.join("projects").join(&project.id).join("efforts");
+        let root = self.project_dir(project).join("efforts");
         if !root.exists() {
             return Ok(Vec::new());
         }
@@ -279,19 +345,11 @@ impl Store {
         }
         for entry in fs::read_dir(projects)? {
             let project_path = entry?.path();
-            let file = project_path.join("efforts");
-            if !file.exists() {
-                continue;
-            }
-            for effort in fs::read_dir(file)? {
-                let effort_path = effort?.path();
-                let project_file = effort_path.join("project.json");
-                if project_file.is_file() {
-                    let project: Project = read_json(&project_file)?;
-                    if project.canonical_locator == locator {
-                        return Ok(Some(project));
-                    }
-                    break;
+            let project_file = project_path.join("project.json");
+            if project_file.is_file() {
+                let project: Project = read_json(&project_file)?;
+                if project.canonical_locator == locator {
+                    return Ok(Some(project));
                 }
             }
         }
@@ -300,20 +358,25 @@ impl Store {
     pub fn project_for(&self, effort: &Effort) -> Result<Project> {
         read_json(
             &self
-                .effort_dir(&effort.project_id, &effort.id)
+                .root
+                .join("projects")
+                .join(&effort.project_storage_name)
                 .join("project.json"),
         )
     }
-    pub fn effort_dir(&self, project_id: &str, effort_id: &str) -> PathBuf {
+    pub fn project_dir(&self, project: &Project) -> PathBuf {
+        self.root.join("projects").join(&project.storage_name)
+    }
+    pub fn effort_dir(&self, effort: &Effort) -> PathBuf {
         self.root
             .join("projects")
-            .join(project_id)
+            .join(&effort.project_storage_name)
             .join("efforts")
-            .join(effort_id)
+            .join(&effort.slug)
     }
     pub fn phase_dir(&self, effort: &Effort, phase: &str) -> Result<PathBuf> {
         validate_label(phase)?;
-        let path = self.effort_dir(&effort.project_id, &effort.id).join(phase);
+        let path = self.effort_dir(effort).join(phase);
         fs::create_dir_all(&path)?;
         Ok(path)
     }
@@ -324,9 +387,7 @@ impl Store {
         run_id: Option<&str>,
         details: serde_json::Value,
     ) -> Result<()> {
-        let path = self
-            .effort_dir(&effort.project_id, &effort.id)
-            .join("journal.jsonl");
+        let path = self.effort_dir(effort).join("journal.jsonl");
         let record = JournalEvent {
             event: event.into(),
             ts_ms: now_ms(),
@@ -344,9 +405,7 @@ impl Store {
         })
     }
     pub fn read_journal(&self, effort: &Effort) -> Result<Vec<JournalEvent>> {
-        let path = self
-            .effort_dir(&effort.project_id, &effort.id)
-            .join("journal.jsonl");
+        let path = self.effort_dir(effort).join("journal.jsonl");
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -468,6 +527,7 @@ impl Store {
             TECHNICAL_SPEC_TEMPLATE.as_bytes(),
         )?;
         fs::create_dir_all(root.join("graph"))?;
+        fs::create_dir_all(root.join("scratch"))?;
         self.append_journal(
             effort,
             "discovery_workspace_prepared",
@@ -659,13 +719,16 @@ impl Store {
         let envelope: Envelope = decode(&bytes)?;
         Ok(artifact_ref(&envelope, &bytes))
     }
+    pub fn artifact_dir(&self, effort: &Effort, artifact_id: &str) -> Result<PathBuf> {
+        self.find_artifact_dir(effort, artifact_id)
+    }
     pub fn load_envelope(&self, effort: &Effort, reference: &ArtifactRef) -> Result<Envelope> {
         Ok(self.load_bundle(effort, reference)?.0)
     }
     pub fn list_artifacts(&self, effort: &Effort) -> Result<Vec<ArtifactRef>> {
         let mut out = Vec::new();
         for phase in ["discovery", "reconcile", "adoption", "build", "audit"] {
-            let dir = self.effort_dir(&effort.project_id, &effort.id).join(phase);
+            let dir = self.effort_dir(effort).join(phase);
             if !dir.exists() {
                 continue;
             }
@@ -727,9 +790,19 @@ impl Store {
         }
         let mut found = Vec::new();
         for p in fs::read_dir(projects)? {
-            let path = p?.path().join("efforts").join(effort_id);
-            if path.join("effort.json").exists() {
-                found.push(path);
+            let efforts = p?.path().join("efforts");
+            if !efforts.exists() {
+                continue;
+            }
+            for entry in fs::read_dir(efforts)? {
+                let path = entry?.path();
+                let effort_file = path.join("effort.json");
+                if effort_file.exists() {
+                    let effort: Effort = read_json(&effort_file)?;
+                    if effort.id == effort_id || effort.slug == effort_id {
+                        found.push(path);
+                    }
+                }
             }
         }
         Ok(found)
@@ -738,10 +811,7 @@ impl Store {
         validate_id(artifact_id)?;
         let mut found = Vec::new();
         for phase in ["discovery", "reconcile", "adoption", "build", "audit"] {
-            let path = self
-                .effort_dir(&effort.project_id, &effort.id)
-                .join(phase)
-                .join(artifact_id);
+            let path = self.effort_dir(effort).join(phase).join(artifact_id);
             if path.join("manifest.json").exists() {
                 found.push(path);
             }
@@ -819,22 +889,29 @@ fn unique_id() -> String {
 fn short_digest(bytes: &[u8]) -> String {
     digest_bytes(bytes)[..16].into()
 }
-fn slugify(v: &str) -> String {
-    v.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
+fn storage_name(value: &str) -> Result<String> {
+    let name = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character.to_ascii_lowercase()
             } else {
-                '-'
+                '_'
             }
         })
-        .collect::<String>()
-        .trim_matches('-')
-        .into()
+        .collect::<String>();
+    let name = name.trim_matches(['.', '_', '-']).to_owned();
+    ensure!(
+        !name.is_empty(),
+        "project directory name has no safe storage representation"
+    );
+    Ok(name)
 }
 fn validate_label(v: &str) -> Result<()> {
     ensure!(
         !v.is_empty()
+            && v != "."
+            && v != ".."
             && v.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
         "invalid label {v}"

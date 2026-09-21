@@ -2,8 +2,10 @@
 
 ```text
 Discovery 1 ─┐
-Discovery 2 ─┼──→ Reconciled Discovery → Adoption → Implementation → Audit
+Discovery 2 ─┼──→ Reconciled Discovery → STOP
 Discovery N ─┘
+
+Later: explicit Build → Adoption → Implementation → Audit
 ```
 
 ## Instruction ownership
@@ -29,14 +31,15 @@ models, assigns confidence, or determines engineering truth.
 An effort freezes a reviewed request, explicit constraints, canonical target project, baseline
 commit, and baseline tree. It intentionally does not freeze Discovery count, provider identity,
 slots, or quorum. Provider/model metadata remains attached to each Discovery run as provenance.
-Concurrent identical initialization writes a staged effort and atomically publishes it, so multiple
-model windows converge on the same frozen identity.
+The canonical project plus human effort slug identifies one immutable unit. Concurrent identical
+initialization converges on it; changed request kind, body, or constraints under that slug hard-fail.
 
 ## Discovery
 
-Each Discovery gets a unique workspace with a clean detached `source/` checkout at the frozen
+Each Discovery gets a stable human provenance label and a unique workspace with a clean detached `source/` checkout at the frozen
 baseline. Its public artifact contains run provenance, evidence graph, technical specification, and
-summary. The reconciler can never reopen the repository, so the public result must stand alone.
+summary. Findings classify verification as inspection, corroborated, or experiment. The reconciler
+can never reopen the repository, so the public result must stand alone.
 
 ## Reconcile
 
@@ -58,15 +61,15 @@ One source is provenance, not a vote. Rust adds frozen explicit user constraints
 authority. An explicit Reconcile-time user clarification is recorded as direct user authority.
 
 An empty `blocking_issues` list produces an implementation-ready result. Non-empty issues produce
-`BLOCKED`; a blocked result cannot be adopted.
+`BLOCKED`. Reconcile then stops without Adoption or Build approval.
 
 ## Adoption, Build, and Audit
 
-Adoption is a human authorization receipt for one exact Reconciled Discovery. A prepared Build
-stores only its exact adoption, phase/task grouping, host settings, controller state, and durable
+Explicit Build invocation is authorization and creates or reuses Adoption for one exact Reconciled
+Discovery. A prepared Build stores its exact authority, phase/task grouping, host settings, controller state, and durable
 role reports in the external store. Rust moves one worker and independent reviewer through whole
 delivery phases; task IDs do not create extra stops. Registration records the adoption, reconciled
-artifact, starting baseline, exact target commit/tree, producer declaration, and status while
+artifact, Discovery baseline, actual Build starting commit/tree, exact target commit/tree, producer declaration, and status while
 retaining an immutable snapshot.
 
 Audit evaluates the binding requirements from the exact Reconciled Discovery against that exact
@@ -76,7 +79,10 @@ otherwise a submitted implementation passes.
 
 ## Storage
 
-Stores use format and artifact schema version 5 and reject older stores rather than migrating them.
+Stores use format and artifact schema version 6 and reject older stores rather than migrating them.
+Project and effort directories use safe human names; internal project, effort, context, artifact,
+commit, tree, and lineage identities remain in metadata. Project-name collisions across different
+canonical repositories fail clearly.
 Phase directories are `discovery`, `reconcile`, `adoption`, `build`, and `audit`. Immutable bundle
 manifests hash payloads and record exact parents. The journal is diagnostic; artifact manifests are
 the authority lineage.

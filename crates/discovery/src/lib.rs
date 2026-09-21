@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use orchestrate_contracts::{
     ArtifactKind, ArtifactRef, DiscoveryRun, DiscoverySummary, EvidenceKind, EvidenceNode,
-    EvidenceStatus, Independence, Provenance, RequestKind, validate_evidence_node,
+    EvidenceStatus, Independence, Provenance, RequestKind, Verification, validate_evidence_node,
 };
 use orchestrate_core::{Effort, Store};
 use serde::Deserialize;
@@ -33,6 +33,8 @@ struct Frontmatter {
     required: bool,
     #[serde(default)]
     mandatory: bool,
+    #[serde(default)]
+    verification: Option<Verification>,
 }
 #[derive(Clone, Debug)]
 pub struct ValidatedDiscovery {
@@ -49,6 +51,7 @@ pub fn prepare(
     provenance: Provenance,
 ) -> Result<(String, std::path::PathBuf)> {
     let run_id = format!("discovery-{}", suffix());
+    let source_label = source_label(&provenance.host, &run_id);
     let run = DiscoveryRun {
         run_id: run_id.clone(),
         phase: "discovery".into(),
@@ -63,6 +66,7 @@ pub fn prepare(
         model_effort: provenance.model_effort,
         independence: provenance.independence,
         guide_digest: provenance.guide_digest,
+        source_label,
     };
     let workspace = store.discovery_workspace(effort, &run)?;
     Ok((run_id, workspace))
@@ -253,6 +257,7 @@ fn parse_node(input: &str) -> Result<EvidenceNode> {
         mandatory: front.mandatory,
         title,
         body,
+        verification: front.verification,
     })
 }
 fn validate_technical_spec(spec: &str) -> Result<()> {
@@ -418,6 +423,26 @@ fn is_stale<'a>(
     memo.insert(id, result);
     Ok(result)
 }
+
+fn source_label(host: &str, run_id: &str) -> String {
+    let host = host
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let host = host.trim_matches('_');
+    let host = if host.is_empty() { "discovery" } else { host };
+    format!(
+        "{}_{}",
+        host,
+        &orchestrate_contracts::digest_bytes(run_id.as_bytes())[..8]
+    )
+}
 fn suffix() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -431,6 +456,8 @@ mod tests {
     use super::*;
 
     fn node(id: &str, kind: EvidenceKind, status: EvidenceStatus) -> EvidenceNode {
+        let verification =
+            matches!(kind, EvidenceKind::Finding).then_some(Verification::Inspection);
         EvidenceNode {
             id: id.into(),
             kind,
@@ -441,6 +468,7 @@ mod tests {
             mandatory: false,
             title: id.into(),
             body: "evidence".into(),
+            verification,
         }
     }
 

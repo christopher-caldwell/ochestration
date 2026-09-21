@@ -24,9 +24,9 @@ use orchestrate_core::{Effort, Project, Store, write_bytes_sync};
 use serde::{Deserialize, Serialize};
 
 static ACTION_COUNTER: AtomicU64 = AtomicU64::new(0);
-pub const BUILD_PLAN_VERSION: u32 = 1;
+pub const BUILD_PLAN_VERSION: u32 = 2;
 pub const BUILD_CONFIG_VERSION: u32 = 2;
-pub const BUILD_STATE_VERSION: u32 = 2;
+pub const BUILD_STATE_VERSION: u32 = 3;
 
 /// Scope of the post-phase Audit turn, which is not one of the plan's delivery phases.
 const FINAL_SCOPE: &str = "final";
@@ -54,7 +54,7 @@ pub enum BuildResult {
 #[serde(deny_unknown_fields)]
 pub struct BuildPlan {
     pub schema_version: u32,
-    pub adoption: ArtifactRef,
+    pub reconciled: ArtifactRef,
     pub detailed_plan: String,
     pub delivery_phases: Vec<DeliveryPhase>,
 }
@@ -109,6 +109,10 @@ fn prepared_dispatch() -> DispatchState {
 struct FrozenInputs {
     adoption: ArtifactRef,
     reconciled: ArtifactRef,
+    discovery_baseline_commit: String,
+    discovery_baseline_tree: String,
+    build_start_commit: String,
+    build_start_tree: String,
     plan_digest: String,
     detailed_plan_digest: String,
     config_digest: String,
@@ -302,9 +306,7 @@ fn select_effort(store: &Store, project: &Project, explicit: Option<&str>) -> Re
     let mut active = Vec::new();
     let mut completed = Vec::new();
     for effort in store.efforts_for_project(project)? {
-        let build = store
-            .effort_dir(&effort.project_id, &effort.id)
-            .join("build");
+        let build = store.effort_dir(&effort).join("build");
         if !build.join("config.toml").is_file() || !build.join("plan.json").is_file() {
             continue;
         }
@@ -380,14 +382,17 @@ fn load_plan(store: &Store, effort: &Effort, build_dir: &Path) -> Result<BuildPl
         "referenced detailed plan does not exist"
     );
     ensure!(
-        plan.adoption.kind == ArtifactKind::Adoption,
-        "Build plan needs an Adoption reference"
+        plan.reconciled.kind == ArtifactKind::ReconciledDiscovery,
+        "Build plan needs a Reconciled Discovery reference"
     );
-    let (_, adoption): (_, orchestrate_contracts::Adoption) =
-        store.load_json(effort, &plan.adoption, "adoption.json")?;
+    let (envelope, reconciled): (_, orchestrate_contracts::ReconciledDiscovery) =
+        store.load_json(effort, &plan.reconciled, "reconciled-discovery.json")?;
     ensure!(
-        adoption.reconciled.kind == ArtifactKind::ReconciledDiscovery,
-        "Adoption has invalid reconciled authority"
+        envelope.outcome == "IMPLEMENTATION_READY"
+            && reconciled.context_id == effort.context.id
+            && reconciled.baseline_commit == effort.baseline_commit
+            && reconciled.baseline_tree == effort.baseline_tree,
+        "Build plan references an ineligible Reconciled Discovery"
     );
     let mut phases = HashSet::new();
     let mut tasks = HashSet::new();
@@ -436,14 +441,39 @@ fn initialize_state(
     _config: &BuildConfig,
     plan: &BuildPlan,
 ) -> Result<BuildState> {
-    let (_, adoption): (_, orchestrate_contracts::Adoption) =
-        store.load_json(effort, &plan.adoption, "adoption.json")?;
+    let (_, reconciled): (_, orchestrate_contracts::ReconciledDiscovery) =
+        store.load_json(effort, &plan.reconciled, "reconciled-discovery.json")?;
+    let adoption = orchestrate_audit::adopt_for_build(
+        store,
+        effort,
+        plan.reconciled.clone(),
+        build_provenance("build", orchestrate_guides::BUILD),
+    )?;
+    let project = store.project_for(effort)?;
+    let build_start = store.materialize_snapshot(&project.canonical_locator, "HEAD")?;
+    let ancestry = Command::new("git")
+        .args([
+            "merge-base",
+            "--is-ancestor",
+            &reconciled.baseline_commit,
+            &build_start.commit,
+        ])
+        .current_dir(&project.canonical_locator)
+        .status()?;
+    ensure!(
+        ancestry.success(),
+        "current Build HEAD is not descended from the Discovery baseline"
+    );
     let phase = &plan.delivery_phases[0].id;
     let state = BuildState {
         schema_version: BUILD_STATE_VERSION,
         frozen: FrozenInputs {
-            adoption: plan.adoption.clone(),
-            reconciled: adoption.reconciled,
+            adoption,
+            reconciled: plan.reconciled.clone(),
+            discovery_baseline_commit: reconciled.baseline_commit,
+            discovery_baseline_tree: reconciled.baseline_tree,
+            build_start_commit: build_start.commit,
+            build_start_tree: build_start.tree,
             plan_digest: digest_file(&build_dir.join("plan.json"))?,
             detailed_plan_digest: digest_file(&build_dir.join(&plan.detailed_plan))?,
             config_digest: digest_file(&build_dir.join("config.toml"))?,
@@ -521,6 +551,8 @@ fn perform_action(
                     "build-{}",
                     digest_bytes(format!("{}:{commit}", state.frozen.adoption.digest).as_bytes())
                 ),
+                state.frozen.build_start_commit.clone(),
+                state.frozen.build_start_tree.clone(),
             )?,
         };
         state.implementation = Some(implementation);
@@ -1140,11 +1172,7 @@ struct ProjectLock {
 }
 impl ProjectLock {
     fn acquire(store: &Store, project: &Project) -> Result<Self> {
-        let path = store
-            .root()
-            .join("projects")
-            .join(&project.id)
-            .join(".build-controller.lock");
+        let path = store.project_dir(project).join(".build-controller.lock");
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
                 writeln!(file, "{}", std::process::id())?;
@@ -1464,6 +1492,11 @@ mod tests {
             baseline_tree: effort.baseline_tree.clone(),
             goal: "test".into(),
             core_result: "test".into(),
+            problem: "test problem".into(),
+            product_behavior_changed: vec!["works".into()],
+            product_behavior_unchanged: vec![],
+            technical_behavior_changed: vec!["implementation changes".into()],
+            technical_behavior_unchanged: vec![],
             requirements: vec![ReconciledRequirement {
                 requirement: Requirement {
                     id: "R-1".into(),
@@ -1476,6 +1509,13 @@ mod tests {
                 user_clarification: Some("test".into()),
                 frozen_user_constraint: false,
             }],
+            discovery_attribution: vec![],
+            evidence_synthesis: vec![],
+            disagreements: vec![],
+            rejected_alternatives: vec![],
+            implementation_risks: vec![],
+            compatibility_concerns: vec![],
+            caveats: vec![],
             technical_suggestions: vec![],
             blocking_issues: vec![],
         };
@@ -1496,14 +1536,6 @@ mod tests {
                 files,
             )
             .unwrap();
-        let adoption = orchestrate_audit::adopt(
-            &store,
-            &effort,
-            reconciled_ref.clone(),
-            "test".into(),
-            build_provenance("test", orchestrate_guides::BUILD),
-        )
-        .unwrap();
         let build = store.phase_dir(&effort, "build").unwrap();
         fs::write(build.join("implementation-plan.md"), "# Plan\n").unwrap();
         fs::write(
@@ -1512,8 +1544,8 @@ mod tests {
         )
         .unwrap();
         let plan = BuildPlan {
-            schema_version: 1,
-            adoption: adoption.clone(),
+            schema_version: 2,
+            reconciled: reconciled_ref.clone(),
             detailed_plan: "implementation-plan.md".into(),
             delivery_phases: vec![
                 DeliveryPhase {
@@ -1531,7 +1563,51 @@ mod tests {
             &orchestrate_contracts::encode(&plan).unwrap(),
         )
         .unwrap();
-        (store, effort, repo, reconciled_ref, adoption)
+        // The fifth value preserves the compact test-helper shape. It is deliberately not an
+        // Adoption: every controller test must exercise Adoption creation at the Build boundary.
+        (store, effort, repo, reconciled_ref.clone(), reconciled_ref)
+    }
+
+    #[test]
+    fn build_start_may_be_a_descendant_and_is_recorded_separately() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        fs::write(repo.join("advanced.txt"), "advanced\n").unwrap();
+        git_ok(&repo, &["add", "."]);
+        git_ok(&repo, &["commit", "-m", "advance before build"]);
+        let expected_start = git(&repo, ["rev-parse", "HEAD"]).unwrap();
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let config = load_config(&build_dir).unwrap();
+        let plan = load_plan(&store, &effort, &build_dir).unwrap();
+        let state = initialize_state(&store, &effort, &build_dir, &config, &plan).unwrap();
+        assert_eq!(
+            state.frozen.discovery_baseline_commit,
+            effort.baseline_commit
+        );
+        assert_eq!(state.frozen.discovery_baseline_tree, effort.baseline_tree);
+        assert_eq!(state.frozen.build_start_commit, expected_start);
+        assert_ne!(
+            state.frozen.build_start_commit,
+            state.frozen.discovery_baseline_commit
+        );
+        assert!(state.frozen.adoption.kind == ArtifactKind::Adoption);
+    }
+
+    #[test]
+    fn build_start_rejects_a_head_unrelated_to_the_discovery_baseline() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        git_ok(&repo, &["checkout", "--orphan", "unrelated"]);
+        fs::write(repo.join("unrelated.txt"), "unrelated\n").unwrap();
+        git_ok(&repo, &["add", "."]);
+        git_ok(&repo, &["commit", "-m", "unrelated history"]);
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let config = load_config(&build_dir).unwrap();
+        let plan = load_plan(&store, &effort, &build_dir).unwrap();
+        assert!(
+            initialize_state(&store, &effort, &build_dir, &config, &plan)
+                .unwrap_err()
+                .to_string()
+                .contains("not descended from the Discovery baseline")
+        );
     }
     /// Each role must be driven through its own configured adapter, not a shared default.
     fn assert_role_adapter(invocation: &Invocation) {
@@ -1845,7 +1921,7 @@ mod tests {
     }
     #[test]
     fn one_run_crosses_delivery_phases_and_final_audit() {
-        let (store, _effort, repo, _reconciled, _adoption) = prepared();
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
         let result = run_with_adapter(
             &store,
             BuildRequest {
@@ -1855,7 +1931,19 @@ mod tests {
             &FakeHost,
         )
         .unwrap();
-        assert!(matches!(result, BuildResult::Completed(_)));
+        let BuildResult::Completed(done) = result else {
+            panic!("Build did not complete")
+        };
+        let (_, implementation): (_, orchestrate_contracts::Implementation) = store
+            .load_json(&effort, &done.implementation, "implementation.json")
+            .unwrap();
+        assert_eq!(
+            implementation.discovery_baseline_commit,
+            effort.baseline_commit
+        );
+        assert_eq!(implementation.discovery_baseline_tree, effort.baseline_tree);
+        assert!(!implementation.build_start_commit.is_empty());
+        assert!(!implementation.build_start_tree.is_empty());
         assert!(repo.join("D1.txt").exists() && repo.join("D2.txt").exists());
         assert_no_build_files_leaked(&repo);
         let replay = run_with_adapter(

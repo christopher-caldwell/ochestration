@@ -44,8 +44,12 @@ be built.
 
 Answer that model window normally.
 
+The answer stays inside that active Discovery run. Do not rewrite the prepared request or re-run
+initialization under the same effort name; the prepared request is immutable for that effort.
+
 If a question remains materially unresolved, the Discovery may correctly finish as `BLOCKED`
-instead of guessing.
+instead of guessing. A finalized blocked artifact is immutable; if later information resolves it,
+start a fresh Discovery under the same effort.
 
 ## What to save
 
@@ -53,6 +57,7 @@ When a Discovery finishes, it reports:
 
 ```text
 run ID
+human source label
 artifact ID
 outcome
 published Discovery directory
@@ -77,6 +82,10 @@ Requirement
 ```
 
 plus a self-contained `technical-spec.md`.
+
+Each finding records whether it was established by inspection, corroborated evidence, or a
+controlled experiment. Experiments are reported with their setup, observation, scope, and limits;
+the classification is not a score and does not automatically outrank other evidence.
 
 You do not need to inspect those files during normal usage. They exist so Reconcile can deeply
 analyze the finished Discovery without reopening the repository.

@@ -6,7 +6,9 @@ You normally interact with Orchestrate through model skills, not raw CLI command
 its current instructions from `orchestrate <action> guide`.
 
 ```text
-Prepare → Discovery × N → Reconcile → approve → Build → done
+Prepare → Discovery × N → Reconcile → STOP
+
+Later, explicitly: Build → done
 ```
 
 ## 1. Prepare the request
@@ -82,6 +84,7 @@ When a Discovery finishes, it reports:
 
 ```text
 run ID
+human source label
 artifact ID
 outcome
 published Discovery directory
@@ -120,21 +123,22 @@ $reconcile   "/path/to/discovery-1"   "/path/to/discovery-2"   "/path/to/discove
 Reconcile analyzes only those selected Discovery outputs. It does not reopen the repository and
 does not become another Discovery lane.
 
-It produces one **Reconciled Discovery** with:
+It produces one rich **Reconciled Discovery** with:
 
 ```text
-Core result
-Binding requirements
-Advisory technical suggestions
-Blocking issues, if any
+Selected direction, changed and unchanged behavior
+Binding requirements and precise acceptance criteria
+Evidence mapping, verification methods, and limitations
+Disagreements, rejected alternatives, risks, compatibility, and caveats
+Advisory technical suggestions and blocking issues, if any
 ```
 
 The binding requirements answer: **what must Build actually accomplish?**
 
 Technical suggestions are implementation guidance only.
 
-Read the reconciled document. If the model asks whether you approve it for Build, approve it only
-when the binding result is what you want implemented. Approval creates the adoption receipt.
+Read the reconciled document. Reconcile reports the result and stops; it does not ask for Build
+approval or create Adoption.
 
 Before closing the Reconcile window, keep:
 
@@ -143,10 +147,10 @@ Effort ID
 Reconciled document path
 ```
 
-The effort ID is also visible in Orchestrate artifact paths under:
+The effort slug is also visible in human-readable Orchestrate artifact paths under:
 
 ```text
-.../efforts/<effort-id>/...
+.../projects/<project-name>/efforts/<effort-slug>/...
 ```
 
 For more detail, see [Reconcile](reconcile.md).
@@ -155,7 +159,7 @@ For more detail, see [Reconcile](reconcile.md).
 
 ## 4. Build and final Audit
 
-Use `$build` with the exact effort and approved detailed implementation plan. It prepares the
+Later, explicitly invoke `$build` with the exact effort, Reconciled Discovery, and detailed implementation plan. That invocation authorizes Build and creates or reuses Adoption. It prepares the
 contained Build files; you do not hand-author the controller JSON/TOML.
 
 The process runs every delivery phase, independent reviews, corrections, implementation
@@ -180,9 +184,9 @@ Once installed:
 
 3. $reconcile "/path/discovery-1" "/path/discovery-2" ...
 
-4. Approve the Reconciled Discovery.
+4. Review the Reconciled Discovery; Reconcile stops.
 
-5. $build with the approved detailed implementation plan.
+5. Later, explicitly run $build with the detailed implementation plan.
 
 ```
 

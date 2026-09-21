@@ -73,4 +73,8 @@ The important thing is simple:
 
 > Every independent Discovery window gets the exact same prepared request file.
 
+The project plus effort name identifies one frozen unit of work. Once initialized, changing the
+request kind, body, or constraints under that effort name is rejected. Clarifications answered
+during Discovery belong in that Discovery run, not in a rewritten prepared file.
+
 Next: [Discovery](discovery.md).

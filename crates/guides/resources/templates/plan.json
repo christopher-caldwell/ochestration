@@ -1,9 +1,9 @@
 {
-  "schema_version": 1,
-  "adoption": {
-    "kind": "adoption",
-    "artifact_id": "replace-with-exact-adoption-artifact-id",
-    "digest": "replace-with-exact-adoption-manifest-digest"
+  "schema_version": 2,
+  "reconciled": {
+    "kind": "reconciled_discovery",
+    "artifact_id": "replace-with-exact-reconciled-artifact-id",
+    "digest": "replace-with-exact-reconciled-manifest-digest"
   },
   "detailed_plan": "implementation-plan.md",
   "delivery_phases": [

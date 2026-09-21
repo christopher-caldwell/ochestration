@@ -1,13 +1,16 @@
 # Build and Audit
 
 Build is an unattended, fixed Rust-driven work/review loop. Exact setup instructions are
-`orchestrate build guide`. The adopted Reconciled Discovery still
-defines **what** must be delivered; the approved detailed implementation plan supplies only the
+`orchestrate build guide`. The exact Reconciled Discovery
+defines **what** must be delivered; the detailed implementation plan supplies only the
 ordered delivery-phase grouping.
 
 ## Prepare and run Build
 
-Invoke `$build` after Adoption. It copies the detailed plan and fills `plan.json` and `config.toml`
+Explicitly invoking `$build` is the authorization boundary. It binds the Reconciled Discovery,
+creates or reuses Adoption, captures current Build starting HEAD/tree, and verifies that the frozen
+Discovery baseline is its ancestor. The repository may advance between Discovery and Build. Build
+then copies the detailed plan and fills `plan.json` and `config.toml`
 from templates supplied by the installed CLI. Files you have already filled are left in place.
 Worker and reviewer sessions may use different configured adapters. Exact setup rules, including
 which adapters this CLI accepts, are supplied by `orchestrate build guide`.

@@ -3,7 +3,9 @@
 Orchestrate is deterministic machinery for an interactive model-window workflow:
 
 ```text
-Prepare → Discovery × N → Reconcile → explicit approval → Build → done
+Prepare → Discovery × N → Reconcile → STOP
+
+Later, explicitly: Build → done
 ```
 
 The model does the engineering work. Orchestrate keeps the request, Discovery runs, reconciled
@@ -26,9 +28,9 @@ The short version is:
 3. In a fresh model window, pass the finished Discovery directories to:
    $reconcile "/path/discovery-1" "/path/discovery-2" ...
 
-4. Review and approve the Reconciled Discovery.
+4. Review the Reconciled Discovery. Reconcile stops here.
 
-5. In the model window, run `$build` with the approved detailed implementation plan.
+5. Later, when ready, run `$build` with the detailed implementation plan.
    It prepares Build, drives work/review/correction, registers the implementation, and runs the
    final Audit until completion or a genuine external requirement.
 ```

@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 use sha2::{Digest, Sha256};
 
-pub const SCHEMA_VERSION: u32 = 5;
-pub const STORE_FORMAT_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
+pub const STORE_FORMAT_VERSION: u32 = 6;
 pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -73,6 +73,7 @@ pub struct DiscoveryRun {
     pub model_effort: Option<String>,
     pub independence: Independence,
     pub guide_digest: String,
+    pub source_label: String,
 }
 
 impl DiscoveryRun {
@@ -136,6 +137,13 @@ pub enum EvidenceStatus {
     Invalidated,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Verification {
+    Inspection,
+    Corroborated,
+    Experiment,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct EvidenceNode {
     pub id: String,
     pub kind: EvidenceKind,
@@ -152,6 +160,8 @@ pub struct EvidenceNode {
     pub title: String,
     #[serde(default)]
     pub body: String,
+    #[serde(default)]
+    pub verification: Option<Verification>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct DiscoverySummary {
@@ -186,10 +196,45 @@ pub struct TechnicalSuggestion {
     pub source_refs: Vec<DiscoverySourceRef>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct EvidenceSynthesis {
+    pub id: String,
+    pub conclusion: String,
+    pub source_refs: Vec<DiscoverySourceRef>,
+    pub verification_methods: Vec<Verification>,
+    pub evidence_summary: String,
+    pub limitations: String,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RejectedAlternative {
+    pub direction: String,
+    pub reason: String,
+    pub source_refs: Vec<DiscoverySourceRef>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DiscoveryAttribution {
+    pub discovery_artifact_id: String,
+    pub label: String,
+    pub host: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub model_effort: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ReconcileProposal {
     pub core_result: String,
+    pub problem: String,
+    pub product_behavior_changed: Vec<String>,
+    pub product_behavior_unchanged: Vec<String>,
+    pub technical_behavior_changed: Vec<String>,
+    pub technical_behavior_unchanged: Vec<String>,
     pub requirements: Vec<ReconciledRequirement>,
+    pub evidence_synthesis: Vec<EvidenceSynthesis>,
+    pub disagreements: Vec<String>,
+    pub rejected_alternatives: Vec<RejectedAlternative>,
+    pub implementation_risks: Vec<String>,
+    pub compatibility_concerns: Vec<String>,
+    pub caveats: Vec<String>,
     #[serde(default)]
     pub technical_suggestions: Vec<TechnicalSuggestion>,
     #[serde(default)]
@@ -203,7 +248,19 @@ pub struct ReconciledDiscovery {
     pub baseline_tree: String,
     pub goal: String,
     pub core_result: String,
+    pub problem: String,
+    pub product_behavior_changed: Vec<String>,
+    pub product_behavior_unchanged: Vec<String>,
+    pub technical_behavior_changed: Vec<String>,
+    pub technical_behavior_unchanged: Vec<String>,
     pub requirements: Vec<ReconciledRequirement>,
+    pub discovery_attribution: Vec<DiscoveryAttribution>,
+    pub evidence_synthesis: Vec<EvidenceSynthesis>,
+    pub disagreements: Vec<String>,
+    pub rejected_alternatives: Vec<RejectedAlternative>,
+    pub implementation_risks: Vec<String>,
+    pub compatibility_concerns: Vec<String>,
+    pub caveats: Vec<String>,
     #[serde(default)]
     pub technical_suggestions: Vec<TechnicalSuggestion>,
     #[serde(default)]
@@ -226,7 +283,10 @@ pub enum ImplementationStatus {
 pub struct Implementation {
     pub adoption: ArtifactRef,
     pub reconciled: ArtifactRef,
-    pub starting_baseline: String,
+    pub discovery_baseline_commit: String,
+    pub discovery_baseline_tree: String,
+    pub build_start_commit: String,
+    pub build_start_tree: String,
     pub target_commit: String,
     pub target_tree: String,
     pub producer_declaration: String,
@@ -356,6 +416,11 @@ pub fn validate_evidence_node(node: &EvidenceNode) -> Result<()> {
     );
     ensure!(valid, "invalid status for evidence node {}", node.id);
     ensure!(
+        matches!(node.kind, EvidenceKind::Finding) == node.verification.is_some(),
+        "finding {} needs a verification classification and non-findings must not declare one",
+        node.id
+    );
+    ensure!(
         !node.required || matches!(node.kind, EvidenceKind::Question),
         "only questions may be required"
     );
@@ -378,8 +443,22 @@ pub fn validate_reconciled_discovery(reconciled: &ReconciledDiscovery) -> Result
     ensure!(
         !reconciled.reconciled_id.is_empty()
             && !reconciled.goal.trim().is_empty()
-            && !reconciled.core_result.trim().is_empty(),
-        "reconciled Discovery needs identity, goal, and a core result"
+            && !reconciled.core_result.trim().is_empty()
+            && !reconciled.problem.trim().is_empty(),
+        "reconciled Discovery needs identity, goal, problem, and a core result"
+    );
+    ensure!(
+        !reconciled.product_behavior_changed.is_empty()
+            && !reconciled.technical_behavior_changed.is_empty(),
+        "reconciled Discovery must state changed product and technical behavior"
+    );
+    ensure!(
+        reconciled.discovery_attribution.len() >= 2,
+        "reconciled Discovery needs at least two attributed Discovery sources"
+    );
+    ensure!(
+        !reconciled.evidence_synthesis.is_empty(),
+        "reconciled Discovery needs evidence synthesis"
     );
     let mut ids = HashSet::new();
     for item in &reconciled.requirements {
@@ -423,6 +502,21 @@ pub fn validate_reconciled_discovery(reconciled: &ReconciledDiscovery) -> Result
             suggestion_ids.insert(&suggestion.id),
             "duplicate technical suggestion id {}",
             suggestion.id
+        );
+    }
+    let mut synthesis_ids = HashSet::new();
+    for item in &reconciled.evidence_synthesis {
+        ensure!(
+            !item.id.trim().is_empty()
+                && !item.conclusion.trim().is_empty()
+                && !item.evidence_summary.trim().is_empty()
+                && !item.source_refs.is_empty(),
+            "evidence synthesis entries need identity, conclusion, evidence summary, and sources"
+        );
+        ensure!(
+            synthesis_ids.insert(&item.id),
+            "duplicate evidence synthesis id {}",
+            item.id
         );
     }
     Ok(())
@@ -564,6 +658,11 @@ mod tests {
             baseline_tree: "tree".into(),
             goal: "goal".into(),
             core_result: "result".into(),
+            problem: "problem".into(),
+            product_behavior_changed: vec!["behavior changes".into()],
+            product_behavior_unchanged: vec![],
+            technical_behavior_changed: vec!["implementation changes".into()],
+            technical_behavior_unchanged: vec![],
             requirements: vec!["R-1", "R-2"]
                 .into_iter()
                 .map(|id| ReconciledRequirement {
@@ -582,6 +681,13 @@ mod tests {
                     frozen_user_constraint: false,
                 })
                 .collect(),
+            discovery_attribution: vec![],
+            evidence_synthesis: vec![],
+            disagreements: vec![],
+            rejected_alternatives: vec![],
+            implementation_risks: vec![],
+            compatibility_concerns: vec![],
+            caveats: vec![],
             technical_suggestions: vec![],
             blocking_issues: vec![],
         }

@@ -24,7 +24,7 @@ Only the directories you explicitly pass are part of this Reconcile run.
 
 Reconcile compares the selected Discoveries and produces one **Reconciled Discovery**.
 
-The result you review may:
+The result must converge on one leading direction and may:
 
 - combine complementary findings;
 - treat different wording as the same finding;
@@ -59,16 +59,12 @@ also appears as a binding requirement.
 
 Anything the selected Discovery evidence and user clarification still could not resolve.
 
-A blocked result cannot be approved for Build.
+A blocked result cannot be built.
 
-## Approval
+## Stop boundary
 
-The skill shows you the final `reconciled-discovery.md`.
-
-If it asks whether you approve that result for Build, answer affirmatively only when the binding
-requirements are what you actually want implemented.
-
-Approval records the adoption receipt.
+The skill shows you the final `reconciled-discovery.md`, reports the selected direction and path,
+and stops. It does not ask for Build approval, create Adoption, or begin Build.
 
 Before closing the window, keep:
 
@@ -77,6 +73,6 @@ Effort ID
 Reconciled document path
 ```
 
-You will give both to the Build model.
+Later, an explicit Build invocation uses these to authorize Build.
 
 Next: [Build and Audit](build-and-audit.md).
