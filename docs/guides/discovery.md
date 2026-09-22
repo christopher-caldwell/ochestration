@@ -23,16 +23,14 @@ You do not need to initialize an effort or prepare a workspace manually.
 
 ## Run several independently
 
-Three independent Discoveries are a reasonable default.
-
-For important or uncertain work, run five or more:
+Three independent Discoveries are the normal default. Run additional independent Discoveries when
+you deliberately want broader investigation or additional corroboration:
 
 ```text
 Window 1 → $discovery "/same/request.prepared.md"
 Window 2 → $discovery "/same/request.prepared.md"
 Window 3 → $discovery "/same/request.prepared.md"
-Window 4 → $discovery "/same/request.prepared.md"
-Window 5 → $discovery "/same/request.prepared.md"
+Window N → $discovery "/same/request.prepared.md"
 ```
 
 Do not share one Discovery's conclusions with another. Their independence is useful.

@@ -4,4 +4,4 @@ description: Load the current Orchestrate Discovery instructions.
 disable-model-invocation: true
 ---
 
-Run `orchestrate discovery guide` and follow the returned instructions.
+You must run `orchestrate discovery guide` for instructions.

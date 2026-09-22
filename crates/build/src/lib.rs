@@ -587,7 +587,7 @@ fn perform_action(
         materialize_role_guide(build_dir, &state.action.kind)?;
     }
     let cwd = match state.action.kind {
-        ActionKind::Review => review_checkout(
+        ActionKind::Review => contained_checkout(
             project,
             &action_dir,
             state
@@ -595,10 +595,21 @@ fn perform_action(
                 .target_commit
                 .as_deref()
                 .context("review lacks target commit")?,
+            "source",
+        )?,
+        ActionKind::FinalAudit => contained_checkout(
+            project,
+            &action_dir,
+            state
+                .action
+                .target_commit
+                .as_deref()
+                .context("final Audit lacks target commit")?,
+            "verification",
         )?,
         _ => project.canonical_locator.clone(),
     };
-    write_action_file(build_dir, plan, state, &action_dir, role, &cwd)?;
+    write_action_file(store, effort, build_dir, plan, state, &action_dir, &cwd)?;
     let persistent_session = match state.action.kind {
         ActionKind::Work => PersistentSession::Worker,
         ActionKind::Review => PersistentSession::Reviewer,
@@ -703,11 +714,12 @@ impl InvocationObserver for StateObserver<'_> {
 }
 
 fn write_action_file(
+    store: &Store,
+    effort: &Effort,
     build_dir: &Path,
     plan: &BuildPlan,
     state: &BuildState,
     action_dir: &Path,
-    role: &str,
     cwd: &Path,
 ) -> Result<()> {
     let tasks = plan
@@ -719,7 +731,11 @@ fn write_action_file(
     let instruction = build_dir
         .join("instructions")
         .join(instruction_name(&state.action.kind));
-    let value = serde_json::json!({
+    let role = match state.action.kind {
+        ActionKind::Work => "worker",
+        ActionKind::Review | ActionKind::FinalAudit | ActionKind::Unblock => "reviewer",
+    };
+    let mut value = serde_json::json!({
         "action_id": state.action.id,
         "kind": state.action.kind,
         "scope": state.action.scope,
@@ -732,12 +748,60 @@ fn write_action_file(
         // The Audit needs these two lineage references to build its assessment; supplying them
         // directly keeps the action self-contained instead of pointing at controller state.
         "reconciled": state.frozen.reconciled,
+        "reconciled_discovery": store
+            .artifact_dir(effort, &state.frozen.reconciled.artifact_id)?
+            .join("reconciled-discovery.json"),
         "adoption": state.frozen.adoption,
         "result": action_dir.join("result.json"),
         "report": action_dir.join("report.md"),
         "detailed_plan": build_dir.join(&plan.detailed_plan),
         "working_directory": cwd,
     });
+    if matches!(state.action.kind, ActionKind::Unblock) {
+        let interrupted = state
+            .interrupted
+            .as_deref()
+            .context("unblock action has no interrupted action")?;
+        let interrupted_dir = build_dir.join("artifacts").join(&interrupted.id);
+        value["interrupted_action"] = serde_json::json!({
+            "kind": interrupted.kind,
+            "scope": interrupted.scope,
+            "target_commit": interrupted.target_commit,
+        });
+        value["interrupted_report"] = serde_json::json!(interrupted_dir.join("report.md"));
+        value["interrupted_result"] = serde_json::json!(interrupted_dir.join("result.json"));
+        value["prior_feedback"] = serde_json::json!(interrupted.feedback_path);
+    }
+    if matches!(state.action.kind, ActionKind::FinalAudit) {
+        let implementation = state
+            .implementation
+            .as_ref()
+            .context("final Audit implementation was not registered")?;
+        let target_commit = state
+            .action
+            .target_commit
+            .as_deref()
+            .context("final Audit lacks target commit")?;
+        value["adoption_receipt"] = serde_json::json!(
+            store
+                .artifact_dir(effort, &state.frozen.adoption.artifact_id)?
+                .join("adoption.json")
+        );
+        value["implementation_record"] = serde_json::json!(
+            store
+                .artifact_dir(effort, &implementation.artifact_id)?
+                .join("implementation.json")
+        );
+        value["registered_snapshot"] = serde_json::json!(
+            store
+                .root()
+                .join("snapshots")
+                .join(target_commit)
+                .join("source")
+        );
+        value["verification_checkout"] = serde_json::json!(cwd);
+        value["assessment"] = serde_json::json!(action_dir.join("assessment.json"));
+    }
     write_bytes_sync(
         &action_dir.join("action.json"),
         &serde_json::to_vec_pretty(&value)?,
@@ -1055,8 +1119,13 @@ fn new_action(
     }
 }
 
-fn review_checkout(project: &Project, action_dir: &Path, commit: &str) -> Result<PathBuf> {
-    let source = action_dir.join("source");
+fn contained_checkout(
+    project: &Project,
+    action_dir: &Path,
+    commit: &str,
+    directory: &str,
+) -> Result<PathBuf> {
+    let source = action_dir.join(directory);
     if source.exists() {
         return Ok(source);
     }
@@ -1823,6 +1892,38 @@ mod tests {
             let count = self.call_count(kind);
             if matches!(kind, "unblock" | "final_audit") {
                 assert!(invocation.session_id.is_none());
+            }
+            if kind == "unblock" {
+                let interrupted = &action["interrupted_action"];
+                assert!(interrupted["kind"].is_string());
+                assert_eq!(interrupted["scope"], action["scope"]);
+                assert!(action["interrupted_report"].as_str().is_some());
+                assert!(action["interrupted_result"].as_str().is_some());
+                assert!(action.get("prior_feedback").is_some());
+            }
+            if kind == "final_audit" {
+                for path in [
+                    "reconciled_discovery",
+                    "adoption_receipt",
+                    "implementation_record",
+                    "registered_snapshot",
+                    "verification_checkout",
+                    "assessment",
+                    "report",
+                    "result",
+                ] {
+                    assert!(
+                        action[path].as_str().is_some(),
+                        "missing final Audit {path}"
+                    );
+                }
+                let verification_checkout = invocation.cwd.to_string_lossy();
+                assert_eq!(
+                    action["verification_checkout"].as_str(),
+                    Some(verification_checkout.as_ref())
+                );
+                assert!(invocation.cwd.ends_with("verification"));
+                assert!(Path::new(action["registered_snapshot"].as_str().unwrap()).is_dir());
             }
             if self.scenario == Scenario::FailedBeforeAcceptance && kind == "work" && count == 1 {
                 return Ok(InvocationResult {

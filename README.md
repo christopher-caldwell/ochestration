@@ -22,7 +22,8 @@ The short version is:
 1. $prep-discovery-ticket
    or $prep-discovery-freeform
 
-2. Open 3–5 fresh model windows and run the same prepared request in each:
+2. Open three fresh model windows and run the same prepared request in each. Run additional
+   independent Discoveries when you deliberately want broader investigation or corroboration:
    $discovery "/absolute/path/request.prepared.md"
 
 3. In a fresh model window, pass the finished Discovery directories to:
@@ -32,7 +33,7 @@ The short version is:
 
 5. Later, when ready, run `$build` with the detailed implementation plan.
    It prepares Build, drives work/review/correction, registers the implementation, and runs the
-   final Audit until completion or a genuine external requirement.
+   final Audit until completion or until it cannot safely continue automatically.
 ```
 
 You normally do **not** operate the Orchestrate CLI yourself. The installed skills only load the
@@ -65,7 +66,7 @@ See the [installation guide](docs/guides/agent-installation.md) for the manual f
 - **Discovery** investigates the frozen repository and may ask you material questions.
 - **Reconcile** analyzes only the Discovery outputs you explicitly give it and produces the
   authoritative answer to "what are we actually going to do?"
-- **Build** is an unattended Rust-driven worker/reviewer loop for an approved phased plan.
+- **Build** is an unattended Rust-driven worker/reviewer loop for a prepared detailed implementation plan.
 - **Audit** checks the exact registered implementation against the binding reconciled requirements;
   unattended Build invokes it automatically.
 

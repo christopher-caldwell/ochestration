@@ -16,7 +16,8 @@ Paste the original ticket verbatim into the prepared file's placeholder and save
 
 ## 2. Discover
 
-Open 3–5 fresh model windows.
+Open three fresh model windows. Add more independent Discoveries deliberately when broader
+investigation or corroboration is useful.
 
 In every window:
 
@@ -43,7 +44,8 @@ Keep the reconciled document path and effort ID.
 Later, explicitly use `$build` with the effort and detailed implementation plan.
 
 Build runs the delivery phases, reviews, corrections, implementation registration, and the final
-Audit until it finishes or needs something only you can provide.
+Audit until it finishes or cannot safely continue automatically. A user or infrastructure need is
+one common blocker.
 
 That is the full ticket workflow.
 

@@ -64,17 +64,18 @@ The skill organizes the request without inventing new meaning and returns the pr
 
 ## What the prepared file contains
 
-Both skills create a prepared Markdown file. Its frontmatter records the store root, the target
-project, the effort name, whether the request is a ticket or freeform, and any explicit
-constraints. You do not normally edit that frontmatter. The exact file shape is in the preparation
+Both skills create a prepared Markdown file. Its frontmatter records the absolute store root, the
+absolute target project, the effort slug, whether the request is a ticket or freeform, and any
+explicit constraints. Keep the prepared request outside both the Orchestrate store root and target
+repository. You do not normally edit that frontmatter. The exact file shape is in the preparation
 guide.
 
 The important thing is simple:
 
 > Every independent Discovery window gets the exact same prepared request file.
 
-The project plus effort name identifies one frozen unit of work. Once initialized, changing the
-request kind, body, or constraints under that effort name is rejected. Clarifications answered
+The project plus effort slug identifies one frozen unit of work. Once initialized, changing the
+request kind, body, or constraints under that effort slug is rejected. Clarifications answered
 during Discovery belong in that Discovery run, not in a rewritten prepared file.
 
 Next: [Discovery](discovery.md).

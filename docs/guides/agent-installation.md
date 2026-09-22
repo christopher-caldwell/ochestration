@@ -4,8 +4,8 @@ The easiest installation is agent-led. You should not need to manually decide wh
 where.
 
 Installed skills are dispatchers. They ask the current `orchestrate` binary for instructions.
-Updating the CLI updates Discovery, Reconcile, Build, and Audit behavior. Reinstall skills only
-when the dispatcher command itself changes.
+Updating the CLI updates all embedded Orchestrate guides and templates. Reinstall skills only when
+the dispatcher command itself changes.
 
 ## Recommended: let the model install it
 

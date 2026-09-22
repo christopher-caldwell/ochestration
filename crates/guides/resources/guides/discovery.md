@@ -1,24 +1,26 @@
-# Orchestrate Discovery
+# Discovery
 
 Input is one absolute prepared-request path. Resolve `orchestrate`, read the request frontmatter, then run:
 
 ```sh
 orchestrate --root "<root>" init --from-file "<prepared-request>"
 orchestrate --root "<root>" discovery prepare --effort "<effort>" \
-  --host "<host>" --provider "<provider>" --model "<model>" --model-effort "<session-or-effort>"
+  --host "<host>" [--provider "<provider>"] [--model "<model>"] [--model-effort "<session-or-effort>"]
 ```
 
 `<root>` comes from the prepared-request frontmatter. Use the `effort` id printed by `init` for every later command. Initialization is safe to repeat from independent model windows only with the identical prepared request. The project plus human effort slug is one immutable unit: never rewrite the prepared request with answers obtained during Discovery and initialize it again under that slug. Record clarifications in this Discovery run. A genuinely different unit of work needs a deliberately different effort slug.
 
-Every `discovery prepare` creates a new run and isolated workspace; no slot, provider plan, or quorum is involved. Pass truthful host, provider, model, and model-effort provenance. The command prints the run id, stable human source label, and workspace path. The workspace's `source/` directory is a clean detached checkout of the frozen baseline with Git history. Use `scratch/` or another temporary location for experiments; never alter or commit experiment artifacts in `source/`.
+Every `discovery prepare` creates a new independent run and isolated workspace. Pass a truthful host. Supply provider, model, and model-effort only when known; never invent provider, model, or session identity. The command prints the run id, stable human source label, and workspace path. The workspace's `source/` directory is a clean detached checkout of the frozen baseline with Git history. Use `scratch/` or another temporary location for experiments; never alter or commit experiment artifacts in `source/`.
 
 Discovery answers: **what should be built, and why?** Work only in that run workspace. Do not inspect sibling runs, parent records, previous Discovery results, a dirty checkout, the live target repository, or unrelated paths. Do not implement the change.
 
-Start by reading `run.json`, `request.md`, and `context.json`. `run.json` defines this Discovery run: its effort, baseline, host, provider, model, and model effort. `request.md` is the original user input and must be read as written. `context.json` supplies the same frozen request for convenience plus explicit user-supplied constraints. Constraints are explicit user-supplied clarifications or governing instructions; do not extract new immutable constraints from a ticket.
+Start by reading `run.json`, `request.md`, and `context.json`. `run.json` defines this Discovery run: its effort, baseline, host, provider, model, and model effort. `request.md` is the original user input and must be read as written. `context.json` supplies the same frozen request for convenience plus `constraints`: explicit user constraints frozen before this Discovery from the reviewed prepared request. Do not extract new immutable constraints from a ticket. Answers obtained during Discovery are run-local evidence or user clarification; never write them back into the prepared request or frozen constraints for the same effort.
 
-When `request_kind` is `ticket`, the ticket is the best available authority for requested behavior and intended scope. Preserve its wording, distinctions, conditions, and explicit scope; do not silently summarize, generalize, narrow, or replace it. A ticket is not infallible about facts. Claims about current code, vendor behavior, regressions, causes, or fallback behavior are hypotheses to investigate. If credible evidence materially conflicts with the ticket, do not silently prefer either source: explain what the ticket says, what the evidence says, why it matters, and ask the user for a decision. Record the clarification as evidence.
+For user intent and scope, use this authority order: (1) explicit frozen user constraints; (2) explicit current user clarification; (3) the original ticket or freeform request. The original request is the default authority for requested behavior and scope; a later explicit user clarification overrides conflicting earlier intent. For factual claims, investigate: ticket or request assertions about current code, vendor behavior, runtime behavior, regressions, causes, or fallback behavior are not automatically true.
 
-When `request_kind` is `freeform`, treat the request as the user's stated goal and context, without inventing requirements that are not there. Ask the user when missing information creates a material product or engineering choice. A later explicit user clarification takes precedence over a conflicting earlier ticket statement; preserve and document the conflict.
+When `request_kind` is `ticket`, preserve its wording, distinctions, conditions, and explicit scope; do not silently summarize, generalize, narrow, or replace it. If credible evidence materially conflicts with requested behavior or scope, do not silently prefer either source: explain what the ticket says, what the evidence says, why it matters, and ask the user for a decision. Record the clarification as evidence.
+
+When `request_kind` is `freeform`, treat the request as the user's stated goal and context, without inventing requirements that are not there. Ask the user when missing information creates a material product or engineering choice. Preserve and document any conflict resolved by later user clarification.
 
 Record important questions, findings, decisions, and requirements as `graph/<id>.md`. Each file is Markdown with YAML frontmatter:
 

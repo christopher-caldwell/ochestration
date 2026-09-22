@@ -4,7 +4,9 @@ Reconcile turns the independent Discovery results you select into one final deci
 Exact model instructions are `orchestrate reconcile guide`.
 
 It is intentionally a separate model phase: it analyzes the Discovery outputs deeply, but it does
-not reopen the repository or perform another investigation.
+not reopen the repository or perform another investigation. That repository-access boundary is a
+model instruction; Rust mechanically limits admissible Reconcile evidence to the selected artifact
+lineage but does not sandbox the model's filesystem.
 
 Its only engineering evidence is the selected finalized Discovery outputs. Frozen explicit
 constraints remain direct user authority and are mechanically preserved as governing requirements;
@@ -36,7 +38,11 @@ The result must converge on one leading direction and may:
 - treat different wording as the same finding;
 - keep a strong finding that only one Discovery found;
 - surface genuine disagreement or missing information;
-- ask you a material intent question when the selected Discoveries cannot settle it.
+- ask you a material intent question only when the selected Discoveries genuinely cannot settle it.
+
+That question is exceptional recovery: Discovery should ideally have surfaced it earlier. Repeated
+Reconcile questions signal Discovery coverage or guidance to improve, not a conversational phase to
+extend.
 
 ## What the output means
 

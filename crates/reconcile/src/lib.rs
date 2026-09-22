@@ -258,6 +258,11 @@ fn validate_sources(
         }
     }
     for alternative in rejected_alternatives {
+        ensure!(
+            !alternative.source_refs.is_empty(),
+            "rejected alternative {} needs selected Discovery evidence",
+            alternative.direction
+        );
         for source in &alternative.source_refs {
             validate_source(store, effort, &selected_ids, source)?;
         }

@@ -557,10 +557,26 @@ pub fn derive_verdict(
                 failed = true;
             }
             CoverageState::Unknown => blocked = true,
-            CoverageState::NotApplicable if row.rationale.trim().is_empty() => {
-                bail!("not-applicable coverage needs a justification")
+            CoverageState::NotApplicable => {
+                ensure!(
+                    !row.rationale.trim().is_empty(),
+                    "not-applicable coverage needs a justification"
+                );
+                let requirement = reconciled
+                    .requirements
+                    .iter()
+                    .find(|item| item.requirement.id == row.requirement_id)
+                    .expect("coverage requirement was validated above");
+                ensure!(
+                    requirement
+                        .requirement
+                        .condition
+                        .as_deref()
+                        .is_some_and(|condition| !condition.trim().is_empty()),
+                    "not-applicable coverage is only valid for conditional requirement {}",
+                    row.requirement_id
+                );
             }
-            _ => {}
         }
     }
     if covered.len() != required.len() {
@@ -830,12 +846,29 @@ mod tests {
     }
 
     #[test]
-    fn passed_and_justified_not_applicable_requirements_can_pass() {
+    fn unconditional_requirement_cannot_be_not_applicable() {
         let mut not_applicable = row("R-2", CoverageState::NotApplicable);
         not_applicable.rationale = "requirement does not apply to this target".into();
-        assert_eq!(
+        assert!(
             derive_verdict(
                 &reconciled(),
+                &assessment(vec![row("R-1", CoverageState::Pass), not_applicable]),
+                &ImplementationStatus::Submitted,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn justified_not_applicable_conditional_requirement_can_pass() {
+        let mut reconciled = reconciled();
+        reconciled.requirements[1].requirement.condition =
+            Some("When legacy mode is enabled.".into());
+        let mut not_applicable = row("R-2", CoverageState::NotApplicable);
+        not_applicable.rationale = "Legacy mode is disabled for this implementation.".into();
+        assert_eq!(
+            derive_verdict(
+                &reconciled,
                 &assessment(vec![row("R-1", CoverageState::Pass), not_applicable]),
                 &ImplementationStatus::Submitted,
             )

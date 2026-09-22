@@ -2,8 +2,12 @@
 
 Build is an unattended, fixed Rust-driven work/review loop. Exact setup instructions are
 `orchestrate build guide`. The exact Reconciled Discovery
-defines **what** must be delivered; the detailed implementation plan supplies only the
-ordered delivery-phase grouping.
+defines **what** must be delivered; the detailed implementation plan provides implementation
+approach and ordered delivery-phase grouping.
+
+Reconciled Discovery is binding **what**. The detailed implementation plan is **how** and ordering.
+If they materially conflict, Reconciled Discovery wins, but Build stops before implementation rather
+than silently changing the plan or improvising around the conflict.
 
 ## Prepare and run Build
 
@@ -12,6 +16,7 @@ creates or reuses Adoption, captures current Build starting HEAD/tree, and verif
 Discovery baseline is its ancestor. The repository may advance between Discovery and Build. Build
 then copies the detailed plan and fills `plan.json` and `config.toml`
 from templates supplied by the installed CLI. Files you have already filled are left in place.
+Existing Build files and state are resumed rather than re-scaffolded.
 Worker and reviewer sessions may use different configured adapters. Exact setup rules, including
 which adapters this CLI accepts, are supplied by `orchestrate build guide`.
 
@@ -22,7 +27,7 @@ automation has an explicit effort identity. Multiple eligible efforts are report
 
 The driver gives each role the current action and the role guide from the CLI that is running.
 It owns retries and corrections. It returns to you when the Build needs something only you can
-supply, or when it cannot safely continue. You do not step the loop by hand.
+supply, or when it cannot safely continue automatically. You do not step the loop by hand.
 
 ## Audit
 
