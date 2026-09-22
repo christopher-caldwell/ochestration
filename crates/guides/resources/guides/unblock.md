@@ -8,4 +8,6 @@ Write `result.json` at the path in `action.json`:
 {"action_id": "<action_id>", "scope": "<scope>", "outcome": "remedy_available"}
 ```
 
-Use `remedy_available` only when the same interrupted action can be retried without new user authority. Use `external_requirement` only when progress requires information, authorization, credentials, or inaccessible infrastructure the current system cannot supply. Do not approve work, change scope or requirements, select another phase or implementation direction, choose the next role, or edit controller state.
+Use `remedy_available` only when the same interrupted action can be retried without new user authority. Use `external_requirement` only when progress requires information, authorization, credentials, or inaccessible infrastructure the current system cannot supply.
+
+Unblock is diagnosis-only. Do not modify product source, run mutating commands against the product checkout, commit changes, edit Build/controller files, or perform the proposed remedy yourself. Describe an available remedy in `report.md`; the controller will resume the interrupted role to perform it. Do not approve work, change scope or requirements, select another phase or implementation direction, or choose the next role.

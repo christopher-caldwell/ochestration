@@ -28,7 +28,7 @@ Configure worker and independent reviewer adapters separately in `config.toml`. 
 
 ## Existing prepared or active Build
 
-If Build files or state already exist for this exact effort, do not scaffold again and do not replace the detailed plan, `plan.json`, or `config.toml`. Verify the existing exact Build authority and invoke or resume the driver. Never delete or recreate Build state merely to satisfy this guide.
+If Build files or state already exist for this exact effort, do not scaffold again and do not replace the detailed plan, `plan.json`, or `config.toml`. Verify the existing exact Build authority and invoke or resume the driver. If the current invocation supplies a Reconciled Discovery or detailed plan that differs from the existing Build's frozen inputs, stop and report the mismatch; do not resume under different authority and do not replace the frozen files. Never delete or recreate Build state merely to satisfy this guide.
 
 From the target repository, invoke the driver:
 

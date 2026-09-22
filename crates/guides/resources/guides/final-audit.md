@@ -22,7 +22,7 @@ The assessment names those exact references and contains exactly one coverage ro
 }
 ```
 
-`state` is `pass`, `fail`, `unknown`, or `not_applicable`. Pass and fail rows need evidence. Failures also need a correction. Use `not_applicable` only when the binding requirement itself is conditional and its stated condition is demonstrably false for this implementation/context. It never means that an unconditional requirement seems unimportant. For an unconditional binding requirement, use `pass`, `fail`, or `unknown`. Copy `reconciled`, `adoption`, and `implementation` from `action.json`; do not look them up from controller state.
+`state` is `pass`, `fail`, `unknown`, or `not_applicable`. Pass and fail rows need evidence. Failures also need a correction. `not_applicable` also needs evidence establishing that the binding requirement's stated condition is false for this implementation/context. It never means that an unconditional requirement seems unimportant. For an unconditional binding requirement, use `pass`, `fail`, or `unknown`. Copy `reconciled`, `adoption`, and `implementation` from `action.json`; do not look them up from controller state.
 
 Write `assessment.json`, `report.md`, and `result.json` at the exact paths in `action.json`:
 

@@ -10,7 +10,7 @@ Create a small Markdown file with any supplemental context, then run:
 $prep-discovery-ticket
 ```
 
-Give it the notes file, target repository, and a short effort name.
+Give it the notes file, target repository, and a short effort slug.
 
 Paste the original ticket verbatim into the prepared file's placeholder and save it.
 

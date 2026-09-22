@@ -260,6 +260,8 @@ fn embedded_guides_preserve_high_value_instruction_boundaries() {
     assert!(
         orchestrate_guides::FINAL_AUDIT.contains("must never mutate the stored immutable snapshot")
     );
+    assert!(orchestrate_guides::UNBLOCK.contains("Unblock is diagnosis-only"));
+    assert!(orchestrate_guides::UNBLOCK.contains("Do not modify product source"));
     for guide in [
         orchestrate_guides::PREP_DISCOVERY_TICKET,
         orchestrate_guides::PREP_DISCOVERY_FREEFORM,

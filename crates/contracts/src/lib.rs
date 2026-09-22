@@ -514,6 +514,12 @@ pub fn validate_reconciled_discovery(reconciled: &ReconciledDiscovery) -> Result
             item.id
         );
     }
+    for alternative in &reconciled.rejected_alternatives {
+        ensure!(
+            !alternative.direction.trim().is_empty() && !alternative.reason.trim().is_empty(),
+            "rejected alternatives need a direction and reason"
+        );
+    }
     Ok(())
 }
 pub fn derive_verdict(
@@ -561,6 +567,12 @@ pub fn derive_verdict(
                 ensure!(
                     !row.rationale.trim().is_empty(),
                     "not-applicable coverage needs a justification"
+                );
+                ensure!(
+                    row.evidence
+                        .iter()
+                        .any(|reference| !reference.trim().is_empty()),
+                    "not-applicable coverage needs evidence that the requirement condition is false"
                 );
                 let requirement = reconciled
                     .requirements
@@ -852,6 +864,24 @@ mod tests {
         assert!(
             derive_verdict(
                 &reconciled(),
+                &assessment(vec![row("R-1", CoverageState::Pass), not_applicable]),
+                &ImplementationStatus::Submitted,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn not_applicable_coverage_needs_evidence() {
+        let mut reconciled = reconciled();
+        reconciled.requirements[1].requirement.condition =
+            Some("When legacy mode is enabled.".into());
+        let mut not_applicable = row("R-2", CoverageState::NotApplicable);
+        not_applicable.rationale = "Legacy mode is disabled for this implementation.".into();
+        not_applicable.evidence = vec![];
+        assert!(
+            derive_verdict(
+                &reconciled,
                 &assessment(vec![row("R-1", CoverageState::Pass), not_applicable]),
                 &ImplementationStatus::Submitted,
             )

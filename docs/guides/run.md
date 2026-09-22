@@ -54,7 +54,7 @@ Put the request and context in a Markdown file, then invoke:
 $prep-discovery-freeform
 ```
 
-Give it the request file, target repository, and a short effort name.
+Give it the request file, target repository, and a short effort slug.
 
 It returns the prepared request file directly.
 

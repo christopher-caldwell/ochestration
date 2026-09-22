@@ -43,7 +43,7 @@ be built.
 Answer that model window normally.
 
 The answer stays inside that active Discovery run. Do not rewrite the prepared request or re-run
-initialization under the same effort name; the prepared request is immutable for that effort.
+initialization under the same effort slug; the prepared request is immutable for that effort.
 
 If a question remains materially unresolved, the Discovery may correctly finish as `BLOCKED`
 instead of guessing. A finalized blocked artifact is immutable; if later information resolves it,

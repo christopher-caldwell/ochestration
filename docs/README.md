@@ -20,4 +20,4 @@
 The CLI is the versioned product. Skills only dispatch to `orchestrate <action> guide`, which
 prints the instructions embedded in the installed binary. Human docs explain the workflow; they
 are not a second copy of those instructions. You normally should not need raw CLI commands for
-Discovery, Reconcile, or Audit.
+normal workflow phases.

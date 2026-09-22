@@ -2,7 +2,7 @@
 
 Audit answers: **does this exact implementation satisfy this exact adopted Reconciled Discovery?**
 
-Run `orchestrate status --effort "<effort>"` and identify one exact Reconciled Discovery → Adoption → Implementation chain. Read the reconciled contract, the adoption receipt, the implementation record, and the immutable snapshot at `<root>/snapshots/<target-commit>/source/`.
+Run `orchestrate status --effort "<effort>"` and identify one exact Reconciled Discovery → Adoption → Implementation chain. Never choose a "latest" chain. If the user did not identify an exact implementation and more than one plausible chain exists, stop and ask for the exact implementation/artifact rather than guessing. Read the reconciled contract, the adoption receipt, the implementation record, and the immutable snapshot at `<root>/snapshots/<target-commit>/source/`.
 
 Read the immutable snapshot as evidence. If executable verification may write files, create or use a disposable checkout or copy of the exact registered target commit and run tests there. Never mutate the stored immutable snapshot. Audit must not invent product requirements, turn advisory technical suggestions into requirements, or fail implementation details that the binding Reconciled Discovery did not require. Do not edit source or authority.
 
@@ -24,7 +24,7 @@ Write `assessment.json` outside immutable published bundles. During unattended B
 }
 ```
 
-`state` is `pass`, `fail`, `unknown`, or `not_applicable`. Pass and fail rows need evidence. Failures also need a correction. Use `not_applicable` only when the binding requirement itself is conditional and its stated condition is demonstrably false for this implementation/context. It must not waive an unconditional requirement because the assessor thinks it should not matter. For an unconditional binding requirement, use `pass`, `fail`, or `unknown`.
+`state` is `pass`, `fail`, `unknown`, or `not_applicable`. Pass and fail rows need evidence. Failures also need a correction. `not_applicable` also needs evidence establishing that the binding requirement's stated condition is false for this implementation/context. It must not waive an unconditional requirement because the assessor thinks it should not matter. For an unconditional binding requirement, use `pass`, `fail`, or `unknown`.
 
 Rust, not the assessor, derives the verdict: any failure is `CHANGES_REQUIRED`; any unknown or missing row is `BLOCKED`; otherwise pass or justified not-applicable rows produce `PASS`. A partial or blocked implementation cannot pass.
 

@@ -10,9 +10,13 @@ Later: explicit Build → Adoption → Implementation → Audit
 
 ## Instruction ownership
 
-Checked-in skills are stable dispatchers. Their substantive body is exactly `You must run
-orchestrate <action> guide for instructions.` Those guides, and the Build `plan.json` / `config.toml`
-templates, are Markdown and text compiled into the binary. Host files (`AGENTS.md`, `CLAUDE.md`,
+Checked-in skills are stable dispatchers. Each substantive body follows exactly this pattern:
+
+```text
+You must run `orchestrate <action> guide` for instructions.
+```
+
+Those guides, and the Build `plan.json` / `config.toml` templates, are Markdown and text compiled into the binary. Host files (`AGENTS.md`, `CLAUDE.md`,
 and the Cursor orchestration rule) only explain how to install or update that CLI and those
 dispatchers.
 
@@ -91,7 +95,8 @@ checkout for verification that may write files.
 
 Audit evaluates the binding requirements from the exact Reconciled Discovery against that exact
 implementation. Rust requires one coverage row per binding requirement, rejects `not_applicable`
-for an unconditional requirement, and derives the verdict: any failure gives `CHANGES_REQUIRED`;
+for an unconditional requirement, requires evidence when a conditional requirement is marked
+`not_applicable`, and derives the verdict: any failure gives `CHANGES_REQUIRED`;
 otherwise unknown or missing coverage gives `BLOCKED`; otherwise a submitted implementation passes.
 
 ## Storage
