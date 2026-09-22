@@ -4,15 +4,17 @@ Use this when the work starts from an existing ticket.
 
 ## 1. Prepare
 
-Create a small Markdown file with any supplemental context, then run:
+Provide the original ticket as a Markdown file, with optional supplemental context, then run:
 
 ```text
 $prep-discovery-ticket
 ```
 
-Give it the notes file, target repository, and a short effort slug.
+Give it the ticket file, optional context, target repository, and a short effort slug.
 
-Paste the original ticket verbatim into the prepared file's placeholder and save it.
+Prepare may ask focused questions about consequential missing user intent. It preserves the
+original ticket verbatim in the prepared file. Review that file before Discovery. Technical
+investigation begins in Discovery.
 
 ## 2. Discover
 

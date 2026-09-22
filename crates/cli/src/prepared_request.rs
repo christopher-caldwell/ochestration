@@ -6,8 +6,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const TICKET_PLACEHOLDER: &str = "<!-- PASTE ORIGINAL TICKET VERBATIM HERE -->";
-
 #[derive(Debug)]
 pub struct PreparedRequest {
     pub root: PathBuf,
@@ -64,12 +62,6 @@ pub fn read(path: &Path) -> Result<PreparedRequest> {
         !body.trim().is_empty(),
         "prepared request body must not be whitespace only"
     );
-    if parsed.request_kind == RequestKind::Ticket {
-        ensure!(
-            !body.contains(TICKET_PLACEHOLDER),
-            "replace the original ticket placeholder with the original ticket and retry"
-        );
-    }
     Ok(PreparedRequest {
         root: parsed.root,
         project: parsed.project,
@@ -109,7 +101,9 @@ fn next_line(bytes: &[u8], start: usize) -> Option<(&[u8], usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_frontmatter;
+    use super::{read, split_frontmatter};
+    use orchestrate_contracts::RequestKind;
+    use std::fs;
 
     #[test]
     fn split_preserves_the_body_offset_for_lf_and_crlf() {
@@ -123,5 +117,23 @@ mod tests {
             let (_, offset) = split_frontmatter(document).unwrap();
             assert_eq!(&document[offset..], expected);
         }
+    }
+
+    #[test]
+    fn ticket_body_is_read_without_rewriting_its_contents() {
+        let path = std::env::temp_dir().join(format!(
+            "orchestrate-prepared-ticket-{}-{}.md",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let body = "\n# Discovery Request\n\n## Original Ticket\n\nTicket line 1  \nTicket line 2\r\n\n## Explicit Unknowns\n\nStaging behavior is unknown.\n";
+        let document = format!(
+            "---\nroot: /tmp/orchestration-test\nproject: /tmp/project-test\neffort: ticket-test\nrequest_kind: ticket\nconstraints: []\n---\n{body}"
+        );
+        fs::write(&path, document).unwrap();
+        let parsed = read(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(parsed.request_kind, RequestKind::Ticket);
+        assert_eq!(parsed.body, body);
     }
 }

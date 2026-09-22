@@ -63,6 +63,9 @@ See the [installation guide](docs/guides/agent-installation.md) for the manual f
 
 ## What each phase does
 
+- **Prepare** reads the original ticket or freeform request and may ask focused questions about
+  missing user intent before freezing the common input. It preserves the ticket verbatim and does
+  not perform engineering investigation. Review the prepared request before Discovery.
 - **Discovery** investigates the frozen repository and may ask you material questions.
 - **Reconcile** analyzes only the Discovery outputs you explicitly give it and produces the
   authoritative answer to "what are we actually going to do?"
