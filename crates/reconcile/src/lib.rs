@@ -2,9 +2,10 @@
 
 use anyhow::{Result, ensure};
 use orchestrate_contracts::{
-    ArtifactKind, ArtifactRef, DiscoveryAttribution, DiscoverySourceRef, EvidenceSynthesis,
-    Provenance, ReconcileProposal, ReconciledDiscovery, ReconciledRequirement, RejectedAlternative,
-    Requirement, TechnicalSuggestion, validate_reconciled_discovery,
+    ArtifactKind, ArtifactRef, DiscoveryAttribution, DiscoverySourceRef, EvidenceKind,
+    EvidenceNode, EvidenceSynthesis, Provenance, ReconcileProposal, ReconciledDiscovery,
+    ReconciledRequirement, RejectedAlternative, Requirement, TechnicalSuggestion, Verification,
+    validate_reconciled_discovery,
 };
 use orchestrate_core::{Effort, Store};
 use std::collections::{BTreeMap, HashSet};
@@ -226,10 +227,7 @@ fn validate_sources(
     evidence_synthesis: &[EvidenceSynthesis],
     rejected_alternatives: &[RejectedAlternative],
 ) -> Result<()> {
-    let selected_ids = selected
-        .iter()
-        .map(|reference| reference.artifact_id.as_str())
-        .collect::<HashSet<_>>();
+    let selected_nodes = load_selected_nodes(store, effort, selected)?;
     for requirement in requirements {
         if requirement.user_clarification.is_none() && !requirement.frozen_user_constraint {
             ensure!(
@@ -238,7 +236,7 @@ fn validate_sources(
                 requirement.requirement.id
             );
             for source in &requirement.source_refs {
-                validate_source(store, effort, &selected_ids, source)?;
+                validate_source(&selected_nodes, source)?;
             }
         }
     }
@@ -249,13 +247,14 @@ fn validate_sources(
             suggestion.id
         );
         for source in &suggestion.source_refs {
-            validate_source(store, effort, &selected_ids, source)?;
+            validate_source(&selected_nodes, source)?;
         }
     }
     for synthesis in evidence_synthesis {
         for source in &synthesis.source_refs {
-            validate_source(store, effort, &selected_ids, source)?;
+            validate_source(&selected_nodes, source)?;
         }
+        validate_synthesis_verification(synthesis, &selected_nodes)?;
     }
     for alternative in rejected_alternatives {
         ensure!(
@@ -264,10 +263,78 @@ fn validate_sources(
             alternative.direction
         );
         for source in &alternative.source_refs {
-            validate_source(store, effort, &selected_ids, source)?;
+            validate_source(&selected_nodes, source)?;
         }
     }
     Ok(())
+}
+
+fn load_selected_nodes(
+    store: &Store,
+    effort: &Effort,
+    selected: &[ArtifactRef],
+) -> Result<BTreeMap<String, BTreeMap<String, EvidenceNode>>> {
+    let mut selected_nodes = BTreeMap::new();
+    for reference in selected {
+        let (_, _, nodes) = orchestrate_discovery::load_discovery(store, effort, reference)?;
+        selected_nodes.insert(
+            reference.artifact_id.clone(),
+            nodes
+                .into_iter()
+                .map(|node| (node.id.clone(), node))
+                .collect(),
+        );
+    }
+    Ok(selected_nodes)
+}
+
+fn validate_synthesis_verification(
+    synthesis: &EvidenceSynthesis,
+    selected_nodes: &BTreeMap<String, BTreeMap<String, EvidenceNode>>,
+) -> Result<()> {
+    let mut expected = Vec::new();
+    for source in &synthesis.source_refs {
+        let Some(node_id) = &source.node_id else {
+            continue;
+        };
+        let node = &selected_nodes[&source.discovery_artifact_id][node_id];
+        if node.kind == EvidenceKind::Finding {
+            let method = node
+                .verification
+                .as_ref()
+                .expect("validated Finding has a verification classification")
+                .clone();
+            if !expected.contains(&method) {
+                expected.push(method);
+            }
+        }
+    }
+    let mut declared = Vec::new();
+    for method in &synthesis.verification_methods {
+        if !declared.contains(method) {
+            declared.push(method.clone());
+        }
+    }
+    ensure!(
+        same_method_set(&expected, &declared),
+        "evidence synthesis {} verification methods mismatch: expected [{}], declared [{}]",
+        synthesis.id,
+        format_verification_methods(&expected),
+        format_verification_methods(&declared)
+    );
+    Ok(())
+}
+
+fn same_method_set(left: &[Verification], right: &[Verification]) -> bool {
+    left.len() == right.len() && left.iter().all(|method| right.contains(method))
+}
+
+fn format_verification_methods(methods: &[Verification]) -> String {
+    methods
+        .iter()
+        .map(|method| format!("{:?}", method).to_lowercase())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Render the one human-readable Reconciled Discovery from its authoritative structured contract.
@@ -324,14 +391,9 @@ pub fn render_reconciled_discovery(reconciled: &ReconciledDiscovery) -> String {
             (None, false) => {
                 markdown.push_str("\n**Authority:** Selected Discovery evidence\n");
                 for source in &item.source_refs {
-                    let node = source
-                        .node_id
-                        .as_deref()
-                        .map_or(String::new(), |node| format!(" / {node}"));
                     markdown.push_str(&format!(
-                        "\n- {}{}\n",
-                        source_name(reconciled, source),
-                        node
+                        "\n- {}\n",
+                        format_source_reference(reconciled, source)
                     ));
                 }
             }
@@ -353,11 +415,18 @@ pub fn render_reconciled_discovery(reconciled: &ReconciledDiscovery) -> String {
             item.id,
             item.conclusion,
             item.evidence_summary,
-            item.verification_methods.iter().map(|method| format!("{:?}", method).to_lowercase()).collect::<Vec<_>>().join(", "),
+            if item.verification_methods.is_empty() {
+                "Not attributed to specific Finding nodes".into()
+            } else {
+                format_verification_methods(&item.verification_methods)
+            },
             if item.limitations.trim().is_empty() { "None reported." } else { &item.limitations }
         ));
         for source in &item.source_refs {
-            markdown.push_str(&format!("\n- {}\n", source_name(reconciled, source)));
+            markdown.push_str(&format!(
+                "\n- {}\n",
+                format_source_reference(reconciled, source)
+            ));
         }
     }
     render_list(
@@ -375,7 +444,10 @@ pub fn render_reconciled_discovery(reconciled: &ReconciledDiscovery) -> String {
             alternative.direction, alternative.reason
         ));
         for source in &alternative.source_refs {
-            markdown.push_str(&format!("\n- {}\n", source_name(reconciled, source)));
+            markdown.push_str(&format!(
+                "\n- {}\n",
+                format_source_reference(reconciled, source)
+            ));
         }
     }
     render_list(
@@ -399,14 +471,9 @@ pub fn render_reconciled_discovery(reconciled: &ReconciledDiscovery) -> String {
             suggestion.id, suggestion.text
         ));
         for source in &suggestion.source_refs {
-            let node = source
-                .node_id
-                .as_deref()
-                .map_or(String::new(), |node| format!(" / {node}"));
             markdown.push_str(&format!(
-                "\n- {}{}\n",
-                source_name(reconciled, source),
-                node
+                "\n- {}\n",
+                format_source_reference(reconciled, source)
             ));
         }
     }
@@ -432,31 +499,36 @@ fn render_list(markdown: &mut String, title: &str, values: &[String]) {
     }
 }
 
-fn source_name(reconciled: &ReconciledDiscovery, source: &DiscoverySourceRef) -> String {
-    reconciled
+fn format_source_reference(
+    reconciled: &ReconciledDiscovery,
+    source: &DiscoverySourceRef,
+) -> String {
+    let source_name = reconciled
         .discovery_attribution
         .iter()
         .find(|item| item.discovery_artifact_id == source.discovery_artifact_id)
         .map(|item| format!("{} (`{}`)", item.label, item.discovery_artifact_id))
-        .unwrap_or_else(|| source.discovery_artifact_id.clone())
+        .unwrap_or_else(|| source.discovery_artifact_id.clone());
+    source
+        .node_id
+        .as_deref()
+        .map_or(source_name.clone(), |node| {
+            format!("{source_name} / {node}")
+        })
 }
 
 fn validate_source(
-    store: &Store,
-    effort: &Effort,
-    selected_ids: &HashSet<&str>,
+    selected_nodes: &BTreeMap<String, BTreeMap<String, EvidenceNode>>,
     source: &DiscoverySourceRef,
 ) -> Result<()> {
     ensure!(
-        selected_ids.contains(source.discovery_artifact_id.as_str()),
+        selected_nodes.contains_key(&source.discovery_artifact_id),
         "source references unselected Discovery artifact {}",
         source.discovery_artifact_id
     );
     if let Some(node_id) = &source.node_id {
-        let reference = store.find_artifact_ref(effort, &source.discovery_artifact_id)?;
-        let (_, _, nodes) = orchestrate_discovery::load_discovery(store, effort, &reference)?;
         ensure!(
-            nodes.iter().any(|node| node.id == *node_id),
+            selected_nodes[&source.discovery_artifact_id].contains_key(node_id),
             "source references missing evidence node {} in Discovery artifact {}",
             node_id,
             source.discovery_artifact_id

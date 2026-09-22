@@ -55,6 +55,15 @@ If evidence answers a material question, record the answer. If it materially con
 
 Use `technical-spec.md` as the public result. It must stand alone and cover the interpreted request, current behavior, recommendation, required and unchanged behavior, decisions and rationale, requirements and acceptance criteria, conditions, alternatives or disagreement, limitations, and verification.
 
+Before finalization, read the specification and graph together as the complete evidence a Reconcile model will receive without access to source or the host conversation:
+
+- Check that every graph identifier used in the specification resolves to the intended node and that the specification and node agree. Link decisions and requirements to the Findings or recorded clarifications they actually rely on through `depends_on`; a prose reference does not create that dependency. Consolidate duplicated clarification records or connect their uses. A Finding may legitimately produce no Requirement, for example when recording a deferred observation; explain that disposition rather than inventing work.
+- Keep observed behavior and its evidentiary limits in Findings, and the chosen remedy and its authority or tradeoffs in Decisions. An accepted Finding about what the code does does not by itself authorize changing that behavior. Preserve material compatibility evidence even when choosing to change the existing contract.
+- Distinguish completed experiments, calculated examples, inspected code paths, and proposed tests. For an executed reproduction, preserve the invocation or procedure, relevant fixture inputs, and observed result in the public evidence, with the limits already described above. Expected output or a written walkthrough is not an observed execution result; a calculation about one step does not establish that the full flow was exercised.
+- Check that exclusions and limitations remain consistent with the conclusions. Saying that a case is out of scope or needs no implementation change does not establish its cause. Preserve an unconfirmed cause as unconfirmed, even when the scope decision is settled.
+
+This is a semantic publication review, not an additional graph status or a requirement that every investigation produce a change. Correct inconsistencies in the active run before publishing; structural validation alone does not establish that the evidence supports the conclusions.
+
 Run `orchestrate discovery validate` whenever an intermediate check is useful:
 
 ```sh

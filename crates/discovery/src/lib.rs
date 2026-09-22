@@ -10,13 +10,15 @@ use orchestrate_contracts::{
     ArtifactKind, ArtifactRef, DiscoveryRun, DiscoverySummary, EvidenceKind, EvidenceNode,
     EvidenceStatus, Independence, Provenance, RequestKind, Verification, validate_evidence_node,
 };
-use orchestrate_core::{Effort, Store};
+use orchestrate_core::{Effort, Store, verify_git_checkout};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
 struct WorkspaceContext {
     context_id: String,
     request_kind: RequestKind,
+    request: String,
+    constraints: Vec<String>,
     baseline_commit: String,
     baseline_tree: String,
 }
@@ -91,12 +93,34 @@ pub fn validate(store: &Store, effort: &Effort, run_id: &str) -> Result<Validate
         &fs::read(root.join("context.json")).context("Discovery workspace lacks context.json")?,
     )?;
     ensure!(
-        context.context_id == effort.context.id
-            && context.request_kind == effort.context.request_kind
-            && context.baseline_commit == effort.baseline_commit
-            && context.baseline_tree == effort.baseline_tree,
-        "Discovery workspace belongs to another effort or baseline"
+        context.context_id == effort.context.id,
+        "Discovery workspace context ID differs from the frozen effort"
     );
+    ensure!(
+        context.request_kind == effort.context.request_kind,
+        "Discovery workspace request kind differs from the frozen effort"
+    );
+    ensure!(
+        context.request == effort.context.request,
+        "Discovery workspace context request differs from the frozen effort"
+    );
+    ensure!(
+        context.constraints == effort.context.constraints,
+        "Discovery workspace context constraints differ from the frozen effort"
+    );
+    ensure!(
+        context.baseline_commit == effort.baseline_commit,
+        "Discovery workspace baseline commit differs from the frozen effort"
+    );
+    ensure!(
+        context.baseline_tree == effort.baseline_tree,
+        "Discovery workspace baseline tree differs from the frozen effort"
+    );
+    verify_git_checkout(
+        &root.join("source"),
+        &effort.baseline_commit,
+        &effort.baseline_tree,
+    )?;
     let technical_bytes = fs::read(root.join("technical-spec.md"))
         .context("Discovery workspace lacks technical-spec.md")?;
     let technical_spec =
@@ -262,7 +286,22 @@ fn parse_node(input: &str) -> Result<EvidenceNode> {
 }
 fn validate_technical_spec(spec: &str) -> Result<()> {
     ensure!(!spec.trim().is_empty(), "technical-spec.md is empty");
+    ensure!(
+        spec.lines().any(|line| {
+            let line = line.trim();
+            !line.is_empty() && !is_atx_heading(line)
+        }),
+        "technical-spec.md has no content beyond Markdown headings"
+    );
     Ok(())
+}
+
+fn is_atx_heading(line: &str) -> bool {
+    let hashes = line
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    (1..=6).contains(&hashes) && line.chars().nth(hashes).is_none_or(char::is_whitespace)
 }
 fn validate_graph(nodes: &[EvidenceNode]) -> Result<()> {
     let mut map = HashMap::new();
@@ -475,6 +514,21 @@ mod tests {
     #[test]
     fn technical_spec_needs_content_not_prescribed_headings() {
         assert!(validate_technical_spec("A useful technical specification.").is_ok());
+    }
+
+    #[test]
+    fn technical_spec_rejects_heading_only_content() {
+        for spec in [
+            "# Technical specification\n\n",
+            "\n # Technical specification\r\n\r\n",
+            "# One\n\n## Two\n\n###### Three\n",
+        ] {
+            assert!(validate_technical_spec(spec).is_err(), "{spec:?}");
+        }
+        assert!(
+            validate_technical_spec("# Technical specification\n\n- No change is needed.\n")
+                .is_ok()
+        );
     }
 
     #[test]

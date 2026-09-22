@@ -155,6 +155,30 @@ fn write_ready_workspace(workspace: &Path) {
     write_node(workspace, &finding);
     write_node(workspace, &requirement);
 }
+fn write_ready_workspace_with_verification(workspace: &Path, verification: Verification) {
+    fs::write(
+        workspace.join("technical-spec.md"),
+        "# Technical specification\n\nEnough context for reconciliation.\n",
+    )
+    .unwrap();
+    let mut finding = node(
+        "F-1",
+        EvidenceKind::Finding,
+        EvidenceStatus::Accepted,
+        vec![],
+        false,
+    );
+    finding.verification = Some(verification);
+    let requirement = node(
+        "R-1",
+        EvidenceKind::Requirement,
+        EvidenceStatus::Accepted,
+        vec!["F-1"],
+        true,
+    );
+    write_node(workspace, &finding);
+    write_node(workspace, &requirement);
+}
 fn write_blocked_workspace(workspace: &Path) {
     fs::write(
         workspace.join("technical-spec.md"),
@@ -176,6 +200,37 @@ fn finalize_discovery(root: &Path, effort: &str) -> ArtifactRef {
     let prepared = command(root, &["discovery", "prepare", "--effort", effort]);
     let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
     write_ready_workspace(&workspace);
+    let run = prepared["details"]["run"].as_str().unwrap();
+    reference(
+        &command(
+            root,
+            &["discovery", "finalize", "--effort", effort, "--run", run],
+        ),
+        "artifact",
+    )
+}
+fn finalize_discovery_with_workspace(root: &Path, effort: &str) -> (ArtifactRef, PathBuf) {
+    let prepared = command(root, &["discovery", "prepare", "--effort", effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace(&workspace);
+    let run = prepared["details"]["run"].as_str().unwrap();
+    let artifact = reference(
+        &command(
+            root,
+            &["discovery", "finalize", "--effort", effort, "--run", run],
+        ),
+        "artifact",
+    );
+    (artifact, workspace)
+}
+fn finalize_discovery_with_verification(
+    root: &Path,
+    effort: &str,
+    verification: Verification,
+) -> ArtifactRef {
+    let prepared = command(root, &["discovery", "prepare", "--effort", effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace_with_verification(&workspace, verification);
     let run = prepared["details"]["run"].as_str().unwrap();
     reference(
         &command(
@@ -594,6 +649,290 @@ fn discovery_verification_and_human_source_label_round_trip() {
 }
 
 #[test]
+fn discovery_publication_rechecks_complete_frozen_context_and_source() {
+    let (root, _repo, effort) = new_effort_with_constraints("frozen-inputs", &["preserve order"]);
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    let run = prepared["details"]["run"].as_str().unwrap();
+    write_ready_workspace(&workspace);
+
+    let context_path = workspace.join("context.json");
+    let mut context: serde_json::Value =
+        serde_json::from_slice(&fs::read(&context_path).unwrap()).unwrap();
+    context["request"] = serde_json::json!("mutated request");
+    fs::write(&context_path, serde_json::to_vec(&context).unwrap()).unwrap();
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "validate", "--effort", &effort, "--run", run]
+        )
+        .contains("context request differs")
+    );
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "finalize", "--effort", &effort, "--run", run]
+        )
+        .contains("context request differs")
+    );
+    assert!(
+        fs::read_dir(workspace.parent().unwrap())
+            .unwrap()
+            .all(|entry| !entry.unwrap().path().join("manifest.json").exists())
+    );
+
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    let run = prepared["details"]["run"].as_str().unwrap();
+    write_ready_workspace(&workspace);
+    command(
+        &root,
+        &["discovery", "validate", "--effort", &effort, "--run", run],
+    );
+    fs::write(workspace.join("source").join("untracked.txt"), "drift\n").unwrap();
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "finalize", "--effort", &effort, "--run", run]
+        )
+        .contains("source checkout is dirty")
+    );
+}
+
+#[test]
+fn discovery_context_requires_complete_values_but_allows_equivalent_json_and_scratch_files() {
+    let (root, _repo, effort) =
+        new_effort_with_constraints("context-values", &["first constraint", "second constraint"]);
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace(&workspace);
+    let context_path = workspace.join("context.json");
+    let context: serde_json::Value =
+        serde_json::from_slice(&fs::read(&context_path).unwrap()).unwrap();
+    fs::write(
+        &context_path,
+        serde_json::to_string_pretty(&context).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        workspace.join("scratch").join("experiment.txt"),
+        "allowed\n",
+    )
+    .unwrap();
+    let run = prepared["details"]["run"].as_str().unwrap();
+    reference(
+        &command(
+            &root,
+            &["discovery", "finalize", "--effort", &effort, "--run", run],
+        ),
+        "artifact",
+    );
+
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace(&workspace);
+    let context_path = workspace.join("context.json");
+    let mut context: serde_json::Value =
+        serde_json::from_slice(&fs::read(&context_path).unwrap()).unwrap();
+    context.as_object_mut().unwrap().remove("request");
+    fs::write(&context_path, serde_json::to_vec(&context).unwrap()).unwrap();
+    let run = prepared["details"]["run"].as_str().unwrap();
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "validate", "--effort", &effort, "--run", run]
+        )
+        .contains("missing field `request`")
+    );
+
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace(&workspace);
+    let context_path = workspace.join("context.json");
+    let mut context: serde_json::Value =
+        serde_json::from_slice(&fs::read(&context_path).unwrap()).unwrap();
+    context.as_object_mut().unwrap().remove("constraints");
+    fs::write(&context_path, serde_json::to_vec(&context).unwrap()).unwrap();
+    let run = prepared["details"]["run"].as_str().unwrap();
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "validate", "--effort", &effort, "--run", run]
+        )
+        .contains("missing field `constraints`")
+    );
+
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace(&workspace);
+    let context_path = workspace.join("context.json");
+    let mut context: serde_json::Value =
+        serde_json::from_slice(&fs::read(&context_path).unwrap()).unwrap();
+    context["constraints"] = serde_json::json!(["second constraint", "first constraint"]);
+    fs::write(&context_path, serde_json::to_vec(&context).unwrap()).unwrap();
+    let run = prepared["details"]["run"].as_str().unwrap();
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "validate", "--effort", &effort, "--run", run]
+        )
+        .contains("context constraints differ")
+    );
+}
+
+#[test]
+fn discovery_rejects_missing_or_enclosing_source_worktree_and_blocked_drift() {
+    let (root, _repo, effort) = new_effort("source-worktree");
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace(&workspace);
+    fs::rename(workspace.join("source"), workspace.join("source-moved")).unwrap();
+    let run = prepared["details"]["run"].as_str().unwrap();
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "finalize", "--effort", &effort, "--run", run]
+        )
+        .contains("source checkout is missing")
+    );
+
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace(&workspace);
+    fs::rename(workspace.join("source"), workspace.join("repository")).unwrap();
+    fs::rename(
+        workspace.join("repository").join(".git"),
+        workspace.join(".git"),
+    )
+    .unwrap();
+    fs::rename(workspace.join("repository"), workspace.join("source")).unwrap();
+    let run = prepared["details"]["run"].as_str().unwrap();
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "validate", "--effort", &effort, "--run", run]
+        )
+        .contains("rather than itself")
+    );
+
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_blocked_workspace(&workspace);
+    fs::write(workspace.join("source").join("drift.txt"), "not allowed\n").unwrap();
+    let run = prepared["details"]["run"].as_str().unwrap();
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "finalize", "--effort", &effort, "--run", run]
+        )
+        .contains("source checkout is dirty")
+    );
+}
+
+#[test]
+fn discovery_rejects_every_git_state_drift_including_ignored_files() {
+    let (root, _repo, effort) = new_effort("git-drift");
+    for drift in [
+        "staged",
+        "unstaged",
+        "ignored",
+        "same-tree-commit",
+        "assume-unchanged",
+        "skip-worktree",
+    ] {
+        let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+        let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+        let run = prepared["details"]["run"].as_str().unwrap();
+        let source = workspace.join("source");
+        write_ready_workspace(&workspace);
+        match drift {
+            "staged" => {
+                fs::write(source.join("source.txt"), "staged drift\n").unwrap();
+                git(&source, &["add", "source.txt"]);
+            }
+            "unstaged" => {
+                fs::write(source.join("source.txt"), "unstaged drift\n").unwrap();
+            }
+            "ignored" => {
+                fs::write(source.join(".git/info/exclude"), "generated.out\n").unwrap();
+                fs::write(source.join("generated.out"), "ignored drift\n").unwrap();
+            }
+            "same-tree-commit" => {
+                git(&source, &["config", "user.email", "test@example.com"]);
+                git(&source, &["config", "user.name", "Test"]);
+                git(
+                    &source,
+                    &["commit", "--allow-empty", "-m", "different commit"],
+                );
+            }
+            "assume-unchanged" => {
+                git(
+                    &source,
+                    &["update-index", "--assume-unchanged", "source.txt"],
+                );
+                fs::write(source.join("source.txt"), "hidden tracked drift\n").unwrap();
+            }
+            "skip-worktree" => {
+                git(&source, &["update-index", "--skip-worktree", "source.txt"]);
+                fs::write(source.join("source.txt"), "hidden tracked drift\n").unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let error = command_error(
+            &root,
+            &["discovery", "finalize", "--effort", &effort, "--run", run],
+        );
+        assert!(
+            error.contains("source") || error.contains("HEAD differs"),
+            "{drift}: {error}"
+        );
+    }
+}
+
+#[test]
+fn discovery_allows_unchanged_source_with_index_metadata_flags() {
+    let (root, _repo, effort) = new_effort("git-index-metadata");
+    for flag in ["--assume-unchanged", "--skip-worktree"] {
+        let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+        let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+        write_ready_workspace(&workspace);
+        git(
+            &workspace.join("source"),
+            &["update-index", flag, "source.txt"],
+        );
+        let run = prepared["details"]["run"].as_str().unwrap();
+        reference(
+            &command(
+                &root,
+                &["discovery", "finalize", "--effort", &effort, "--run", run],
+            ),
+            "artifact",
+        );
+    }
+}
+
+#[test]
+fn discovery_rejects_generated_technical_spec_even_with_a_valid_graph() {
+    let (root, _repo, effort) = new_effort("technical-spec-body");
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    let run = prepared["details"]["run"].as_str().unwrap();
+    write_ready_workspace(&workspace);
+    fs::write(
+        workspace.join("technical-spec.md"),
+        "\n# Technical specification\r\n\r\n",
+    )
+    .unwrap();
+    assert!(
+        command_error(
+            &root,
+            &["discovery", "finalize", "--effort", &effort, "--run", run]
+        )
+        .contains("no content beyond Markdown headings")
+    );
+}
+
+#[test]
 fn reconcile_binds_an_explicit_arbitrary_set_without_quorum() {
     let (root, _repo, effort) = new_effort("reconcile-inputs");
     let inputs: Vec<_> = (0..5).map(|_| finalize_discovery(&root, &effort)).collect();
@@ -684,6 +1023,370 @@ fn reconciliation_preserves_exact_parents_and_allows_a_minority_source() {
             .iter()
             .all(|source| markdown.contains(&source.label))
     );
+}
+
+#[test]
+fn reconciliation_binds_verification_methods_to_directly_cited_findings() {
+    let (root, _repo, effort) = new_effort("reconcile-verification");
+    let inspection = finalize_discovery_with_verification(&root, &effort, Verification::Inspection);
+    let experiment = finalize_discovery_with_verification(&root, &effort, Verification::Experiment);
+
+    let mut mismatched = proposal(&inspection);
+    mismatched.evidence_synthesis[0].source_refs = vec![DiscoverySourceRef {
+        discovery_artifact_id: experiment.artifact_id.clone(),
+        node_id: Some("F-1".into()),
+    }];
+    let path = write_proposal(&root, &mismatched);
+    assert!(
+        command_error(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &inspection.artifact_id,
+                "--discovery",
+                &experiment.artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        )
+        .contains("verification methods mismatch")
+    );
+
+    let mut mixed = proposal(&inspection);
+    mixed.evidence_synthesis[0].source_refs = vec![
+        DiscoverySourceRef {
+            discovery_artifact_id: experiment.artifact_id.clone(),
+            node_id: Some("F-1".into()),
+        },
+        DiscoverySourceRef {
+            discovery_artifact_id: inspection.artifact_id.clone(),
+            node_id: Some("F-1".into()),
+        },
+        DiscoverySourceRef {
+            discovery_artifact_id: experiment.artifact_id.clone(),
+            node_id: Some("F-1".into()),
+        },
+    ];
+    mixed.evidence_synthesis[0].verification_methods = vec![
+        Verification::Inspection,
+        Verification::Experiment,
+        Verification::Experiment,
+    ];
+    let path = write_proposal(&root, &mixed);
+    let reconciled = reference(
+        &command(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &inspection.artifact_id,
+                "--discovery",
+                &experiment.artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        ),
+        "reconciled",
+    );
+    assert_eq!(reconciled.kind, ArtifactKind::ReconciledDiscovery);
+
+    let mut no_finding = proposal(&inspection);
+    no_finding.evidence_synthesis[0].source_refs = vec![DiscoverySourceRef {
+        discovery_artifact_id: inspection.artifact_id.clone(),
+        node_id: None,
+    }];
+    no_finding.evidence_synthesis[0].verification_methods = vec![];
+    let path = write_proposal(&root, &no_finding);
+    let reconciled = reference(
+        &command(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &inspection.artifact_id,
+                "--discovery",
+                &experiment.artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        ),
+        "reconciled",
+    );
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    let (_, files) = store.load_bundle(&effort_state, &reconciled).unwrap();
+    assert!(
+        String::from_utf8(files["reconciled-discovery.md"].clone())
+            .unwrap()
+            .contains("Not attributed to specific Finding nodes")
+    );
+
+    let mut unsupported = proposal(&inspection);
+    unsupported.evidence_synthesis[0].source_refs[0].node_id = Some("R-1".into());
+    let path = write_proposal(&root, &unsupported);
+    assert!(
+        command_error(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &inspection.artifact_id,
+                "--discovery",
+                &experiment.artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        )
+        .contains("verification methods mismatch")
+    );
+}
+
+#[test]
+fn reconciliation_preserves_verification_for_rejected_findings() {
+    let (root, _repo, effort) = new_effort("rejected-finding-verification");
+    let prepared = command(&root, &["discovery", "prepare", "--effort", &effort]);
+    let workspace = PathBuf::from(prepared["details"]["workspace"].as_str().unwrap());
+    write_ready_workspace(&workspace);
+    let mut rejected = node(
+        "F-2",
+        EvidenceKind::Finding,
+        EvidenceStatus::Rejected,
+        vec![],
+        false,
+    );
+    rejected.verification = Some(Verification::Experiment);
+    write_node(&workspace, &rejected);
+    let run = prepared["details"]["run"].as_str().unwrap();
+    let rejected_source = reference(
+        &command(
+            &root,
+            &["discovery", "finalize", "--effort", &effort, "--run", run],
+        ),
+        "artifact",
+    );
+    let companion = finalize_discovery(&root, &effort);
+
+    let mut mismatched = proposal(&rejected_source);
+    mismatched.evidence_synthesis[0].source_refs[0].node_id = Some("F-2".into());
+    let path = write_proposal(&root, &mismatched);
+    assert!(
+        command_error(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &rejected_source.artifact_id,
+                "--discovery",
+                &companion.artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        )
+        .contains("verification methods mismatch")
+    );
+    let mut attributed = proposal(&rejected_source);
+    attributed.evidence_synthesis[0].source_refs[0].node_id = Some("F-2".into());
+    attributed.evidence_synthesis[0].verification_methods = vec![Verification::Experiment];
+    let path = write_proposal(&root, &attributed);
+    reference(
+        &command(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &rejected_source.artifact_id,
+                "--discovery",
+                &companion.artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        ),
+        "reconciled",
+    );
+}
+
+#[test]
+fn reconciled_markdown_renders_source_node_ids_in_every_citation_section() {
+    let (root, _repo, effort) = new_effort("reconcile-source-rendering");
+    let inputs = [
+        finalize_discovery(&root, &effort),
+        finalize_discovery(&root, &effort),
+    ];
+    let mut proposed = proposal(&inputs[0]);
+    proposed
+        .rejected_alternatives
+        .push(orchestrate_contracts::RejectedAlternative {
+            direction: "Do nothing.".into(),
+            reason: "The cited finding establishes a change is needed.".into(),
+            source_refs: vec![DiscoverySourceRef {
+                discovery_artifact_id: inputs[0].artifact_id.clone(),
+                node_id: Some("F-1".into()),
+            }],
+        });
+    let path = write_proposal(&root, &proposed);
+    let reconciled = reference(
+        &command(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &inputs[0].artifact_id,
+                "--discovery",
+                &inputs[1].artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        ),
+        "reconciled",
+    );
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    let (_, payload): (_, ReconciledDiscovery) = store
+        .load_json(&effort_state, &reconciled, "reconciled-discovery.json")
+        .unwrap();
+    let (_, files) = store.load_bundle(&effort_state, &reconciled).unwrap();
+    let markdown = String::from_utf8(files["reconciled-discovery.md"].clone()).unwrap();
+    let source = payload
+        .discovery_attribution
+        .iter()
+        .find(|source| source.discovery_artifact_id == inputs[0].artifact_id)
+        .unwrap();
+    assert!(markdown.contains(&format!(
+        "{} (`{}`) / R-1",
+        source.label, source.discovery_artifact_id
+    )));
+    assert_eq!(
+        markdown
+            .matches(&format!(
+                "{} (`{}`) / F-1",
+                source.label, source.discovery_artifact_id
+            ))
+            .count(),
+        3,
+        "synthesis, rejected alternative, and suggestion each retain F-1"
+    );
+
+    let mut artifact_only = proposal(&inputs[0]);
+    artifact_only.requirements[0].source_refs[0].node_id = None;
+    artifact_only.evidence_synthesis[0].source_refs[0].node_id = None;
+    artifact_only.evidence_synthesis[0].verification_methods = vec![];
+    artifact_only.technical_suggestions[0].source_refs[0].node_id = None;
+    artifact_only
+        .rejected_alternatives
+        .push(orchestrate_contracts::RejectedAlternative {
+            direction: "Keep the old behavior.".into(),
+            reason: "Discovery did not support this direction.".into(),
+            source_refs: vec![DiscoverySourceRef {
+                discovery_artifact_id: inputs[0].artifact_id.clone(),
+                node_id: None,
+            }],
+        });
+    let path = write_proposal(&root, &artifact_only);
+    let artifact_only = reference(
+        &command(
+            &root,
+            &[
+                "reconcile",
+                "finalize",
+                "--effort",
+                &effort,
+                "--discovery",
+                &inputs[0].artifact_id,
+                "--discovery",
+                &inputs[1].artifact_id,
+                "--bundle",
+                path.to_str().unwrap(),
+            ],
+        ),
+        "reconciled",
+    );
+    let (_, payload): (_, ReconciledDiscovery) = store
+        .load_json(&effort_state, &artifact_only, "reconciled-discovery.json")
+        .unwrap();
+    let (_, files) = store.load_bundle(&effort_state, &artifact_only).unwrap();
+    let markdown = String::from_utf8(files["reconciled-discovery.md"].clone()).unwrap();
+    let source = payload
+        .discovery_attribution
+        .iter()
+        .find(|source| source.discovery_artifact_id == inputs[0].artifact_id)
+        .unwrap();
+    assert_eq!(
+        markdown
+            .matches(&format!(
+                "{} (`{}`)",
+                source.label, source.discovery_artifact_id
+            ))
+            .count(),
+        4,
+        "requirements, synthesis, alternatives, and suggestions render artifact-only sources"
+    );
+    assert!(!markdown.contains(&format!(
+        "{} (`{}`) /",
+        source.label, source.discovery_artifact_id
+    )));
+}
+
+#[test]
+fn supported_version_six_bundles_reconcile_after_mutable_workspaces_are_removed() {
+    assert_eq!(orchestrate_contracts::SCHEMA_VERSION, 6);
+    assert_eq!(orchestrate_contracts::STORE_FORMAT_VERSION, 6);
+    let (root, _repo, effort) = new_effort("historical-version-six");
+    let (first, first_workspace) = finalize_discovery_with_workspace(&root, &effort);
+    let (second, second_workspace) = finalize_discovery_with_workspace(&root, &effort);
+    let existing = reconcile(&root, &effort, &[first.clone(), second.clone()]);
+    let store = Store::open(&root).unwrap();
+    let effort_state = store.load_effort(&effort).unwrap();
+    let immutable = [first.clone(), second.clone(), existing.clone()];
+    let before: Vec<_> = immutable
+        .iter()
+        .map(|reference| {
+            let directory = store
+                .artifact_dir(&effort_state, &reference.artifact_id)
+                .unwrap();
+            let manifest = fs::read(directory.join("manifest.json")).unwrap();
+            let (_, files) = store.load_bundle(&effort_state, reference).unwrap();
+            (reference.clone(), manifest, files)
+        })
+        .collect();
+
+    fs::remove_dir_all(&first_workspace).unwrap();
+    fs::remove_dir_all(&second_workspace).unwrap();
+    assert!(!first_workspace.exists() && !second_workspace.exists());
+
+    let new_reconciliation = reconcile(&root, &effort, &[first, second]);
+    assert_eq!(new_reconciliation.kind, ArtifactKind::ReconciledDiscovery);
+    for (reference, manifest, files) in before {
+        let directory = store
+            .artifact_dir(&effort_state, &reference.artifact_id)
+            .unwrap();
+        assert_eq!(fs::read(directory.join("manifest.json")).unwrap(), manifest);
+        assert_eq!(
+            store.load_bundle(&effort_state, &reference).unwrap().1,
+            files
+        );
+    }
 }
 
 #[test]

@@ -16,6 +16,11 @@
 ## Reference
 
 - [Architecture](architecture.md) — authority boundaries, artifacts, and deterministic rules.
+- [Discovery/Reconcile evaluation case](evaluations/discovery-reconcile/README.md) — repeatable, output-only evaluation using three historical attempts, with a separate operator rubric.
+
+## Planned changes
+
+- [Discovery and Reconcile hardening](plans/discovery-reconcile-hardening.md) — planned scope, acceptance criteria, and compatibility boundaries for four targeted fixes; implementation and model evaluation are separate steps.
 
 The CLI is the versioned product. Skills only dispatch to `orchestrate <action> guide`, which
 prints the instructions embedded in the installed binary. Human docs explain the workflow; they

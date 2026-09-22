@@ -88,4 +88,8 @@ the classification is not a score and does not automatically outrank other evide
 You do not need to inspect those files during normal usage. They exist so Reconcile can deeply
 analyze the finished Discovery without reopening the repository.
 
+Before publication, Discovery reviews the specification and graph together for consistent
+references, evidence, decisions, and limitations. Passing structural validation does not replace
+that review. Deferred findings may remain useful without creating implementation requirements.
+
 Next: [Reconcile](reconcile.md).

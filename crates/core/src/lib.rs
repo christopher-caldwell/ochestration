@@ -502,14 +502,7 @@ impl Store {
             "git checkout failed: {}",
             String::from_utf8_lossy(&checkout.stderr)
         );
-        ensure!(
-            git(&source, ["rev-parse", "HEAD"])? == run.baseline_commit,
-            "Discovery source checkout does not match frozen baseline"
-        );
-        ensure!(
-            git(&source, ["status", "--porcelain"])?.is_empty(),
-            "Discovery source checkout is not clean"
-        );
+        verify_git_checkout(&source, &run.baseline_commit, &run.baseline_tree)?;
         write_json_atomic(&root.join("run.json"), run)?;
         write_bytes_sync(&root.join("request.md"), effort.context.request.as_bytes())?;
         write_json_atomic(
@@ -819,6 +812,110 @@ impl Store {
 }
 
 pub const TECHNICAL_SPEC_TEMPLATE: &str = "# Technical specification\n\n";
+
+/// Verify that a Discovery source checkout is still the exact frozen Git worktree.
+///
+/// This deliberately asks Git for all untracked and ignored paths. Discovery workspaces
+/// reserve `scratch/` for generated and experimental files, so nothing outside Git's own
+/// administrative metadata is allowed to accumulate in `source/`.
+pub fn verify_git_checkout(
+    source: &Path,
+    expected_commit: &str,
+    expected_tree: &str,
+) -> Result<()> {
+    let expected_root = fs::canonicalize(source).with_context(|| {
+        format!(
+            "Discovery source checkout is missing or inaccessible: {}",
+            source.display()
+        )
+    })?;
+    ensure!(
+        git(&expected_root, ["rev-parse", "--is-inside-work-tree"])? == "true",
+        "Discovery source {} is not a Git worktree",
+        source.display()
+    );
+    let actual_root = fs::canonicalize(PathBuf::from(git(
+        &expected_root,
+        ["rev-parse", "--show-toplevel"],
+    )?))
+    .context("Git returned an inaccessible Discovery worktree root")?;
+    ensure!(
+        actual_root == expected_root,
+        "Discovery source {} resolves to Git worktree root {} rather than itself",
+        source.display(),
+        actual_root.display()
+    );
+
+    let actual_commit = git(&expected_root, ["rev-parse", "--verify", "HEAD^{commit}"])?;
+    ensure!(
+        actual_commit == expected_commit,
+        "Discovery source HEAD differs from frozen baseline: expected {}, got {}",
+        expected_commit,
+        actual_commit
+    );
+    let actual_tree = git(&expected_root, ["rev-parse", "--verify", "HEAD^{tree}"])?;
+    ensure!(
+        actual_tree == expected_tree,
+        "Discovery source HEAD tree differs from frozen baseline: expected {}, got {}",
+        expected_tree,
+        actual_tree
+    );
+    verify_tracked_working_tree(&expected_root, expected_tree)?;
+    let status = git(
+        &expected_root,
+        [
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored=matching",
+        ],
+    )?;
+    ensure!(
+        status.is_empty(),
+        "Discovery source checkout is dirty: {}",
+        concise_git_status(&status)
+    );
+    Ok(())
+}
+
+/// Compare tracked paths against the frozen tree through an isolated index. The checkout's
+/// index can contain `assume-unchanged` or `skip-worktree` flags, which intentionally suppress
+/// ordinary status checks. This temporary index starts from the expected tree without those
+/// mutable flags and is removed before validation returns.
+fn verify_tracked_working_tree(source: &Path, expected_tree: &str) -> Result<()> {
+    let index = std::env::temp_dir().join(format!("orchestrate-git-index-{}", unique_id()));
+    let lock = index.with_extension("lock");
+    ensure!(
+        !index.exists() && !lock.exists(),
+        "cannot allocate isolated Git index for Discovery source validation"
+    );
+    let result = (|| {
+        let environment = [("GIT_INDEX_FILE", index.as_path())];
+        git_with_env(source, ["read-tree", expected_tree], &environment)?;
+        // Refresh only the isolated index. A changed path makes this command return one, but
+        // still records enough stat information for diff-files to distinguish clean files.
+        let _ = git_with_env_allow_differences(
+            source,
+            ["update-index", "--really-refresh"],
+            &environment,
+        )?;
+        let differences = git_with_env(
+            source,
+            ["diff-files", "--raw", "--no-ext-diff"],
+            &environment,
+        )?;
+        ensure!(
+            differences.is_empty(),
+            "Discovery source tracked working-tree content differs from frozen tree: {}",
+            concise_git_status(&differences)
+        );
+        Ok(())
+    })();
+    let _ = fs::remove_file(&index);
+    let _ = fs::remove_file(&lock);
+    result
+}
+
 pub fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -864,13 +961,54 @@ fn git_file_inventory(repo: &Path, commit: &str) -> Result<BTreeMap<String, Stri
     Ok(inventory)
 }
 fn git<const N: usize>(repo: &Path, args: [&str; N]) -> Result<String> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    git_with_env(repo, args, &[])
+}
+fn git_with_env<const N: usize>(
+    repo: &Path,
+    args: [&str; N],
+    environment: &[(&str, &Path)],
+) -> Result<String> {
+    let output = git_with_env_output(repo, args, environment)?;
     ensure!(
         output.status.success(),
         "git command failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(String::from_utf8(output.stdout)?.trim().into())
+}
+fn git_with_env_allow_differences<const N: usize>(
+    repo: &Path,
+    args: [&str; N],
+    environment: &[(&str, &Path)],
+) -> Result<String> {
+    let output = git_with_env_output(repo, args, environment)?;
+    ensure!(
+        output.status.success() || output.status.code() == Some(1),
+        "git command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(String::from_utf8(output.stdout)?.trim().into())
+}
+fn git_with_env_output<const N: usize>(
+    repo: &Path,
+    args: [&str; N],
+    environment: &[(&str, &Path)],
+) -> Result<std::process::Output> {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(repo);
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+    Ok(command.output()?)
+}
+fn concise_git_status(status: &str) -> String {
+    let entries = status.lines().take(8).collect::<Vec<_>>();
+    let suffix = if status.lines().count() > entries.len() {
+        "; …"
+    } else {
+        ""
+    };
+    format!("{}{}", entries.join("; "), suffix)
 }
 fn unique_id() -> String {
     format!(
