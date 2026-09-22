@@ -15,9 +15,9 @@ Later, explicitly: Build → done
 
 ### Existing ticket
 
-Create a small Markdown file containing any **extra context** you want Discovery to know.
+Provide the original ticket as a Markdown file. You may also provide **extra context**.
 
-Example:
+Example extra context:
 
 ```markdown
 This appears to happen only in production.
@@ -34,15 +34,16 @@ $prep-discovery-ticket
 Give the model:
 
 ```text
-Notes: /absolute/path/to/notes.md
+Ticket: /absolute/path/to/ticket.md
+Optional context: /absolute/path/to/notes.md
 Project: /absolute/path/to/target-repository
 Effort: short-visible-name
 ```
 
-The skill returns a prepared request file.
-
-Open it, paste the original ticket verbatim into the ticket placeholder, save it, and review the
-file once.
+Prepare may ask focused questions about missing user decisions that would otherwise make the
+independent Discoveries assume different things. It does not investigate technical facts. The
+skill returns a prepared request file containing the original ticket verbatim. Review it before
+Discovery.
 
 That prepared file is the input to every Discovery run.
 
@@ -56,7 +57,8 @@ $prep-discovery-freeform
 
 Give it the request file, target repository, and a short effort slug.
 
-It returns the prepared request file directly.
+Prepare may ask the same kind of focused intent questions, then returns the prepared request.
+Review it before Discovery.
 
 For more detail, see [Request preparation](request-preparation.md).
 

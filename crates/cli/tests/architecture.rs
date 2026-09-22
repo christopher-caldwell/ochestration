@@ -272,6 +272,32 @@ fn embedded_guides_preserve_high_value_instruction_boundaries() {
 }
 
 #[test]
+fn prepare_guides_challenge_intent_without_preempting_discovery() {
+    for guide in [
+        orchestrate_guides::PREP_DISCOVERY_TICKET,
+        orchestrate_guides::PREP_DISCOVERY_FREEFORM,
+    ] {
+        assert!(guide.contains("lightweight intent challenge"));
+        assert!(guide.contains("user-owned intent"));
+        assert!(guide.contains("zero questions is valid"));
+        assert!(guide.contains("not a completeness checklist or fixed questionnaire"));
+        assert!(guide.contains("Do not inspect the target repository"));
+        assert!(guide.contains("Do not diagnose the problem"));
+        assert!(guide.contains("direct and unmistakable user requirement"));
+        assert!(guide.contains("Do not infer frozen constraints"));
+        assert!(guide.contains("genuine uncertainty remains an explicit unknown"));
+        assert!(guide.contains("deliberate delegation"));
+        assert!(guide.contains("review/edit it before Discovery"));
+    }
+
+    let ticket = orchestrate_guides::PREP_DISCOVERY_TICKET;
+    assert!(ticket.contains("Read the user-selected original ticket"));
+    assert!(ticket.contains("reproduce the original ticket verbatim"));
+    assert!(!ticket.contains("<!--"));
+    assert!(!ticket.contains("placeholder"));
+}
+
+#[test]
 fn host_files_are_install_pointers_only() {
     let root = repo_root();
     assert_install_pointer(

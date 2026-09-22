@@ -1,6 +1,8 @@
 # Architecture
 
 ```text
+Raw ticket or request → Prepare → reviewed frozen request
+                                    ↓
 Discovery 1 ─┐
 Discovery 2 ─┼──→ Reconciled Discovery → STOP
 Discovery N ─┘
@@ -25,6 +27,13 @@ Whenever Build starts or resumes, the driver writes the role guides embedded in 
 CLI into the Build directory, replacing any previously generated copies.
 
 ## Authority boundaries
+
+Prepare is the last shared user interaction before independent Discovery runs. It may challenge
+missing or ambiguous user-owned intent when that could lead to materially different assumptions.
+It does not inspect the repository or investigate engineering facts. Ticket preparation receives
+the original ticket and preserves it verbatim. The user reviews the result before Discovery; only
+direct and unmistakable user constraints enter frozen `constraints`. Unknowns, hypotheses, and
+deliberate delegation retain their distinct meanings in the request body.
 
 The model owns interaction: it investigates, asks the user material questions, reconciles meaning,
 and evaluates implementation. Rust is a referee: it freezes exact inputs, creates workspaces,

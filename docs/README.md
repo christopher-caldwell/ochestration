@@ -7,7 +7,7 @@
 
 ## Phase guides
 
-- [Request preparation](guides/request-preparation.md) — prepare a ticket or freeform request.
+- [Request preparation](guides/request-preparation.md) — clarify consequential user intent and review the common request before independent Discovery.
 - [Discovery](guides/discovery.md) — run independent investigations and collect their outputs.
 - [Reconcile](guides/reconcile.md) — turn selected Discovery outputs into one final contract.
 - [Build and Audit](guides/build-and-audit.md) — run the unattended Build loop through registration and final verification.
