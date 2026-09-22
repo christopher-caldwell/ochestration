@@ -15,6 +15,24 @@ pub fn adopt(
     authorization_label: String,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
+    adopt_with_run_id(
+        store,
+        effort,
+        reconciled_ref,
+        authorization_label,
+        provenance,
+        format!("adoption-{}", now_ms()),
+    )
+}
+
+fn adopt_with_run_id(
+    store: &Store,
+    effort: &Effort,
+    reconciled_ref: ArtifactRef,
+    authorization_label: String,
+    provenance: Provenance,
+    run_id: String,
+) -> Result<ArtifactRef> {
     ensure!(
         reconciled_ref.kind == ArtifactKind::ReconciledDiscovery,
         "only an implementation-ready Reconciled Discovery can be adopted"
@@ -39,7 +57,7 @@ pub fn adopt(
         effort,
         "adoption",
         ArtifactKind::Adoption,
-        format!("adoption-{}", now_ms()),
+        run_id,
         "ADOPTED".into(),
         vec![reconciled_ref],
         provenance,
@@ -52,6 +70,43 @@ pub fn adopt(
         serde_json::json!({"artifact":reference.artifact_id}),
     )?;
     Ok(reference)
+}
+
+/// Create or recover the Adoption receipt authorized by an explicit Build invocation.
+pub fn adopt_for_build(
+    store: &Store,
+    effort: &Effort,
+    reconciled_ref: ArtifactRef,
+    provenance: Provenance,
+) -> Result<ArtifactRef> {
+    let mut existing = Vec::new();
+    for reference in store.list_artifacts(effort)? {
+        if reference.kind != ArtifactKind::Adoption {
+            continue;
+        }
+        let (_, adoption): (_, Adoption) = store.load_json(effort, &reference, "adoption.json")?;
+        if adoption.reconciled == reconciled_ref {
+            existing.push(reference);
+        }
+    }
+    match existing.as_slice() {
+        [only] => return Ok(only.clone()),
+        many if !many.is_empty() => bail!(
+            "multiple Adoption receipts already exist for Reconciled Discovery {}: {}",
+            reconciled_ref.artifact_id,
+            artifact_ids(many)
+        ),
+        _ => {}
+    }
+    let run_id = format!("build-adoption-{}", &reconciled_ref.digest[..16]);
+    adopt_with_run_id(
+        store,
+        effort,
+        reconciled_ref,
+        "explicit Build invocation".into(),
+        provenance,
+        run_id,
+    )
 }
 
 /// Find the sole eligible Reconciled Discovery for this effort.
@@ -101,6 +156,8 @@ pub fn register_implementation(
     status: ImplementationStatus,
     provenance: Provenance,
 ) -> Result<ArtifactRef> {
+    let project = store.project_for(effort)?;
+    let build_start = store.materialize_snapshot(&project.canonical_locator, "HEAD")?;
     register_implementation_with_run_id(
         store,
         effort,
@@ -110,6 +167,8 @@ pub fn register_implementation(
         status,
         provenance,
         format!("implementation-{}", now_ms()),
+        build_start.commit,
+        build_start.tree,
     )
 }
 
@@ -126,6 +185,8 @@ pub fn register_implementation_with_run_id(
     status: ImplementationStatus,
     provenance: Provenance,
     run_id: String,
+    build_start_commit: String,
+    build_start_tree: String,
 ) -> Result<ArtifactRef> {
     ensure!(
         adoption_ref.kind == ArtifactKind::Adoption,
@@ -154,11 +215,27 @@ pub fn register_implementation_with_run_id(
         ancestry.success(),
         "implementation target is not based on the adopted Reconciled Discovery baseline"
     );
+    let start_ancestry = Command::new("git")
+        .args(["merge-base", "--is-ancestor", &build_start_commit, commit])
+        .current_dir(repo)
+        .status()?;
+    ensure!(
+        start_ancestry.success(),
+        "implementation target is not based on the recorded Build starting commit"
+    );
+    let actual_start = store.materialize_snapshot(repo, &build_start_commit)?;
+    ensure!(
+        actual_start.tree == build_start_tree,
+        "recorded Build starting tree does not match its commit"
+    );
     let snapshot = store.materialize_snapshot(repo, commit)?;
     let implementation = Implementation {
         adoption: adoption_ref.clone(),
         reconciled: adoption.reconciled,
-        starting_baseline: reconciled.baseline_commit,
+        discovery_baseline_commit: reconciled.baseline_commit,
+        discovery_baseline_tree: reconciled.baseline_tree,
+        build_start_commit: actual_start.commit,
+        build_start_tree: actual_start.tree,
         target_commit: snapshot.commit,
         target_tree: snapshot.tree,
         producer_declaration: declaration,

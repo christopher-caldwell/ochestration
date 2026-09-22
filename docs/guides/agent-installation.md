@@ -4,8 +4,8 @@ The easiest installation is agent-led. You should not need to manually decide wh
 where.
 
 Installed skills are dispatchers. They ask the current `orchestrate` binary for instructions.
-Updating the CLI updates Discovery, Reconcile, Build, and Audit behavior. Reinstall skills only
-when the dispatcher command itself changes.
+Updating the CLI updates all embedded Orchestrate guides and templates. Reinstall skills only when
+the dispatcher command itself changes.
 
 ## Recommended: let the model install it
 
@@ -41,8 +41,13 @@ Install the CLI from the checkout:
 cargo install --path "/absolute/path/to/ochestration/crates/cli" --locked
 ```
 
-Then copy exactly these six directories from `skills/` into the current host's personal skill
-directory:
+Then run the checked-in installer with the current host's personal skill directory:
+
+```sh
+./scripts/install-skills.sh "/absolute/path/to/host/skills"
+```
+
+It replaces exactly these six directories from `skills/`:
 
 ```text
 prep-discovery-ticket
@@ -61,8 +66,8 @@ Claude Code ~/.claude/skills
 Cursor      ~/.cursor/skills
 ```
 
-Preserve unrelated skills. If an Orchestrate skill already exists and may have local edits, back it
-up before replacing it.
+The installer preserves unrelated skills, replaces existing Orchestrate dispatchers, verifies all
+six, and does not create backup skill directories.
 
 ## Verification
 

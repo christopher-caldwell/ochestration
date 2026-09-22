@@ -4,7 +4,15 @@ Reconcile turns the independent Discovery results you select into one final deci
 Exact model instructions are `orchestrate reconcile guide`.
 
 It is intentionally a separate model phase: it analyzes the Discovery outputs deeply, but it does
-not reopen the repository or perform another investigation.
+not reopen the repository or perform another investigation. That repository-access boundary is a
+model instruction; Rust mechanically limits admissible Reconcile evidence to the selected artifact
+lineage but does not sandbox the model's filesystem.
+
+Its only engineering evidence is the selected finalized Discovery outputs. Frozen explicit
+constraints remain direct user authority and are mechanically preserved as governing requirements;
+the frozen request and context may establish the effort's goal, identity, and lineage. Neither is a
+second source of engineering investigation. A Reconcile-time user clarification is also direct user
+authority, not engineering evidence.
 
 ## Run Reconcile
 
@@ -24,13 +32,17 @@ Only the directories you explicitly pass are part of this Reconcile run.
 
 Reconcile compares the selected Discoveries and produces one **Reconciled Discovery**.
 
-The result you review may:
+The result must converge on one leading direction and may:
 
 - combine complementary findings;
 - treat different wording as the same finding;
 - keep a strong finding that only one Discovery found;
 - surface genuine disagreement or missing information;
-- ask you a material intent question when the selected Discoveries cannot settle it.
+- ask you a material intent question only when the selected Discoveries genuinely cannot settle it.
+
+That question is exceptional recovery: Discovery should ideally have surfaced it earlier. Repeated
+Reconcile questions signal Discovery coverage or guidance to improve, not a conversational phase to
+extend.
 
 ## What the output means
 
@@ -59,16 +71,12 @@ also appears as a binding requirement.
 
 Anything the selected Discovery evidence and user clarification still could not resolve.
 
-A blocked result cannot be approved for Build.
+A blocked result cannot be built.
 
-## Approval
+## Stop boundary
 
-The skill shows you the final `reconciled-discovery.md`.
-
-If it asks whether you approve that result for Build, answer affirmatively only when the binding
-requirements are what you actually want implemented.
-
-Approval records the adoption receipt.
+The skill shows you the final `reconciled-discovery.md`, reports the selected direction and path,
+and stops. It does not ask for Build approval, create Adoption, or begin Build.
 
 Before closing the window, keep:
 
@@ -77,6 +85,6 @@ Effort ID
 Reconciled document path
 ```
 
-You will give both to the Build model.
+Later, an explicit Build invocation uses these to authorize Build.
 
 Next: [Build and Audit](build-and-audit.md).

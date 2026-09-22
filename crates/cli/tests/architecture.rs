@@ -71,7 +71,7 @@ fn skills_are_dispatchers_only() {
         assert_eq!(entries[2].1, "true");
         assert_eq!(
             body,
-            format!("Run `orchestrate {name} guide` and follow the returned instructions.")
+            format!("You must run `orchestrate {name} guide` for instructions.")
         );
     }
 }
@@ -192,12 +192,83 @@ fn codex_install_docs_use_the_current_global_skill_directory() {
 }
 
 #[test]
+fn skill_installer_replaces_dispatchers_without_backups_and_preserves_unrelated_skills() {
+    let root = repo_root();
+    let destination =
+        std::env::temp_dir().join(format!("orchestrate-skill-install-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&destination);
+    fs::create_dir_all(destination.join("discovery")).unwrap();
+    fs::write(destination.join("discovery/old.txt"), "old").unwrap();
+    fs::create_dir_all(destination.join("unrelated")).unwrap();
+    fs::write(destination.join("unrelated/keep.txt"), "keep").unwrap();
+    let status = Command::new(root.join("scripts/install-skills.sh"))
+        .arg(&destination)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(destination.join("unrelated/keep.txt").is_file());
+    assert!(!destination.join("discovery/old.txt").exists());
+    for name in skill_dirs(&root) {
+        assert!(destination.join(name).join("SKILL.md").is_file());
+    }
+    assert!(fs::read_dir(&destination).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".bak")
+    }));
+    let _ = fs::remove_dir_all(&destination);
+}
+
+#[test]
 fn the_old_guide_subcommand_is_gone() {
     let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
         .args(["guide", "discovery"])
         .output()
         .unwrap();
     assert!(!output.status.success());
+}
+
+#[test]
+fn reconcile_guide_is_closed_world_convergent_and_stops_before_build() {
+    let guide = orchestrate_guides::RECONCILE;
+    assert!(guide.contains("Reconcile is synthesis only"));
+    assert!(guide.contains("Do not inspect the target repository"));
+    assert!(guide.contains("Do not run tests or experiments"));
+    assert!(guide.contains("vendor documentation, or the web"));
+    assert!(guide.contains("Produce one leading direction"));
+    assert!(guide.contains("experiment` is not an automatic winner"));
+    assert!(guide.contains("Then stop"));
+    assert!(!guide.contains("reconcile adopt"));
+    assert!(!guide.contains("approve Build"));
+
+    let rust = fs::read_to_string(repo_root().join("crates/reconcile/src/lib.rs")).unwrap();
+    assert!(!rust.contains("Verification::Experiment"));
+    assert!(!rust.contains("Verification::Inspection"));
+}
+
+#[test]
+fn embedded_guides_preserve_high_value_instruction_boundaries() {
+    assert!(orchestrate_guides::BUILD.contains("## First preparation"));
+    assert!(
+        orchestrate_guides::BUILD.contains("## Existing prepared or active Build")
+            && orchestrate_guides::BUILD.contains("do not scaffold again")
+    );
+    assert!(orchestrate_guides::WORK.contains("detailed implementation plan"));
+    assert!(orchestrate_guides::REVIEW.contains("detailed implementation plan"));
+    assert!(
+        orchestrate_guides::FINAL_AUDIT.contains("must never mutate the stored immutable snapshot")
+    );
+    assert!(orchestrate_guides::UNBLOCK.contains("Unblock is diagnosis-only"));
+    assert!(orchestrate_guides::UNBLOCK.contains("Do not modify product source"));
+    for guide in [
+        orchestrate_guides::PREP_DISCOVERY_TICKET,
+        orchestrate_guides::PREP_DISCOVERY_FREEFORM,
+    ] {
+        assert!(guide.contains("expand the user's home directory"));
+        assert!(!guide.contains("absolute `~/.orchestration` path"));
+    }
 }
 
 #[test]

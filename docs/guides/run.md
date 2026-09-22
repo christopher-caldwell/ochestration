@@ -6,7 +6,9 @@ You normally interact with Orchestrate through model skills, not raw CLI command
 its current instructions from `orchestrate <action> guide`.
 
 ```text
-Prepare → Discovery × N → Reconcile → approve → Build → done
+Prepare → Discovery × N → Reconcile → STOP
+
+Later, explicitly: Build → done
 ```
 
 ## 1. Prepare the request
@@ -52,7 +54,7 @@ Put the request and context in a Markdown file, then invoke:
 $prep-discovery-freeform
 ```
 
-Give it the request file, target repository, and a short effort name.
+Give it the request file, target repository, and a short effort slug.
 
 It returns the prepared request file directly.
 
@@ -64,8 +66,9 @@ For more detail, see [Request preparation](request-preparation.md).
 
 Open several **fresh model windows**.
 
-Three is a reasonable default. Use five or more when the change is important, ambiguous, or worth
-extra independent investigation.
+Three independent Discoveries are the normal default. Run additional independent Discoveries when
+you deliberately want broader investigation or additional corroboration; no count has special
+quorum or confidence meaning.
 
 In every window, run the **same** prepared request:
 
@@ -82,6 +85,7 @@ When a Discovery finishes, it reports:
 
 ```text
 run ID
+human source label
 artifact ID
 outcome
 published Discovery directory
@@ -97,8 +101,6 @@ Example:
 /path/to/discovery-1
 /path/to/discovery-2
 /path/to/discovery-3
-/path/to/discovery-4
-/path/to/discovery-5
 ```
 
 A `BLOCKED` Discovery is a valid result, but do not pass it to Reconcile.
@@ -114,27 +116,30 @@ Open one fresh model window.
 Pass every finalized Discovery directory you want included:
 
 ```text
-$reconcile   "/path/to/discovery-1"   "/path/to/discovery-2"   "/path/to/discovery-3"   "/path/to/discovery-4"   "/path/to/discovery-5"
+$reconcile   "/path/to/discovery-1"   "/path/to/discovery-2"   "/path/to/discovery-3"
 ```
 
-Reconcile analyzes only those selected Discovery outputs. It does not reopen the repository and
-does not become another Discovery lane.
+Reconcile's only engineering evidence is those selected Discovery outputs. Frozen explicit
+constraints remain direct user authority and the frozen request/context remain available for goal,
+identity, and lineage; neither permits another engineering investigation. It does not reopen the
+repository or become another Discovery lane.
 
-It produces one **Reconciled Discovery** with:
+It produces one rich **Reconciled Discovery** with:
 
 ```text
-Core result
-Binding requirements
-Advisory technical suggestions
-Blocking issues, if any
+Selected direction, changed and unchanged behavior
+Binding requirements and precise acceptance criteria
+Evidence mapping, verification methods, and limitations
+Disagreements, rejected alternatives, risks, compatibility, and caveats
+Advisory technical suggestions and blocking issues, if any
 ```
 
 The binding requirements answer: **what must Build actually accomplish?**
 
 Technical suggestions are implementation guidance only.
 
-Read the reconciled document. If the model asks whether you approve it for Build, approve it only
-when the binding result is what you want implemented. Approval creates the adoption receipt.
+Read the reconciled document. Reconcile reports the result and stops; it does not ask for Build
+approval or create Adoption.
 
 Before closing the Reconcile window, keep:
 
@@ -143,10 +148,10 @@ Effort ID
 Reconciled document path
 ```
 
-The effort ID is also visible in Orchestrate artifact paths under:
+The effort slug is also visible in human-readable Orchestrate artifact paths under:
 
 ```text
-.../efforts/<effort-id>/...
+.../projects/<project-name>/efforts/<effort-slug>/...
 ```
 
 For more detail, see [Reconcile](reconcile.md).
@@ -155,13 +160,13 @@ For more detail, see [Reconcile](reconcile.md).
 
 ## 4. Build and final Audit
 
-Use `$build` with the exact effort and approved detailed implementation plan. It prepares the
+Later, explicitly invoke `$build` with the exact effort, Reconciled Discovery, and detailed implementation plan. That invocation authorizes Build and creates or reuses Adoption. It prepares the
 contained Build files; you do not hand-author the controller JSON/TOML.
 
 The process runs every delivery phase, independent reviews, corrections, implementation
-registration, and fresh final Audits until it reaches a published Audit PASS or a real external
-blocker. There are no normal `next`, `accept`, `continue`, or Audit-window steps. Technical
-suggestions remain advisory.
+registration, and fresh final Audits until it reaches a published Audit PASS or cannot safely
+continue automatically. An external user or infrastructure need is one common blocker. There are
+no normal `next`, `accept`, `continue`, or Audit-window steps. Technical suggestions remain advisory.
 
 For more detail, see [Build and Audit](build-and-audit.md).
 
@@ -176,13 +181,13 @@ Once installed:
    or $prep-discovery-freeform
 
 2. $discovery "/path/request.prepared.md"
-   Run the same file in 3–5 fresh model windows.
+   Run the same file in three fresh model windows; add more deliberately when useful.
 
 3. $reconcile "/path/discovery-1" "/path/discovery-2" ...
 
-4. Approve the Reconciled Discovery.
+4. Review the Reconciled Discovery; Reconcile stops.
 
-5. $build with the approved detailed implementation plan.
+5. Later, explicitly run $build with the detailed implementation plan.
 
 ```
 

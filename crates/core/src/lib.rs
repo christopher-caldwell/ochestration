@@ -23,6 +23,7 @@ static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct Project {
     pub id: String,
     pub display_name: String,
+    pub storage_name: String,
     pub canonical_locator: PathBuf,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -41,6 +42,15 @@ pub struct Effort {
     pub context: ContextRevision,
     pub baseline_commit: String,
     pub baseline_tree: String,
+    pub project_storage_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared_source: Option<PreparedSource>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PreparedSource {
+    pub absolute_path: PathBuf,
+    pub sha256: String,
+    pub initialized_at_ms: u128,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct StoreMarker {
@@ -146,6 +156,17 @@ impl Store {
         request: String,
         constraints: Vec<String>,
     ) -> Result<Effort> {
+        self.init_effort_with_source(repo, slug, request_kind, request, constraints, None)
+    }
+    pub fn init_effort_with_source(
+        &self,
+        repo: &Path,
+        slug: &str,
+        request_kind: RequestKind,
+        request: String,
+        constraints: Vec<String>,
+        prepared_source: Option<PreparedSource>,
+    ) -> Result<Effort> {
         validate_label(slug)?;
         let canonical_repo = fs::canonicalize(repo)
             .with_context(|| format!("cannot canonicalize repository {}", repo.display()))?;
@@ -153,15 +174,17 @@ impl Store {
             canonical_repo.join(".git").exists(),
             "target is not a supported Git repository"
         );
-        let baseline = capture_git_identity(&canonical_repo)?;
         let project_id = short_digest(canonical_repo.to_string_lossy().as_bytes());
+        let display_name = canonical_repo
+            .file_name()
+            .and_then(|p| p.to_str())
+            .unwrap_or("project")
+            .to_owned();
+        let storage_name = storage_name(&display_name)?;
         let project = Project {
             id: project_id.clone(),
-            display_name: canonical_repo
-                .file_name()
-                .and_then(|p| p.to_str())
-                .unwrap_or("project")
-                .to_owned(),
+            display_name,
+            storage_name: storage_name.clone(),
             canonical_locator: canonical_repo.clone(),
         };
         let context_bytes = encode(&ContextFingerprint {
@@ -177,10 +200,20 @@ impl Store {
             constraints,
             digest: context_digest,
         };
+        let dir = self
+            .root
+            .join("projects")
+            .join(&storage_name)
+            .join("efforts")
+            .join(slug);
+        if dir.exists() {
+            return self.verify_existing_effort(&dir, &project, slug, &context);
+        }
+        self.ensure_project(&project)?;
+        let baseline = capture_git_identity(&canonical_repo)?;
         let effort_id = format!(
-            "{}-{}",
-            slugify(slug),
-            &short_digest(format!("{}:{}", project_id, context.id).as_bytes())[..10]
+            "effort-{}",
+            short_digest(format!("{}:{slug}", project_id).as_bytes())
         );
         let effort = Effort {
             id: effort_id,
@@ -189,11 +222,9 @@ impl Store {
             context,
             baseline_commit: baseline.commit,
             baseline_tree: baseline.tree,
+            project_storage_name: storage_name,
+            prepared_source,
         };
-        let dir = self.effort_dir(&effort.project_id, &effort.id);
-        if dir.exists() {
-            return self.verify_existing_effort(&dir, &effort);
-        }
         // Write the complete effort off to the side, then atomically publish it.  Concurrent
         // model windows either win this rename or read the complete effort the winner wrote.
         self.materialize_snapshot(&canonical_repo, &effort.baseline_commit)?;
@@ -202,7 +233,6 @@ impl Store {
             .join(".staging")
             .join(format!("effort-{}", unique_id()));
         fs::create_dir_all(&stage)?;
-        write_json_atomic(&stage.join("project.json"), &project)?;
         write_json_atomic(&stage.join("effort.json"), &effort)?;
         write_bytes_sync(&stage.join("request.md"), effort.context.request.as_bytes())?;
         sync_dir(&stage)?;
@@ -218,13 +248,39 @@ impl Store {
                 )?;
                 Ok(effort)
             }
-            Err(_error) if dir.exists() => self.verify_existing_effort(&dir, &effort),
+            Err(_error) if dir.exists() => {
+                self.verify_existing_effort(&dir, &project, slug, &effort.context)
+            }
             Err(error) => {
                 Err(error).with_context(|| format!("cannot initialize effort {}", effort.id))
             }
         }
     }
-    fn verify_existing_effort(&self, dir: &Path, expected: &Effort) -> Result<Effort> {
+    fn ensure_project(&self, expected: &Project) -> Result<()> {
+        let dir = self.root.join("projects").join(&expected.storage_name);
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("project.json");
+        if publish_json_new_atomic(&path, expected)? {
+            Ok(())
+        } else {
+            let existing: Project = read_json(&path)?;
+            ensure!(
+                existing.canonical_locator == expected.canonical_locator
+                    && existing.id == expected.id,
+                "project storage name '{}' is already used by a different canonical repository at {}; rename one repository directory before initializing",
+                expected.storage_name,
+                existing.canonical_locator.display()
+            );
+            Ok(())
+        }
+    }
+    fn verify_existing_effort(
+        &self,
+        dir: &Path,
+        project: &Project,
+        slug: &str,
+        expected_context: &ContextRevision,
+    ) -> Result<Effort> {
         ensure!(
             dir.join("effort.json").is_file(),
             "effort directory already exists but is malformed: {}",
@@ -232,13 +288,17 @@ impl Store {
         );
         let existing: Effort = read_json(&dir.join("effort.json"))?;
         ensure!(
-            existing.slug == expected.slug
-                && existing.project_id == expected.project_id
-                && existing.context.request_kind == expected.context.request_kind
-                && existing.context.request == expected.context.request
-                && existing.context.constraints == expected.context.constraints,
-            "effort already exists with a different frozen identity: {}; choose a new effort slug or reuse the same prepared request unchanged",
-            expected.id
+            existing.project_id == project.id,
+            "project storage name '{}' is already used by a different canonical repository; rename one repository directory before initializing",
+            project.storage_name
+        );
+        ensure!(
+            existing.slug == slug
+                && existing.context.request_kind == expected_context.request_kind
+                && existing.context.request == expected_context.request
+                && existing.context.constraints == expected_context.constraints,
+            "Effort \"{}\" already exists with a different frozen request or constraints. An effort's prepared request is immutable. Discovery-time clarifications must be recorded inside the Discovery run, not used to initialize a different request under the same effort.",
+            slug
         );
         Ok(existing)
     }
@@ -255,7 +315,7 @@ impl Store {
     /// select an effort must still apply their own explicit eligibility rules; this
     /// deliberately does not infer a "latest" effort.
     pub fn efforts_for_project(&self, project: &Project) -> Result<Vec<Effort>> {
-        let root = self.root.join("projects").join(&project.id).join("efforts");
+        let root = self.project_dir(project).join("efforts");
         if !root.exists() {
             return Ok(Vec::new());
         }
@@ -279,19 +339,11 @@ impl Store {
         }
         for entry in fs::read_dir(projects)? {
             let project_path = entry?.path();
-            let file = project_path.join("efforts");
-            if !file.exists() {
-                continue;
-            }
-            for effort in fs::read_dir(file)? {
-                let effort_path = effort?.path();
-                let project_file = effort_path.join("project.json");
-                if project_file.is_file() {
-                    let project: Project = read_json(&project_file)?;
-                    if project.canonical_locator == locator {
-                        return Ok(Some(project));
-                    }
-                    break;
+            let project_file = project_path.join("project.json");
+            if project_file.is_file() {
+                let project: Project = read_json(&project_file)?;
+                if project.canonical_locator == locator {
+                    return Ok(Some(project));
                 }
             }
         }
@@ -300,20 +352,25 @@ impl Store {
     pub fn project_for(&self, effort: &Effort) -> Result<Project> {
         read_json(
             &self
-                .effort_dir(&effort.project_id, &effort.id)
+                .root
+                .join("projects")
+                .join(&effort.project_storage_name)
                 .join("project.json"),
         )
     }
-    pub fn effort_dir(&self, project_id: &str, effort_id: &str) -> PathBuf {
+    pub fn project_dir(&self, project: &Project) -> PathBuf {
+        self.root.join("projects").join(&project.storage_name)
+    }
+    pub fn effort_dir(&self, effort: &Effort) -> PathBuf {
         self.root
             .join("projects")
-            .join(project_id)
+            .join(&effort.project_storage_name)
             .join("efforts")
-            .join(effort_id)
+            .join(&effort.slug)
     }
     pub fn phase_dir(&self, effort: &Effort, phase: &str) -> Result<PathBuf> {
         validate_label(phase)?;
-        let path = self.effort_dir(&effort.project_id, &effort.id).join(phase);
+        let path = self.effort_dir(effort).join(phase);
         fs::create_dir_all(&path)?;
         Ok(path)
     }
@@ -324,9 +381,7 @@ impl Store {
         run_id: Option<&str>,
         details: serde_json::Value,
     ) -> Result<()> {
-        let path = self
-            .effort_dir(&effort.project_id, &effort.id)
-            .join("journal.jsonl");
+        let path = self.effort_dir(effort).join("journal.jsonl");
         let record = JournalEvent {
             event: event.into(),
             ts_ms: now_ms(),
@@ -344,9 +399,7 @@ impl Store {
         })
     }
     pub fn read_journal(&self, effort: &Effort) -> Result<Vec<JournalEvent>> {
-        let path = self
-            .effort_dir(&effort.project_id, &effort.id)
-            .join("journal.jsonl");
+        let path = self.effort_dir(effort).join("journal.jsonl");
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -449,14 +502,7 @@ impl Store {
             "git checkout failed: {}",
             String::from_utf8_lossy(&checkout.stderr)
         );
-        ensure!(
-            git(&source, ["rev-parse", "HEAD"])? == run.baseline_commit,
-            "Discovery source checkout does not match frozen baseline"
-        );
-        ensure!(
-            git(&source, ["status", "--porcelain"])?.is_empty(),
-            "Discovery source checkout is not clean"
-        );
+        verify_git_checkout(&source, &run.baseline_commit, &run.baseline_tree)?;
         write_json_atomic(&root.join("run.json"), run)?;
         write_bytes_sync(&root.join("request.md"), effort.context.request.as_bytes())?;
         write_json_atomic(
@@ -468,6 +514,7 @@ impl Store {
             TECHNICAL_SPEC_TEMPLATE.as_bytes(),
         )?;
         fs::create_dir_all(root.join("graph"))?;
+        fs::create_dir_all(root.join("scratch"))?;
         self.append_journal(
             effort,
             "discovery_workspace_prepared",
@@ -659,13 +706,16 @@ impl Store {
         let envelope: Envelope = decode(&bytes)?;
         Ok(artifact_ref(&envelope, &bytes))
     }
+    pub fn artifact_dir(&self, effort: &Effort, artifact_id: &str) -> Result<PathBuf> {
+        self.find_artifact_dir(effort, artifact_id)
+    }
     pub fn load_envelope(&self, effort: &Effort, reference: &ArtifactRef) -> Result<Envelope> {
         Ok(self.load_bundle(effort, reference)?.0)
     }
     pub fn list_artifacts(&self, effort: &Effort) -> Result<Vec<ArtifactRef>> {
         let mut out = Vec::new();
         for phase in ["discovery", "reconcile", "adoption", "build", "audit"] {
-            let dir = self.effort_dir(&effort.project_id, &effort.id).join(phase);
+            let dir = self.effort_dir(effort).join(phase);
             if !dir.exists() {
                 continue;
             }
@@ -727,9 +777,19 @@ impl Store {
         }
         let mut found = Vec::new();
         for p in fs::read_dir(projects)? {
-            let path = p?.path().join("efforts").join(effort_id);
-            if path.join("effort.json").exists() {
-                found.push(path);
+            let efforts = p?.path().join("efforts");
+            if !efforts.exists() {
+                continue;
+            }
+            for entry in fs::read_dir(efforts)? {
+                let path = entry?.path();
+                let effort_file = path.join("effort.json");
+                if effort_file.exists() {
+                    let effort: Effort = read_json(&effort_file)?;
+                    if effort.id == effort_id || effort.slug == effort_id {
+                        found.push(path);
+                    }
+                }
             }
         }
         Ok(found)
@@ -738,10 +798,7 @@ impl Store {
         validate_id(artifact_id)?;
         let mut found = Vec::new();
         for phase in ["discovery", "reconcile", "adoption", "build", "audit"] {
-            let path = self
-                .effort_dir(&effort.project_id, &effort.id)
-                .join(phase)
-                .join(artifact_id);
+            let path = self.effort_dir(effort).join(phase).join(artifact_id);
             if path.join("manifest.json").exists() {
                 found.push(path);
             }
@@ -755,6 +812,110 @@ impl Store {
 }
 
 pub const TECHNICAL_SPEC_TEMPLATE: &str = "# Technical specification\n\n";
+
+/// Verify that a Discovery source checkout is still the exact frozen Git worktree.
+///
+/// This deliberately asks Git for all untracked and ignored paths. Discovery workspaces
+/// reserve `scratch/` for generated and experimental files, so nothing outside Git's own
+/// administrative metadata is allowed to accumulate in `source/`.
+pub fn verify_git_checkout(
+    source: &Path,
+    expected_commit: &str,
+    expected_tree: &str,
+) -> Result<()> {
+    let expected_root = fs::canonicalize(source).with_context(|| {
+        format!(
+            "Discovery source checkout is missing or inaccessible: {}",
+            source.display()
+        )
+    })?;
+    ensure!(
+        git(&expected_root, ["rev-parse", "--is-inside-work-tree"])? == "true",
+        "Discovery source {} is not a Git worktree",
+        source.display()
+    );
+    let actual_root = fs::canonicalize(PathBuf::from(git(
+        &expected_root,
+        ["rev-parse", "--show-toplevel"],
+    )?))
+    .context("Git returned an inaccessible Discovery worktree root")?;
+    ensure!(
+        actual_root == expected_root,
+        "Discovery source {} resolves to Git worktree root {} rather than itself",
+        source.display(),
+        actual_root.display()
+    );
+
+    let actual_commit = git(&expected_root, ["rev-parse", "--verify", "HEAD^{commit}"])?;
+    ensure!(
+        actual_commit == expected_commit,
+        "Discovery source HEAD differs from frozen baseline: expected {}, got {}",
+        expected_commit,
+        actual_commit
+    );
+    let actual_tree = git(&expected_root, ["rev-parse", "--verify", "HEAD^{tree}"])?;
+    ensure!(
+        actual_tree == expected_tree,
+        "Discovery source HEAD tree differs from frozen baseline: expected {}, got {}",
+        expected_tree,
+        actual_tree
+    );
+    verify_tracked_working_tree(&expected_root, expected_tree)?;
+    let status = git(
+        &expected_root,
+        [
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored=matching",
+        ],
+    )?;
+    ensure!(
+        status.is_empty(),
+        "Discovery source checkout is dirty: {}",
+        concise_git_status(&status)
+    );
+    Ok(())
+}
+
+/// Compare tracked paths against the frozen tree through an isolated index. The checkout's
+/// index can contain `assume-unchanged` or `skip-worktree` flags, which intentionally suppress
+/// ordinary status checks. This temporary index starts from the expected tree without those
+/// mutable flags and is removed before validation returns.
+fn verify_tracked_working_tree(source: &Path, expected_tree: &str) -> Result<()> {
+    let index = std::env::temp_dir().join(format!("orchestrate-git-index-{}", unique_id()));
+    let lock = index.with_extension("lock");
+    ensure!(
+        !index.exists() && !lock.exists(),
+        "cannot allocate isolated Git index for Discovery source validation"
+    );
+    let result = (|| {
+        let environment = [("GIT_INDEX_FILE", index.as_path())];
+        git_with_env(source, ["read-tree", expected_tree], &environment)?;
+        // Refresh only the isolated index. A changed path makes this command return one, but
+        // still records enough stat information for diff-files to distinguish clean files.
+        let _ = git_with_env_allow_differences(
+            source,
+            ["update-index", "--really-refresh"],
+            &environment,
+        )?;
+        let differences = git_with_env(
+            source,
+            ["diff-files", "--raw", "--no-ext-diff"],
+            &environment,
+        )?;
+        ensure!(
+            differences.is_empty(),
+            "Discovery source tracked working-tree content differs from frozen tree: {}",
+            concise_git_status(&differences)
+        );
+        Ok(())
+    })();
+    let _ = fs::remove_file(&index);
+    let _ = fs::remove_file(&lock);
+    result
+}
+
 pub fn now_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -800,13 +961,54 @@ fn git_file_inventory(repo: &Path, commit: &str) -> Result<BTreeMap<String, Stri
     Ok(inventory)
 }
 fn git<const N: usize>(repo: &Path, args: [&str; N]) -> Result<String> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    git_with_env(repo, args, &[])
+}
+fn git_with_env<const N: usize>(
+    repo: &Path,
+    args: [&str; N],
+    environment: &[(&str, &Path)],
+) -> Result<String> {
+    let output = git_with_env_output(repo, args, environment)?;
     ensure!(
         output.status.success(),
         "git command failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(String::from_utf8(output.stdout)?.trim().into())
+}
+fn git_with_env_allow_differences<const N: usize>(
+    repo: &Path,
+    args: [&str; N],
+    environment: &[(&str, &Path)],
+) -> Result<String> {
+    let output = git_with_env_output(repo, args, environment)?;
+    ensure!(
+        output.status.success() || output.status.code() == Some(1),
+        "git command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(String::from_utf8(output.stdout)?.trim().into())
+}
+fn git_with_env_output<const N: usize>(
+    repo: &Path,
+    args: [&str; N],
+    environment: &[(&str, &Path)],
+) -> Result<std::process::Output> {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(repo);
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+    Ok(command.output()?)
+}
+fn concise_git_status(status: &str) -> String {
+    let entries = status.lines().take(8).collect::<Vec<_>>();
+    let suffix = if status.lines().count() > entries.len() {
+        "; …"
+    } else {
+        ""
+    };
+    format!("{}{}", entries.join("; "), suffix)
 }
 fn unique_id() -> String {
     format!(
@@ -819,22 +1021,29 @@ fn unique_id() -> String {
 fn short_digest(bytes: &[u8]) -> String {
     digest_bytes(bytes)[..16].into()
 }
-fn slugify(v: &str) -> String {
-    v.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
+fn storage_name(value: &str) -> Result<String> {
+    let name = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character.to_ascii_lowercase()
             } else {
-                '-'
+                '_'
             }
         })
-        .collect::<String>()
-        .trim_matches('-')
-        .into()
+        .collect::<String>();
+    let name = name.trim_matches(['.', '_', '-']).to_owned();
+    ensure!(
+        !name.is_empty(),
+        "project directory name has no safe storage representation"
+    );
+    Ok(name)
 }
 fn validate_label(v: &str) -> Result<()> {
     ensure!(
         !v.is_empty()
+            && v != "."
+            && v != ".."
             && v.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
         "invalid label {v}"
@@ -870,6 +1079,46 @@ fn with_journal_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T>
 }
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_bytes_sync(path, &encode(value)?)
+}
+/// Atomically publish bytes only when `path` does not yet exist.
+///
+/// A completed temporary file is linked into place, so concurrent project initializers either
+/// publish a complete `project.json` or observe the complete file published by their peer.
+/// Unlike `rename`, `hard_link` never replaces an existing destination.
+fn publish_json_new_atomic<T: Serialize>(path: &Path, value: &T) -> Result<bool> {
+    publish_bytes_new_atomic(path, &encode(value)?)
+}
+fn publish_bytes_new_atomic(path: &Path, bytes: &[u8]) -> Result<bool> {
+    let parent = path.parent().context("path has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temp = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().and_then(|v| v.to_str()).unwrap_or("file"),
+        unique_id()
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+
+    match fs::hard_link(&temp, path) {
+        Ok(()) => {
+            fs::remove_file(&temp)?;
+            sync_dir(parent)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            fs::remove_file(&temp)?;
+            Ok(false)
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temp);
+            Err(error.into())
+        }
+    }
 }
 fn validate_marker(marker: &Path) -> Result<()> {
     let stored: StoreMarker = read_json(marker)?;

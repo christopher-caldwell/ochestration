@@ -10,13 +10,14 @@ Create a small Markdown file with any supplemental context, then run:
 $prep-discovery-ticket
 ```
 
-Give it the notes file, target repository, and a short effort name.
+Give it the notes file, target repository, and a short effort slug.
 
 Paste the original ticket verbatim into the prepared file's placeholder and save it.
 
 ## 2. Discover
 
-Open 3–5 fresh model windows.
+Open three fresh model windows. Add more independent Discoveries deliberately when broader
+investigation or corroboration is useful.
 
 In every window:
 
@@ -34,16 +35,17 @@ Open a fresh model window:
 $reconcile "/path/discovery-1" "/path/discovery-2" "/path/discovery-3" ...
 ```
 
-Review the Reconciled Discovery and approve it if the binding requirements are what you want built.
+Review the Reconciled Discovery. Reconcile stops after reporting the selected direction and artifact.
 
 Keep the reconciled document path and effort ID.
 
 ## 4. Build
 
-Use `$build` with the effort and the approved detailed implementation plan.
+Later, explicitly use `$build` with the effort and detailed implementation plan.
 
 Build runs the delivery phases, reviews, corrections, implementation registration, and the final
-Audit until it finishes or needs something only you can provide.
+Audit until it finishes or cannot safely continue automatically. A user or infrastructure need is
+one common blocker.
 
 That is the full ticket workflow.
 

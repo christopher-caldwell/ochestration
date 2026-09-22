@@ -4,7 +4,7 @@ use orchestrate_contracts::{
     AuditAssessment, EvidenceKind, EvidenceStatus, ImplementationStatus, Provenance,
     ReconcileProposal, RequestKind,
 };
-use orchestrate_core::Store;
+use orchestrate_core::{PreparedSource, Store, now_ms};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -274,6 +274,7 @@ struct InitInput {
     request_kind: RequestKind,
     request: String,
     constraints: Vec<String>,
+    prepared_source: Option<PreparedSource>,
 }
 fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
     if let Some(path) = args.from_file {
@@ -286,7 +287,10 @@ fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
                 && args.constraints.is_empty(),
             "--from-file cannot be combined with --project, --effort, --request, --request-file, --request-kind, or --constraint"
         );
-        let prepared = prepared_request::read(&path)?;
+        let absolute_path = fs::canonicalize(&path)
+            .with_context(|| format!("cannot canonicalize prepared request {}", path.display()))?;
+        let prepared_sha256 = orchestrate_contracts::digest_bytes(&fs::read(&absolute_path)?);
+        let prepared = prepared_request::read(&absolute_path)?;
         return Ok(InitInput {
             root: root.unwrap_or(prepared.root),
             project: prepared.project,
@@ -294,6 +298,11 @@ fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
             request_kind: prepared.request_kind,
             request: prepared.body,
             constraints: prepared.constraints,
+            prepared_source: Some(PreparedSource {
+                absolute_path,
+                sha256: prepared_sha256,
+                initialized_at_ms: now_ms(),
+            }),
         });
     }
     let project = args
@@ -327,18 +336,20 @@ fn resolve_init_input(root: Option<PathBuf>, args: Init) -> Result<InitInput> {
         request_kind,
         request,
         constraints: args.constraints,
+        prepared_source: None,
     })
 }
 fn initialize(store: &Store, input: InitInput) -> Result<()> {
     let canonical_repo = fs::canonicalize(&input.project)
         .with_context(|| format!("cannot canonicalize repository {}", input.project.display()))?;
     ensure_outside_project(store.root(), &canonical_repo, "orchestration store root")?;
-    let effort = store.init_effort(
+    let effort = store.init_effort_with_source(
         &canonical_repo,
         &input.effort,
         input.request_kind,
         input.request,
         input.constraints,
+        input.prepared_source,
     )?;
     output(
         "SUCCESS",
@@ -379,10 +390,12 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 &effort,
                 provenance.for_guide(orchestrate_guides::DISCOVERY),
             )?;
+            let run_metadata: orchestrate_contracts::DiscoveryRun =
+                json_file(&workspace.join("run.json"))?;
             output(
                 "SUCCESS",
                 "PREPARED",
-                serde_json::json!({"run": run, "workspace": workspace, "frozen_source": workspace.join("source")}),
+                serde_json::json!({"run": run, "source_label": run_metadata.source_label, "workspace": workspace, "frozen_source": workspace.join("source"), "scratch": workspace.join("scratch")}),
             );
         }
         Command::Discovery {
@@ -404,10 +417,11 @@ fn execute(store: Store, command: Command) -> Result<()> {
             let effort = store.load_effort(&effort)?;
             let reference = orchestrate_discovery::finalize(&store, &effort, &run)?;
             let outcome = store.load_envelope(&effort, &reference)?.outcome;
+            let artifact_path = store.artifact_dir(&effort, &reference.artifact_id)?;
             output(
                 "SUCCESS",
                 "FINALIZED",
-                serde_json::json!({"artifact": reference, "outcome": outcome}),
+                serde_json::json!({"artifact": reference, "artifact_path": artifact_path, "outcome": outcome}),
             );
         }
         Command::Reconcile {
@@ -446,10 +460,11 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 provenance.for_guide(orchestrate_guides::RECONCILE),
             )?;
             let outcome = store.load_envelope(&effort, &reference)?.outcome;
+            let artifact_path = store.artifact_dir(&effort, &reference.artifact_id)?;
             output(
                 "SUCCESS",
                 &outcome,
-                serde_json::json!({"reconciled": reference, "outcome": outcome}),
+                serde_json::json!({"reconciled": reference, "artifact_path": artifact_path, "outcome": outcome}),
             );
         }
         Command::Reconcile {
