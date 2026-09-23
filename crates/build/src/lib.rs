@@ -443,13 +443,21 @@ fn initialize_state(
 ) -> Result<BuildState> {
     let (_, reconciled): (_, orchestrate_contracts::ReconciledDiscovery) =
         store.load_json(effort, &plan.reconciled, "reconciled-discovery.json")?;
+    let project = store.project_for(effort)?;
+    ensure!(
+        git(
+            &project.canonical_locator,
+            ["status", "--porcelain=v1", "--untracked-files=all"]
+        )?
+        .is_empty(),
+        "cannot start a new Build: the product checkout has staged, unstaged, or untracked changes; commit, move, or remove them before starting Build"
+    );
     let adoption = orchestrate_audit::adopt_for_build(
         store,
         effort,
         plan.reconciled.clone(),
         build_provenance("build", orchestrate_guides::BUILD),
     )?;
-    let project = store.project_for(effort)?;
     let build_start = store.materialize_snapshot(&project.canonical_locator, "HEAD")?;
     let ancestry = Command::new("git")
         .args([
@@ -1678,6 +1686,74 @@ mod tests {
                 .contains("not descended from the Discovery baseline")
         );
     }
+
+    #[test]
+    fn new_build_rejects_staged_unstaged_and_untracked_checkout_state() {
+        for kind in ["staged", "unstaged", "untracked"] {
+            let (store, effort, repo, _reconciled, _adoption) = prepared();
+            match kind {
+                "staged" => {
+                    fs::write(repo.join("source.txt"), "staged before Build\n").unwrap();
+                    git_ok(&repo, &["add", "source.txt"]);
+                }
+                "unstaged" => {
+                    fs::write(repo.join("source.txt"), "unstaged before Build\n").unwrap();
+                }
+                "untracked" => {
+                    fs::write(repo.join("foreign.txt"), "untracked before Build\n").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let build_dir = store.phase_dir(&effort, "build").unwrap();
+            let host = ScenarioHost::new(Scenario::Basic);
+            let error = run_with_adapter(&store, request(&repo), &host).unwrap_err();
+            assert!(
+                error.to_string().contains("cannot start a new Build"),
+                "{kind}: {error:#}"
+            );
+            assert!(
+                !build_dir.join("state.json").exists(),
+                "{kind} created Build state"
+            );
+            assert_eq!(host.call_count("work"), 0, "{kind} reached the worker");
+            assert_eq!(artifact_count(&store, &effort, ArtifactKind::Adoption), 0);
+        }
+    }
+
+    #[test]
+    fn new_build_allows_ignored_environment_state() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        fs::write(repo.join(".gitignore"), "local-cache/\n").unwrap();
+        git_ok(&repo, &["add", ".gitignore"]);
+        git_ok(&repo, &["commit", "-m", "ignore local cache"]);
+        fs::create_dir(repo.join("local-cache")).unwrap();
+        fs::write(repo.join("local-cache").join("state.txt"), "local\n").unwrap();
+        assert!(
+            git(&repo, ["status", "--porcelain=v1", "--untracked-files=all"])
+                .unwrap()
+                .is_empty()
+        );
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let config = load_config(&build_dir).unwrap();
+        let plan = load_plan(&store, &effort, &build_dir).unwrap();
+        initialize_state(&store, &effort, &build_dir, &config, &plan).unwrap();
+        assert!(build_dir.join("state.json").exists());
+    }
+
+    #[test]
+    fn resumed_build_does_not_repeat_the_initial_checkout_check() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let config = load_config(&build_dir).unwrap();
+        let plan = load_plan(&store, &effort, &build_dir).unwrap();
+        initialize_state(&store, &effort, &build_dir, &config, &plan).unwrap();
+        fs::write(repo.join("worker-scratch.txt"), "worker state\n").unwrap();
+        fs::write(repo.join("source.txt"), "work in progress\n").unwrap();
+        let host = StaleGuideHost::default();
+        let result = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(result, BuildResult::Blocked { .. }));
+        assert_eq!(host.invocations.lock().unwrap().len(), 1);
+    }
     /// Each role must be driven through its own configured adapter, not a shared default.
     fn assert_role_adapter(invocation: &Invocation) {
         let config: BuildConfig =
@@ -2254,6 +2330,8 @@ mod tests {
         Malformed,
         DirtyCheckout,
         PrematureReceipt,
+        WorkerUntracked,
+        WorkerTracked,
     }
 
     struct TamperHost {
@@ -2305,6 +2383,11 @@ mod tests {
                     )?;
                     git_ok(&invocation.cwd, &["add", "."]);
                     git_ok(&invocation.cwd, &["commit", "-m", &scope]);
+                    if self.mode == Tamper::WorkerUntracked {
+                        fs::write(invocation.cwd.join("worker-scratch.txt"), "scratch\n")?;
+                    } else if self.mode == Tamper::WorkerTracked {
+                        fs::write(invocation.cwd.join(format!("{scope}.txt")), "leftover\n")?;
+                    }
                     let receipt = serde_json::json!({
                         "action_id": action_id,
                         "scope": scope,
@@ -2351,7 +2434,8 @@ mod tests {
                             "commit": action["target_commit"]
                         }),
                     };
-                    let bytes = if self.mode == Tamper::Malformed {
+                    let bytes = if matches!(self.mode, Tamper::Malformed | Tamper::WorkerUntracked)
+                    {
                         b"{not json".to_vec()
                     } else {
                         serde_json::to_vec(&body)?
@@ -2403,6 +2487,34 @@ mod tests {
         assert!(matches!(result, BuildResult::Blocked { .. }));
         assert_eq!(host.call_count("work"), 1);
         assert_eq!(host.call_count("review"), 1);
+    }
+
+    #[test]
+    fn worker_owned_untracked_file_does_not_block_commit_handoff() {
+        let (store, _effort, repo, _reconciled, _adoption) = prepared();
+        let host = TamperHost::new(Tamper::WorkerUntracked);
+        let result = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(result, BuildResult::Blocked { .. }));
+        assert_eq!(host.call_count("work"), 1);
+        assert_eq!(
+            host.call_count("review"),
+            1,
+            "valid work never reached Review"
+        );
+        assert!(repo.join("worker-scratch.txt").exists());
+    }
+
+    #[test]
+    fn worker_completion_still_rejects_leftover_tracked_changes() {
+        let (store, _effort, repo, _reconciled, _adoption) = prepared();
+        let host = TamperHost::new(Tamper::WorkerTracked);
+        let result = run_with_adapter(&store, request(&repo), &host).unwrap();
+        let BuildResult::Blocked { detail, .. } = result else {
+            panic!("leftover tracked changes were accepted")
+        };
+        assert!(detail.contains("worker left tracked changes outside submitted commit"));
+        assert_eq!(host.call_count("work"), 1);
+        assert_eq!(host.call_count("review"), 0);
     }
 
     #[test]

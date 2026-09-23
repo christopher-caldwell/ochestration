@@ -14,7 +14,11 @@ than silently changing the plan or improvising around the conflict.
 Explicitly invoking `$build` is the authorization boundary. It binds the Reconciled Discovery,
 creates or reuses Adoption, captures current Build starting HEAD/tree, and verifies that the frozen
 Discovery baseline is its ancestor. The repository may advance between Discovery and Build. Build
-then copies the detailed plan and fills `plan.json` and `config.toml`
+requires a clean Git-visible checkout when starting a new Build: no staged or unstaged tracked
+changes or ordinary untracked files. Ignored local environment files are allowed. The captured
+commit/tree is the boundary from which the worker takes ownership; an active Build resumes from
+its saved state without repeating this startup check. Build preparation
+copies the detailed plan and fills `plan.json` and `config.toml`
 from templates supplied by the installed CLI. Files you have already filled are left in place.
 Existing Build files and state are resumed rather than re-scaffolded.
 Worker and reviewer sessions may use different configured adapters. Exact setup rules, including

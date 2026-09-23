@@ -14,6 +14,8 @@ Read the rich Reconciled Discovery artifact as Build's authoritative contract. *
 
 The repository may have advanced since Discovery. Discovery remains frozen to its recorded baseline, while implementation must respect the current code and preserve the reconciled contract. Build is allowed when that Discovery baseline is an ancestor of current `HEAD`; it need not equal current `HEAD`.
 
+A new Build requires a clean Git-visible product checkout before the worker takes ownership. Commit, move, or remove staged changes, unstaged changes, and ordinary untracked files before starting. The recorded Build starting commit/tree is the worker's starting boundary. Git-ignored local environment files are allowed. This check applies when Build state is first created, not when an active Build resumes.
+
 ## First preparation
 
 Copy the detailed implementation plan into the Build directory, then materialize templates:
