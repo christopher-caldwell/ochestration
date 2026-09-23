@@ -13,6 +13,10 @@
 - [Build and Audit](guides/build-and-audit.md) — run the unattended Build loop through registration and final verification.
 - [Ticket workflow](guides/ticket-workflow.md) — compact ticket-specific checklist.
 
+## Examples
+
+- [Build run capture](examples/build-run-capture.md) — optional wrapper for preserving one Build invocation and its related evidence as a ZIP for later analysis.
+
 ## Reference
 
 - [Architecture](architecture.md) — authority boundaries, artifacts, and deterministic rules.
