@@ -740,9 +740,39 @@ fn write_action_file(
 ) -> Result<()> {
     let requirement_path =
         ensure_requirement_projection(store, effort, action_dir, &state.frozen.reconciled)?;
-    let (phase_requirements, completion_evidence, exclusions) = phase_authority(
-        &fs::read_to_string(build_dir.join(&plan.detailed_plan))?,
-        &state.action.scope,
+    let binding_requirements: BindingRequirements = read_json(&requirement_path)?;
+    let phase_data = if state.action.scope == FINAL_SCOPE {
+        Some((Vec::new(), String::new(), String::new()))
+    } else {
+        let phase_tasks = plan
+            .delivery_phases
+            .iter()
+            .find(|phase| phase.id == state.action.scope)
+            .map(|phase| phase.tasks.as_slice())
+            .unwrap_or(&[]);
+        phase_authority(
+            &fs::read_to_string(build_dir.join(&plan.detailed_plan))?,
+            phase_tasks,
+        )
+    }
+    .with_context(|| {
+        format!(
+            "detailed plan does not document authority scope {}",
+            state.action.scope
+        )
+    })?;
+    let (phase_requirements, completion_evidence, exclusions) = phase_data;
+    let requirement_ids = binding_requirements
+        .requirements
+        .iter()
+        .map(|item| item.requirement.id.as_str())
+        .collect::<HashSet<_>>();
+    ensure!(
+        phase_requirements
+            .iter()
+            .all(|id| requirement_ids.contains(id.as_str())),
+        "phase authority for {} references an unknown binding requirement",
+        state.action.scope
     );
     let tasks = plan
         .delivery_phases
@@ -866,12 +896,30 @@ fn ensure_requirement_projection(
     Ok(path)
 }
 
-fn phase_authority(plan: &str, scope: &str) -> (Vec<String>, String, String) {
-    let heading = format!("## Delivery phase {scope} —");
-    let Some(start) = plan.find(&heading) else {
-        return (Vec::new(), String::new(), String::new());
-    };
-    let tail = &plan[start..];
+fn phase_authority(plan: &str, tasks: &[String]) -> Option<(Vec<String>, String, String)> {
+    if tasks.is_empty() {
+        return None;
+    }
+    let headings = plan
+        .match_indices("## Delivery phase ")
+        .map(|(start, _)| start)
+        .collect::<Vec<_>>();
+    let section_start = headings.iter().enumerate().find_map(|(index, start)| {
+        let end = headings.get(index + 1).copied().unwrap_or(plan.len());
+        let candidate = &plan[*start..end];
+        tasks
+            .iter()
+            .all(|task| {
+                candidate.lines().any(|line| {
+                    let item = line.trim_start().strip_prefix("- ").unwrap_or("").trim();
+                    item == task
+                        || item.starts_with(&format!("{task}:"))
+                        || item.starts_with(&format!("{task} —"))
+                })
+            })
+            .then_some(*start)
+    })?;
+    let tail = &plan[section_start..];
     let body = tail.split_once('\n').map(|(_, body)| body).unwrap_or("");
     let body = body.split("\n## Delivery phase ").next().unwrap_or(body);
     let section = |label: &str| -> String {
@@ -886,11 +934,11 @@ fn phase_authority(plan: &str, scope: &str) -> (Vec<String>, String, String) {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect();
-    (
+    Some((
         requirements,
         section("Completion evidence"),
         section("Deliberate later-phase exclusions"),
-    )
+    ))
 }
 
 fn invocation_prompt(build_dir: &Path, action_dir: &Path, action: &CurrentAction) -> String {
@@ -1511,7 +1559,29 @@ mod tests {
 
     #[test]
     fn requirement_projection_is_digest_bound_ordered_and_immutable() {
-        let (store, effort, _, reconciled, _) = prepared();
+        let (store, effort, _, initial_ref, _) = prepared();
+        let (_, mut source): (_, ReconciledDiscovery) = store
+            .load_json(&effort, &initial_ref, "reconciled-discovery.json")
+            .unwrap();
+        let mut conditional = source.requirements[0].clone();
+        conditional.requirement.id = "R-2".into();
+        conditional.requirement.condition = Some("when the optional feature is enabled".into());
+        source.requirements.push(conditional);
+        let reconciled = store
+            .publish_bundle(
+                &effort,
+                "reconcile",
+                ArtifactKind::ReconciledDiscovery,
+                "ready".into(),
+                "IMPLEMENTATION_READY".into(),
+                vec![],
+                build_provenance("test", orchestrate_guides::BUILD),
+                BTreeMap::from([(
+                    "reconciled-discovery.json".into(),
+                    orchestrate_contracts::encode(&source).unwrap(),
+                )]),
+            )
+            .unwrap();
         let action_dir = temp("projection");
         let projection_path =
             ensure_requirement_projection(&store, &effort, &action_dir, &reconciled).unwrap();
@@ -1525,17 +1595,28 @@ mod tests {
             projection.source_json_sha256,
             digest_bytes(&fs::read(source).unwrap())
         );
-        assert_eq!(projection.requirements.len(), 1);
+        assert_eq!(projection.requirements.len(), 2);
         assert_eq!(projection.requirements[0].requirement.id, "R-1");
-        fs::write(&projection_path, b"{}").unwrap();
+        assert_eq!(projection.requirements[1].requirement.id, "R-2");
+        assert_eq!(
+            projection.requirements[1].requirement.condition.as_deref(),
+            Some("when the optional feature is enabled")
+        );
+        let mut tampered: serde_json::Value = read_json(&projection_path).unwrap();
+        tampered["requirements"].as_array_mut().unwrap().pop();
+        fs::write(&projection_path, serde_json::to_vec(&tampered).unwrap()).unwrap();
+        assert!(ensure_requirement_projection(&store, &effort, &action_dir, &reconciled).is_err());
+        tampered["requirements"] = serde_json::to_value(&projection.requirements).unwrap();
+        tampered["requirements"].as_array_mut().unwrap().reverse();
+        fs::write(&projection_path, serde_json::to_vec(&tampered).unwrap()).unwrap();
         assert!(ensure_requirement_projection(&store, &effort, &action_dir, &reconciled).is_err());
     }
 
     #[test]
     fn phase_authority_keeps_mapping_evidence_and_exclusions_together() {
-        let plan = "## Delivery phase A — Authority\n\n**Requirements:** R-1, R-2\n\n**Completion evidence:** full and ordered.\n\n**Deliberate later-phase exclusions:** recovery, UI.\n\nTasks follow.";
+        let plan = "## Delivery phase A — Authority\n\n**Requirements:** R-1, R-2\n\n**Completion evidence:** full and ordered.\n\n**Deliberate later-phase exclusions:** recovery, UI.\n\nTasks:\n- A1 Inspect authority.\n- A2 Test projection.\n\n## Delivery phase D — Status\n\n**Requirements:** R-3\n\n**Completion evidence:** status transitions.\n\n**Deliberate later-phase exclusions:** export.\n\nTasks:\n- D1 Implement status.";
         assert_eq!(
-            phase_authority(plan, "A"),
+            phase_authority(plan, &["A1".into(), "A2".into()]).unwrap(),
             (
                 vec!["R-1".to_string(), "R-2".to_string()],
                 "full and ordered.".into(),
@@ -1543,9 +1624,14 @@ mod tests {
             )
         );
         assert_eq!(
-            phase_authority(plan, "final"),
-            (vec![], String::new(), String::new())
+            phase_authority(plan, &["D1".into()]).unwrap(),
+            (
+                vec!["R-3".to_string()],
+                "status transitions.".into(),
+                "export.".into(),
+            )
         );
+        assert_eq!(phase_authority(plan, &[]), None);
     }
     #[test]
     fn scaffold_writes_the_embedded_templates_once() {

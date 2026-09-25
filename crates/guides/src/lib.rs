@@ -88,6 +88,31 @@ mod tests {
     }
 
     #[test]
+    fn build_roles_are_directed_to_the_binding_requirement_projection() {
+        for (name, guide) in [
+            ("work", WORK),
+            ("review", REVIEW),
+            ("unblock", UNBLOCK),
+            ("final-audit", FINAL_AUDIT),
+        ] {
+            assert!(
+                guide.contains("binding_requirements"),
+                "{name} lacks the complete requirement view"
+            );
+            assert!(
+                guide.contains("historical"),
+                "{name} does not distinguish historical goal text"
+            );
+        }
+        for (name, guide) in [("work", WORK), ("review", REVIEW), ("unblock", UNBLOCK)] {
+            assert!(
+                guide.contains("phase_authority"),
+                "{name} lacks phase scope"
+            );
+        }
+    }
+
+    #[test]
     fn templates_are_embedded() {
         assert!(templates::PLAN_JSON.contains("\"schema_version\": 2"));
         assert!(templates::CONFIG_TOML.contains("schema_version = 2"));
