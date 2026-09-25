@@ -20,7 +20,6 @@
 ## Reference
 
 - [Architecture](architecture.md) — authority boundaries, artifacts, and deterministic rules.
-- [Discovery/Reconcile evaluation case](evaluations/discovery-reconcile/README.md) — repeatable, output-only evaluation using three historical attempts, with a separate operator rubric.
 
 ## Planned changes
 

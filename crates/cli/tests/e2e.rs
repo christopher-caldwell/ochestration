@@ -472,8 +472,8 @@ fn effort_slug_freezes_request_and_constraints_but_other_slugs_are_allowed() {
             ],
         )
     };
-    let first = init("age-351", "request A", "constraint A");
-    let repeated = init("age-351", "request A", "constraint A");
+    let first = init("example-effort", "request A", "constraint A");
+    let repeated = init("example-effort", "request A", "constraint A");
     assert_eq!(first["details"]["effort"], repeated["details"]["effort"]);
     assert!(
         command_error(
@@ -483,7 +483,7 @@ fn effort_slug_freezes_request_and_constraints_but_other_slugs_are_allowed() {
                 "--project",
                 repo.to_str().unwrap(),
                 "--effort",
-                "age-351",
+                "example-effort",
                 "--request",
                 "request B",
                 "--constraint",
@@ -500,7 +500,7 @@ fn effort_slug_freezes_request_and_constraints_but_other_slugs_are_allowed() {
                 "--project",
                 repo.to_str().unwrap(),
                 "--effort",
-                "age-351",
+                "example-effort",
                 "--request",
                 "request A",
                 "--constraint",
@@ -510,7 +510,7 @@ fn effort_slug_freezes_request_and_constraints_but_other_slugs_are_allowed() {
         .contains("prepared request is immutable")
     );
     assert_eq!(
-        init("age-351-revised", "request B", "constraint B")["semantic_outcome"],
+        init("revised-effort", "request B", "constraint B")["semantic_outcome"],
         "EFFORT_READY"
     );
 }
@@ -1600,7 +1600,7 @@ fn reconciliation_accepts_explicit_user_clarification_as_direct_authority() {
     let mut clarified = proposal(&selected[0]);
     clarified.requirements[0].source_refs = vec![];
     clarified.requirements[0].user_clarification =
-        Some("The user chose patient-local time for patient-facing timestamps.".into());
+        Some("The user chose UTC timestamps for exported reports.".into());
     let path = write_proposal(&root, &clarified);
     let reconciled = reference(
         &command(
@@ -1629,7 +1629,7 @@ fn reconciliation_accepts_explicit_user_clarification_as_direct_authority() {
     assert!(requirement.requirement.governing);
     assert_eq!(
         requirement.user_clarification.as_deref(),
-        Some("The user chose patient-local time for patient-facing timestamps.")
+        Some("The user chose UTC timestamps for exported reports.")
     );
 }
 

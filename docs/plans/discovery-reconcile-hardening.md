@@ -34,7 +34,7 @@ Reviews and disposable CLI probes against `125ebbd` and `1ffc973` established th
 - A synthesis entry citing an inspection Finding can publish with `verification_methods: ["experiment"]`.
 - Evidence-synthesis and rejected-alternative citations retain node IDs in JSON but omit them in Markdown.
 
-The user's recovered project history confirms that these behaviors conflict with the intended frozen-input, public-deliverable, and evidence-fidelity contracts. It also distinguishes them from unresolved policy choices below.
+These behaviors conflict with the frozen-input, public-deliverable, and evidence-fidelity contracts. The policy choices below remain outside this scope.
 
 ## Scope boundaries
 
@@ -49,7 +49,7 @@ Preserve the following behavior:
 
 Do not include new policies for compromised-provenance admission, authenticated user-answer receipts, exhaustive per-source dispositions, closure of all optional questions, mandatory graph shapes, accepted-only citations, or filesystem sandboxing. Their absence does not imply the user rejected them; they are outside this corrective scope.
 
-The later model-quality analysis, including use of the user's three older completed Discovery outputs, is deferred. No discovery reruns, reconciliation model calls, store migration, or modification of those artifacts belongs in this implementation.
+Model-quality analysis is deferred. No Discovery reruns, reconciliation model calls, or store migration belongs in this implementation.
 
 ## HF-1: Validate the complete frozen workspace inputs
 
@@ -216,15 +216,7 @@ Keep loading supported existing published bundles through the current integrity 
 
 Compatibility with an older producer is not proof that its Discovery passed the new checks. Preserve its original provenance. Version strings alone are insufficient to establish what checks ran; retain guide digests and exact available metadata, and mark missing historical evidence as unknown.
 
-The user has three completed Discovery outputs from an earlier tool version. Their paths, schema versions, and common lineage have not yet been inspected. They may be useful for later analysis; this plan makes no claim that they can be directly reconciled by the current CLI.
-
-When the user returns for that analysis:
-
-1. Inventory the supplied public bundles read-only: manifests, schema/store versions where available, hashes, request/context/baseline identities, outcomes, producer/guide metadata, specifications, and graphs.
-2. Separate technical loadability, comparability of the frozen question/baseline, and suitability as a synthesis evaluation case. Passing one does not establish the others.
-3. If they are supported, comparable, and eligible, they may be selected unchanged. Record that their production predates the fixes and cannot retroactively prove new validation happened.
-4. If the stored format is unsupported or the material is only exported text, retain the originals. A separately labeled analysis packet may support qualitative evaluation, but is not an authenticated current-format artifact. Any future migration needs its own reviewed scope; do not patch version numbers or fabricate missing provenance.
-5. Do not retrieve mutable source or outside engineering evidence to fill gaps for the reconciler. Missing evidence is an observed limitation of the supplied outputs.
+For compatibility analysis, inventory representative published bundles read-only: manifests, schema/store versions, hashes, request/context/baseline identities, outcomes, producer/guide metadata, specifications, and graphs. Keep loadability, comparability, and synthesis suitability separate. Preserve unsupported inputs without patching version numbers or fabricating missing provenance. Do not retrieve mutable source or outside engineering evidence to fill gaps for the reconciler.
 
 Add compatibility regression coverage using representative already-published version-6 bundles. Demonstrate that loading does not consult removed mutable workspaces, and that a new correctly attributed reconciliation can use supported historical Discovery bundles. Preserve rejection of unsupported formats rather than introducing a bypass.
 
@@ -240,7 +232,7 @@ The changes can be reviewed in that order without requiring a new Discovery coho
 
 ## Validation and definition of done
 
-Use disposable Git repositories and isolated stores. Never exercise negative probes against the user's historical Discovery artifacts or real working repositories.
+Use disposable Git repositories and isolated stores for negative probes.
 
 During implementation, run focused package/integration tests for each changed boundary. On completion run `cargo test --workspace`; apply the repository's normal formatting check to changed Rust files. No live-model test, paid API call, deployment, or unattended Build invocation is required for this corrective work.
 
@@ -254,4 +246,4 @@ Completion requires:
 - Runtime guidance stays in embedded CLI guides; dispatchers remain unchanged.
 - Tests pass, and the delivery summary explicitly states that model-quality evaluation is still pending.
 
-Stop after these targeted fixes and their verification. The later analysis of the user's three completed Discovery outputs is a separate follow-up.
+Stop after these targeted fixes and their verification. Model-quality analysis is a separate follow-up.
