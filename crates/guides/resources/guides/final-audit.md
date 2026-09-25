@@ -6,6 +6,8 @@ Read the immutable registered snapshot as evidence. Run executable verification 
 
 The assessment names those exact references and contains exactly one coverage row for every binding requirement. There are no coverage rows for technical suggestions.
 
+Read `binding_requirements` from `action.json` as the complete requirement set to assess, including each condition and acceptance criterion. Confirm its source reference matches `reconciled` and its source JSON SHA-256 binds it to the supplied Reconciled Discovery. The original `goal` is historical context when wording conflicts with selected requirements. Assess every listed requirement exactly once; a genuine conflict must identify the requirement and observed evidence, rather than reviving a resolved historical hypothesis.
+
 ```json
 {
   "reconciled": {"kind": "reconciled_discovery", "artifact_id": "...", "digest": "..."},

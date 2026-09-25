@@ -188,6 +188,14 @@ struct Receipt {
     commit: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct BindingRequirements {
+    schema_version: u32,
+    source: ArtifactRef,
+    source_json_sha256: String,
+    requirements: Vec<orchestrate_contracts::ReconciledRequirement>,
+}
+
 /// Narrow adapter boundary.  Concrete adapters only carry transport and session
 /// concerns; they cannot influence controller routing.
 pub trait HostAdapter {
@@ -730,6 +738,12 @@ fn write_action_file(
     action_dir: &Path,
     cwd: &Path,
 ) -> Result<()> {
+    let requirement_path =
+        ensure_requirement_projection(store, effort, action_dir, &state.frozen.reconciled)?;
+    let (phase_requirements, completion_evidence, exclusions) = phase_authority(
+        &fs::read_to_string(build_dir.join(&plan.detailed_plan))?,
+        &state.action.scope,
+    );
     let tasks = plan
         .delivery_phases
         .iter()
@@ -759,6 +773,8 @@ fn write_action_file(
         "reconciled_discovery": store
             .artifact_dir(effort, &state.frozen.reconciled.artifact_id)?
             .join("reconciled-discovery.json"),
+        "binding_requirements": requirement_path,
+        "phase_authority": { "requirements": phase_requirements, "completion_evidence": completion_evidence, "exclusions": exclusions },
         "adoption": state.frozen.adoption,
         "result": action_dir.join("result.json"),
         "report": action_dir.join("report.md"),
@@ -813,6 +829,67 @@ fn write_action_file(
     write_bytes_sync(
         &action_dir.join("action.json"),
         &serde_json::to_vec_pretty(&value)?,
+    )
+}
+
+fn ensure_requirement_projection(
+    store: &Store,
+    effort: &Effort,
+    action_dir: &Path,
+    reference: &ArtifactRef,
+) -> Result<PathBuf> {
+    let artifact_dir = store.artifact_dir(effort, &reference.artifact_id)?;
+    let source = artifact_dir.join("reconciled-discovery.json");
+    let source_bytes = fs::read(&source).with_context(|| format!("read {}", source.display()))?;
+    let (_, reconciled): (_, orchestrate_contracts::ReconciledDiscovery) =
+        store.load_json(effort, reference, "reconciled-discovery.json")?;
+    let projection = BindingRequirements {
+        schema_version: 1,
+        source: reference.clone(),
+        source_json_sha256: digest_bytes(&source_bytes),
+        requirements: reconciled.requirements,
+    };
+    let path = action_dir.join("binding-requirements.json");
+    let bytes = serde_json::to_vec_pretty(&projection)?;
+    if path.exists() {
+        let existing: BindingRequirements = read_json(&path)?;
+        ensure!(
+            existing == projection,
+            "binding requirement projection differs from its immutable Reconciled Discovery source"
+        );
+    } else {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        write_bytes_sync(&path, &bytes)?;
+    }
+    Ok(path)
+}
+
+fn phase_authority(plan: &str, scope: &str) -> (Vec<String>, String, String) {
+    let heading = format!("## Delivery phase {scope} —");
+    let Some(start) = plan.find(&heading) else {
+        return (Vec::new(), String::new(), String::new());
+    };
+    let tail = &plan[start..];
+    let body = tail.split_once('\n').map(|(_, body)| body).unwrap_or("");
+    let body = body.split("\n## Delivery phase ").next().unwrap_or(body);
+    let section = |label: &str| -> String {
+        let prefix = format!("**{label}:**");
+        body.lines()
+            .find_map(|line| line.strip_prefix(&prefix).map(str::trim).map(str::to_owned))
+            .unwrap_or_default()
+    };
+    let requirements = section("Requirements")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    (
+        requirements,
+        section("Completion evidence"),
+        section("Deliberate later-phase exclusions"),
     )
 }
 
@@ -1430,6 +1507,45 @@ mod tests {
     fn plan_ids_are_restricted() {
         assert!(valid_id("D-1"));
         assert!(!valid_id("D 1"));
+    }
+
+    #[test]
+    fn requirement_projection_is_digest_bound_ordered_and_immutable() {
+        let (store, effort, _, reconciled, _) = prepared();
+        let action_dir = temp("projection");
+        let projection_path =
+            ensure_requirement_projection(&store, &effort, &action_dir, &reconciled).unwrap();
+        let projection: BindingRequirements = read_json(&projection_path).unwrap();
+        let source = store
+            .artifact_dir(&effort, &reconciled.artifact_id)
+            .unwrap()
+            .join("reconciled-discovery.json");
+        assert_eq!(projection.source, reconciled);
+        assert_eq!(
+            projection.source_json_sha256,
+            digest_bytes(&fs::read(source).unwrap())
+        );
+        assert_eq!(projection.requirements.len(), 1);
+        assert_eq!(projection.requirements[0].requirement.id, "R-1");
+        fs::write(&projection_path, b"{}").unwrap();
+        assert!(ensure_requirement_projection(&store, &effort, &action_dir, &reconciled).is_err());
+    }
+
+    #[test]
+    fn phase_authority_keeps_mapping_evidence_and_exclusions_together() {
+        let plan = "## Delivery phase A — Authority\n\n**Requirements:** R-1, R-2\n\n**Completion evidence:** full and ordered.\n\n**Deliberate later-phase exclusions:** recovery, UI.\n\nTasks follow.";
+        assert_eq!(
+            phase_authority(plan, "A"),
+            (
+                vec!["R-1".to_string(), "R-2".to_string()],
+                "full and ordered.".into(),
+                "recovery, UI.".into(),
+            )
+        );
+        assert_eq!(
+            phase_authority(plan, "final"),
+            (vec![], String::new(), String::new())
+        );
     }
     #[test]
     fn scaffold_writes_the_embedded_templates_once() {
