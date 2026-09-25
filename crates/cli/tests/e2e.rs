@@ -1747,6 +1747,57 @@ fn adoption_implementation_and_audit_follow_the_reconciled_binding_contract() {
 }
 
 #[test]
+fn build_resolution_requires_a_stopped_build_and_a_known_kind() {
+    let (root, _repo, effort) = new_effort("build-resolve");
+    let error = command_error(
+        &root,
+        &[
+            "build",
+            "resolve",
+            "--effort",
+            &effort,
+            "--action",
+            "act-none",
+            "--kind",
+            "environment_repair",
+            "--note",
+            "repaired the environment",
+        ],
+    );
+    assert!(error.contains("no Build state exists"), "{error}");
+    let error = command_error(
+        &root,
+        &[
+            "build",
+            "resolve",
+            "--effort",
+            &effort,
+            "--action",
+            "act-none",
+            "--kind",
+            "guess",
+            "--note",
+            "n",
+        ],
+    );
+    assert!(error.contains("unknown resolution kind"), "{error}");
+    let error = command_error(
+        &root,
+        &[
+            "build",
+            "resolve",
+            "--effort",
+            &effort,
+            "--action",
+            "act-none",
+            "--kind",
+            "environment_repair",
+        ],
+    );
+    assert!(error.contains("requires --note"), "{error}");
+}
+
+#[test]
 fn blocked_reconciled_discovery_cannot_be_adopted() {
     let (root, _repo, effort) = new_effort("blocked-reconcile");
     let inputs = [

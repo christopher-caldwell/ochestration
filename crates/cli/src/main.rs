@@ -126,6 +126,35 @@ enum BuildCommand {
         #[arg(long)]
         effort: String,
     },
+    /// Record an operator intervention on a stopped Build and create the
+    /// continuation boundary it authorizes.  Dispatches no provider action.
+    Resolve {
+        #[arg(long)]
+        effort: String,
+        #[arg(
+            long,
+            help = "Exact stopped action id reported by the stopped Build"
+        )]
+        action: String,
+        #[arg(long, value_parser = parse_resolution_kind)]
+        kind: orchestrate_build::ResolutionKind,
+        #[arg(long, conflicts_with = "note_file")]
+        note: Option<String>,
+        #[arg(long = "note-file", conflicts_with = "note")]
+        note_file: Option<PathBuf>,
+        #[arg(long = "evidence", help = "Evidence file bound to this resolution; repeatable")]
+        evidence: Vec<PathBuf>,
+        #[arg(
+            long = "confirm-not-running",
+            help = "Recorded confirmation that an accepted-but-uncertain provider action is no longer running"
+        )]
+        confirm_not_running: bool,
+        #[arg(
+            long,
+            help = "New role configuration for future invocations; environment_repair only"
+        )]
+        config: Option<PathBuf>,
+    },
 }
 #[derive(Subcommand)]
 enum Discovery {
@@ -563,12 +592,97 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 "BUILD_COMPLETE",
                 serde_json::json!({"implementation": done.implementation, "audit": done.audit}),
             ),
-            orchestrate_build::BuildResult::Blocked { detail, state } => output(
+            orchestrate_build::BuildResult::Blocked {
+                detail,
+                state,
+                trigger,
+                stopped_action,
+                stop_record,
+            } => output(
                 "STOPPED",
                 "BLOCKED",
-                serde_json::json!({"detail": detail, "state": state}),
+                serde_json::json!({
+                    "detail": detail,
+                    "state": state,
+                    "trigger": trigger,
+                    "stopped_action": stopped_action,
+                    "stop_record": stop_record,
+                }),
             ),
         },
+        Command::Build {
+            command:
+                Some(BuildCommand::Resolve {
+                    effort,
+                    action,
+                    kind,
+                    note,
+                    note_file,
+                    evidence,
+                    confirm_not_running,
+                    config,
+                }),
+            ..
+        } => {
+            let note = match (note, note_file) {
+                (Some(note), None) => note,
+                (None, Some(path)) => fs::read_to_string(&path)
+                    .with_context(|| format!("cannot read {}", path.display()))?,
+                (None, None) => bail!("a resolution requires --note or --note-file"),
+                (Some(_), Some(_)) => unreachable!("clap rejects both note sources"),
+            };
+            let outcome = orchestrate_build::resolve(
+                &store,
+                orchestrate_build::ResolutionRequest {
+                    effort,
+                    action,
+                    kind,
+                    note,
+                    evidence,
+                    confirm_not_running,
+                    config,
+                },
+            )?;
+            match outcome {
+                orchestrate_build::ResolutionOutcome::Resolved {
+                    resolution,
+                    resolution_id,
+                    kind,
+                    stopped_action,
+                    continuation_action,
+                    continuation_kind,
+                    config_version,
+                } => output(
+                    "SUCCESS",
+                    "RESOLVED",
+                    serde_json::json!({
+                        "resolution": resolution,
+                        "resolution_id": resolution_id,
+                        "kind": kind,
+                        "stopped_action": stopped_action,
+                        "continuation_action": continuation_action,
+                        "continuation_kind": continuation_kind,
+                        "config_version": config_version,
+                        "next": "run `orchestrate build` to dispatch the authorized continuation",
+                    }),
+                ),
+                orchestrate_build::ResolutionOutcome::Refused {
+                    resolution,
+                    resolution_id,
+                    reason,
+                    successor_guidance,
+                } => output(
+                    "SUCCESS",
+                    "REFUSED",
+                    serde_json::json!({
+                        "resolution": resolution,
+                        "resolution_id": resolution_id,
+                        "reason": reason,
+                        "successor_guidance": successor_guidance,
+                    }),
+                ),
+            }
+        }
         Command::Build {
             command: Some(BuildCommand::Scaffold { effort }),
             ..
@@ -707,6 +821,12 @@ impl ProvenanceArgs {
         }
     }
 }
+fn parse_resolution_kind(
+    value: &str,
+) -> std::result::Result<orchestrate_build::ResolutionKind, String> {
+    orchestrate_build::ResolutionKind::parse(value).map_err(|error| error.to_string())
+}
+
 fn parse_request_kind(value: &str) -> std::result::Result<RequestKind, String> {
     match value {
         "ticket" => Ok(RequestKind::Ticket),

@@ -57,7 +57,7 @@ fn adopt_with_run_id(
         effort,
         "adoption",
         ArtifactKind::Adoption,
-        run_id,
+        run_id.clone(),
         "ADOPTED".into(),
         vec![reconciled_ref],
         provenance,
@@ -406,7 +406,7 @@ pub fn finalize_audit_with_run_id(
         effort,
         "audit",
         ArtifactKind::Audit,
-        run_id,
+        run_id.clone(),
         outcome.into(),
         vec![
             report.assessment.reconciled.clone(),
@@ -416,39 +416,21 @@ pub fn finalize_audit_with_run_id(
         provenance,
         files,
     )?;
-    store.append_journal(
-        effort,
-        "audit_finalized",
-        None,
-        serde_json::json!({"artifact":reference.artifact_id,"outcome":outcome}),
-    )?;
+    // This exact attempt may already have been finalized before an interruption,
+    // and its publication may already have been journaled.  Replay reuses both.
+    let already_journaled = store.read_journal(effort)?.iter().any(|entry| {
+        entry.event == "audit_finalized"
+            && (entry.run_id.as_deref() == Some(run_id.as_str())
+                || entry.details.get("artifact").and_then(|value| value.as_str())
+                    == Some(reference.artifact_id.as_str()))
+    });
+    if !already_journaled {
+        store.append_journal(
+            effort,
+            "audit_finalized",
+            Some(&run_id),
+            serde_json::json!({"artifact":reference.artifact_id,"outcome":outcome,"run_id":run_id}),
+        )?;
+    }
     Ok(reference)
-}
-
-/// Find a finalized Audit bundle for one exact implementation.  The caller is
-/// responsible for checking the derived verdict it wants to reuse.
-pub fn find_audit(
-    store: &Store,
-    effort: &Effort,
-    implementation: &ArtifactRef,
-) -> Result<Option<ArtifactRef>> {
-    let mut matches = Vec::new();
-    for reference in store.list_artifacts(effort)? {
-        if reference.kind != ArtifactKind::Audit {
-            continue;
-        }
-        let (_, report): (_, AuditReport) = store.load_json(effort, &reference, "audit.json")?;
-        if report.assessment.implementation == *implementation {
-            matches.push(reference);
-        }
-    }
-    match matches.as_slice() {
-        [] => Ok(None),
-        [only] => Ok(Some(only.clone())),
-        many => bail!(
-            "multiple Audit bundles match implementation {}: {}",
-            implementation.artifact_id,
-            artifact_ids(many)
-        ),
-    }
 }

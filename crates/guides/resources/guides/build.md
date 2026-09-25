@@ -39,3 +39,17 @@ orchestrate --root "<root>" build --effort "<effort>"
 ```
 
 The driver binds the exact Reconciled Discovery, creates or reuses Adoption, records current Build starting commit/tree separately from the Discovery baseline, verifies ancestry, and handles work, review, correction, implementation registration, and final Audit until completion or until it cannot safely continue automatically. An external user or infrastructure requirement is one common blocker. Do not perform those role turns yourself.
+
+## A stopped Build
+
+When the driver stops, it prints a durable `trigger`, the exact `stopped_action`, and the state path; the same facts are in Build state and the journal. Never hand-edit `state.json`, the action, or a receipt to move a stopped Build forward.
+
+Resolve the stop with the exact stopped action:
+
+```sh
+orchestrate --root "<root>" build resolve --effort "<effort>" --action "<stopped_action>" --kind "<kind>" --note "<what changed>"
+```
+
+`--kind` names the intervention: `existing_authority_clarification` (the role already had authority), `environment_repair` (access, tooling or environment was repaired), `new_verification_evidence` (a final-scope Audit derived BLOCKED and new evidence is available), or `authority_change` (a proposed change to the adopted contract, which Build refuses and records with successor guidance). Add `--evidence` for each verification artifact you supply. Add `--confirm-not-running` only when you have confirmed that an accepted-but-uncertain provider action is no longer running; without that recorded confirmation Build will not create a fresh continuation for it. `--config` supplies new role configuration for future invocations and is accepted only with `environment_repair`; the original `config.toml` and its frozen digest are preserved, and prior records keep the settings they ran under.
+
+Resolution records the intervention and authorizes one distinct continuation. It dispatches no provider action itself: run `orchestrate build` again to continue. An authority amendment must go through new Discovery and Reconcile and an explicitly linked successor Build.

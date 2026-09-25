@@ -17,8 +17,8 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use orchestrate_contracts::{
-    ArtifactKind, ArtifactRef, AuditAssessment, ImplementationStatus, Independence, Provenance,
-    Verdict, decode, digest_bytes, safe_relative_path,
+    ArtifactKind, ArtifactRef, AuditAssessment, CoverageState, ImplementationStatus, Independence,
+    Provenance, Verdict, decode, digest_bytes, safe_relative_path,
 };
 use orchestrate_core::{Effort, Project, Store, write_bytes_sync};
 use serde::{Deserialize, Serialize};
@@ -27,9 +27,15 @@ static ACTION_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub const BUILD_PLAN_VERSION: u32 = 2;
 pub const BUILD_CONFIG_VERSION: u32 = 2;
 pub const BUILD_STATE_VERSION: u32 = 3;
+const BUILD_STATE_MIGRATION: u32 = 1;
+const RESOLUTION_SCHEMA_VERSION: u32 = 1;
+const CONFIG_OVERLAY_SCHEMA_VERSION: u32 = 1;
 
 /// Scope of the post-phase Audit turn, which is not one of the plan's delivery phases.
 const FINAL_SCOPE: &str = "final";
+/// Controller-owned Build directories that hold immutable records only.
+const RESOLUTIONS_DIR: &str = "resolutions";
+const CONFIG_HISTORY_DIR: &str = "config-history";
 
 #[derive(Clone, Debug)]
 pub struct BuildRequest {
@@ -47,7 +53,14 @@ pub struct BuildCompletion {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum BuildResult {
     Completed(BuildCompletion),
-    Blocked { detail: String, state: PathBuf },
+    Blocked {
+        detail: String,
+        state: PathBuf,
+        /// Additive trigger data; existing fields keep their meaning.
+        trigger: Option<String>,
+        stopped_action: Option<String>,
+        stop_record: Option<serde_json::Value>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -131,6 +144,10 @@ struct CurrentAction {
     transport_session_id: Option<String>,
     #[serde(default = "prepared_dispatch")]
     dispatch: DispatchState,
+    /// Set only on the action an operator resolution authorized, so its packet
+    /// can carry the recorded intervention instead of an implied one.
+    #[serde(default)]
+    resolution_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -176,6 +193,234 @@ struct BuildState {
     implementation: Option<ArtifactRef>,
     #[serde(default)]
     terminal: Option<BuildCompletion>,
+    #[serde(default)]
+    migration_version: u32,
+    #[serde(default)]
+    stop: Option<StopRecord>,
+    #[serde(default)]
+    stop_history: Vec<StopRecord>,
+    #[serde(default)]
+    current_audit: Option<ArtifactRef>,
+    #[serde(default)]
+    applied_resolution_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StopTrigger {
+    SpawnFailure,
+    ProviderExecutionFailure,
+    UncertainAcceptance,
+    IncompleteWork,
+    InvalidReceipt,
+    PhaseBlocker,
+    AuditBlocked,
+    ExternalRequirement,
+    RecoveryExhausted,
+    FrozenInputMismatch,
+    ControllerFailure,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct StopRecord {
+    pub action: CurrentAction,
+    pub trigger: StopTrigger,
+    #[serde(default)]
+    pub action_failure: Option<StopTrigger>,
+    pub stopped_at_ms: u128,
+    pub controller_pid: u32,
+    pub detail: String,
+    pub process_completion: String,
+    pub receipt_validation: String,
+    pub recovery_remaining: Vec<String>,
+    #[serde(default)]
+    pub audit: Option<ArtifactRef>,
+    #[serde(default)]
+    pub assessment: Option<String>,
+    #[serde(default)]
+    pub unresolved_requirement_ids: Vec<String>,
+    /// The action a pending automatic diagnosis was about, so a later
+    /// resolution still knows what the stop interrupted.
+    #[serde(default)]
+    pub interrupted: Option<Box<CurrentAction>>,
+}
+
+/// A typed stop condition.  It travels as an error so the durable record never
+/// has to infer the controller's reason from message text.
+#[derive(Debug)]
+struct BuildStop {
+    trigger: StopTrigger,
+    action_failure: Option<StopTrigger>,
+    detail: String,
+}
+
+impl std::fmt::Display for BuildStop {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for BuildStop {}
+
+fn stop_error(
+    trigger: StopTrigger,
+    action_failure: Option<StopTrigger>,
+    detail: impl Into<String>,
+) -> anyhow::Error {
+    anyhow::Error::new(BuildStop {
+        trigger,
+        action_failure,
+        detail: detail.into(),
+    })
+}
+
+/// How the controller treats a role outcome that does not advance the Build.
+#[derive(Clone, Debug)]
+enum RecoveryCall {
+    /// The role itself reported the work blocked.
+    Blocked,
+    /// The action failed before producing an advancing receipt.
+    Failed(StopTrigger),
+}
+
+impl RecoveryCall {
+    fn action_failure(&self) -> StopTrigger {
+        match self {
+            RecoveryCall::Blocked => StopTrigger::PhaseBlocker,
+            RecoveryCall::Failed(trigger) => trigger.clone(),
+        }
+    }
+}
+
+/// What the operator asserts when resolving a stopped Build.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionKind {
+    /// The stopped role already had authority; the note is the clarification.
+    ExistingAuthorityClarification,
+    /// Access, environment or tooling was repaired outside the Build.
+    EnvironmentRepair,
+    /// New verification evidence for a blocked final Audit acceptance.
+    NewVerificationEvidence,
+    /// A proposed change to the adopted product authority, which Build refuses.
+    AuthorityChange,
+}
+
+impl ResolutionKind {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "existing_authority_clarification" => Ok(ResolutionKind::ExistingAuthorityClarification),
+            "environment_repair" => Ok(ResolutionKind::EnvironmentRepair),
+            "new_verification_evidence" => Ok(ResolutionKind::NewVerificationEvidence),
+            "authority_change" => Ok(ResolutionKind::AuthorityChange),
+            other => bail!("unknown resolution kind {other}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolutionRequest {
+    pub effort: String,
+    /// Exact stopped action, as reported by the stopped Build.
+    pub action: String,
+    pub kind: ResolutionKind,
+    pub note: String,
+    pub evidence: Vec<PathBuf>,
+    /// Explicit recorded confirmation that ambiguous in-flight work is no longer running.
+    pub confirm_not_running: bool,
+    /// New role configuration for future invocations, applied as an immutable overlay.
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum ResolutionOutcome {
+    Resolved {
+        resolution: PathBuf,
+        resolution_id: String,
+        kind: ResolutionKind,
+        stopped_action: String,
+        continuation_action: String,
+        continuation_kind: String,
+        config_version: Option<u32>,
+    },
+    Refused {
+        resolution: PathBuf,
+        resolution_id: String,
+        reason: String,
+        successor_guidance: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ResolutionStatus {
+    Resolved,
+    Refused,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ResolutionRecord {
+    schema_version: u32,
+    resolution_id: String,
+    kind: ResolutionKind,
+    status: ResolutionStatus,
+    created_at_ms: u128,
+    effort_id: String,
+    note: String,
+    evidence: Vec<ResolutionEvidence>,
+    binding: ResolutionBinding,
+    transition: Option<ResolutionTransition>,
+    config_overlay: Option<ConfigOverlay>,
+    refusal: Option<ResolutionRefusal>,
+}
+
+/// Operator-supplied evidence, bound by digest so a later reader can verify it.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct ResolutionEvidence {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ResolutionBinding {
+    stop: StopRecord,
+    trigger: StopTrigger,
+    action: CurrentAction,
+    reconciled: ArtifactRef,
+    plan_digest: String,
+    detailed_plan_digest: String,
+    config_digest: String,
+    head_commit: String,
+    checkout_status: String,
+    in_flight_confirmation: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ResolutionTransition {
+    /// The distinct continuation boundary this resolution authorizes.
+    action: CurrentAction,
+    /// The first action governed by this resolution, which the record also owns.
+    governed_action: String,
+    /// Whether the intervention restarted the bounded recovery budget.
+    recovery_reset: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ResolutionRefusal {
+    reason: String,
+    successor_guidance: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct ConfigOverlay {
+    schema_version: u32,
+    version: u32,
+    config_digest: String,
+    config_text: String,
+    resolution_id: String,
+    first_action_id: String,
+    created_at_ms: u128,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -257,20 +502,43 @@ pub fn run_with_adapter(
     let effort = select_effort(store, &project, request.effort.as_deref())?;
     let _lock = ProjectLock::acquire(store, &project)?;
     let build_dir = store.phase_dir(&effort, "build")?;
-    let config = load_config(&build_dir)?;
+    let config = effective_config(&build_dir)?;
     let plan = load_plan(store, &effort, &build_dir)?;
     materialize_role_guides(&build_dir)?;
     let state_path = build_dir.join("state.json");
-    let mut state = if state_path.exists() {
-        load_state(&state_path, &config, &plan, &build_dir)?
+    let (mut state, frozen_mismatch) = if state_path.exists() {
+        load_state(&state_path, &plan, &build_dir)?
     } else {
-        initialize_state(store, &effort, &build_dir, &config, &plan)?
+        (initialize_state(store, &effort, &build_dir, &plan)?, None)
     };
+    migrate_state(store, &effort, &build_dir, &state_path, &mut state)?;
+    if let Some(detail) = frozen_mismatch {
+        record_stop(
+            store,
+            &effort,
+            &build_dir,
+            &mut state,
+            &stop_error(StopTrigger::FrozenInputMismatch, None, &detail),
+        )?;
+        save_state(&state_path, &state)?;
+        return Ok(blocked_result(state_path, &state, detail));
+    }
+    // A resolution recorded before its state transition is the authority for
+    // that transition, so an interrupted resolution completes exactly once.
+    apply_pending_resolution(store, &effort, &build_dir, &state_path, &mut state)?;
     if let Some(done) = &state.terminal {
         return Ok(BuildResult::Completed(done.clone()));
     }
+    if let Some(stop) = &state.stop {
+        // A durable stop blocks a bare restart unless it left the single
+        // bounded automatic continuation — one diagnostic Unblock turn — unrun.
+        if !pending_diagnosis(&state, stop) {
+            return Ok(blocked_result(state_path, &state, stop.detail.clone()));
+        }
+    }
 
     loop {
+        let prior_action = state.action.clone();
         let result = perform_action(
             store,
             &effort,
@@ -284,22 +552,83 @@ pub fn run_with_adapter(
         );
         match result {
             Ok(()) => {
+                if state.action.id != prior_action.id {
+                    journal_action_transition(store, &effort, &prior_action, &state.action)?;
+                }
                 save_state(&state_path, &state)?;
                 if let Some(done) = &state.terminal {
                     return Ok(BuildResult::Completed(done.clone()));
                 }
             }
             Err(error) => {
-                // Preserve a typed stopped position.  We do not overwrite the
-                // receipt or invent a succeeding transition.
+                record_stop(store, &effort, &build_dir, &mut state, &error)?;
                 save_state(&state_path, &state)?;
-                return Ok(BuildResult::Blocked {
-                    detail: format!("{error:#}"),
-                    state: state_path,
-                });
+                return Ok(blocked_result(
+                    state_path,
+                    &state,
+                    format!("{error:#}"),
+                ));
             }
         }
     }
+}
+
+fn blocked_result(state_path: PathBuf, state: &BuildState, detail: String) -> BuildResult {
+    let stop = state.stop.as_ref();
+    BuildResult::Blocked {
+        detail,
+        state: state_path,
+        trigger: stop.map(|stop| trigger_name(&stop.trigger).to_owned()),
+        stopped_action: stop.map(|stop| stop.action.id.clone()),
+        stop_record: stop.and_then(|stop| serde_json::to_value(stop).ok()),
+    }
+}
+
+fn trigger_name(trigger: &StopTrigger) -> &'static str {
+    match trigger {
+        StopTrigger::SpawnFailure => "spawn_failure",
+        StopTrigger::ProviderExecutionFailure => "provider_execution_failure",
+        StopTrigger::UncertainAcceptance => "uncertain_acceptance",
+        StopTrigger::IncompleteWork => "incomplete_work",
+        StopTrigger::InvalidReceipt => "invalid_receipt",
+        StopTrigger::PhaseBlocker => "phase_blocker",
+        StopTrigger::AuditBlocked => "audit_blocked",
+        StopTrigger::ExternalRequirement => "external_requirement",
+        StopTrigger::RecoveryExhausted => "recovery_exhausted",
+        StopTrigger::FrozenInputMismatch => "frozen_input_mismatch",
+        StopTrigger::ControllerFailure => "controller_failure",
+    }
+}
+
+/// True when the current action is the one diagnostic Unblock turn the stop authorized.
+fn pending_diagnosis(state: &BuildState, stop: &StopRecord) -> bool {
+    matches!(state.action.kind, ActionKind::Unblock)
+        && state
+            .interrupted
+            .as_deref()
+            .is_some_and(|action| action.id == stop.action.id)
+}
+
+fn journal_action_transition(
+    store: &Store,
+    effort: &Effort,
+    prior: &CurrentAction,
+    next: &CurrentAction,
+) -> Result<()> {
+    let event = if matches!(next.kind, ActionKind::Unblock) {
+        "build_unblock_started"
+    } else if matches!(prior.kind, ActionKind::Unblock) {
+        "build_unblock_resolved"
+    } else {
+        "build_action_transition"
+    };
+    append_journal_once(
+        store,
+        effort,
+        event,
+        &format!("{}->{}", prior.id, next.id),
+        serde_json::json!({"from_action": prior, "to_action": next}),
+    )
 }
 
 fn select_effort(store: &Store, project: &Project, explicit: Option<&str>) -> Result<Effort> {
@@ -355,7 +684,11 @@ fn effort_ids(efforts: &[Effort]) -> String {
 
 fn load_config(build_dir: &Path) -> Result<BuildConfig> {
     let text = fs::read_to_string(build_dir.join("config.toml"))?;
-    let config: BuildConfig = toml::from_str(&text).context("invalid build/config.toml")?;
+    parse_config(&text)
+}
+
+fn parse_config(text: &str) -> Result<BuildConfig> {
+    let config: BuildConfig = toml::from_str(text).context("invalid build/config.toml")?;
     ensure!(
         config.schema_version == BUILD_CONFIG_VERSION,
         "unsupported Build config version"
@@ -363,6 +696,67 @@ fn load_config(build_dir: &Path) -> Result<BuildConfig> {
     validate_role("worker", &config.worker)?;
     validate_role("reviewer", &config.reviewer)?;
     Ok(config)
+}
+
+/// The role configuration for the next invocation.  Version 1 is always the
+/// frozen `config.toml`; higher versions only exist as immutable overlays an
+/// operator resolution recorded.
+struct EffectiveConfig {
+    version: u32,
+    config: BuildConfig,
+}
+
+fn effective_config(build_dir: &Path) -> Result<EffectiveConfig> {
+    let mut effective = EffectiveConfig {
+        version: 1,
+        config: load_config(build_dir)?,
+    };
+    for overlay in config_overlays(build_dir)? {
+        if overlay.version > effective.version {
+            effective = EffectiveConfig {
+                version: overlay.version,
+                config: parse_config(&overlay.config_text)?,
+            };
+        }
+    }
+    Ok(effective)
+}
+
+/// Every recorded overlay, verified against its own bytes.  A corrupt or
+/// conflicting history entry is a hard failure rather than a silent fallback.
+fn config_overlays(build_dir: &Path) -> Result<Vec<ConfigOverlay>> {
+    let dir = build_dir.join(CONFIG_HISTORY_DIR);
+    let mut overlays = Vec::new();
+    if !dir.is_dir() {
+        return Ok(overlays);
+    }
+    for entry in fs::read_dir(&dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let overlay: ConfigOverlay = read_json(&path)?;
+        ensure!(
+            overlay.schema_version == CONFIG_OVERLAY_SCHEMA_VERSION,
+            "unsupported Build config overlay version in {}",
+            path.display()
+        );
+        ensure!(
+            digest_bytes(overlay.config_text.as_bytes()) == overlay.config_digest,
+            "Build config overlay {} does not match its recorded digest",
+            path.display()
+        );
+        parse_config(&overlay.config_text)?;
+        overlays.push(overlay);
+    }
+    overlays.sort_by_key(|overlay| overlay.version);
+    Ok(overlays)
+}
+
+fn next_config_version(build_dir: &Path) -> Result<u32> {
+    Ok(config_overlays(build_dir)?
+        .last()
+        .map_or(2, |overlay| overlay.version + 1))
 }
 
 fn validate_role(role: &str, config: &RoleConfig) -> Result<()> {
@@ -446,7 +840,6 @@ fn initialize_state(
     store: &Store,
     effort: &Effort,
     build_dir: &Path,
-    _config: &BuildConfig,
     plan: &BuildPlan,
 ) -> Result<BuildState> {
     let (_, reconciled): (_, orchestrate_contracts::ReconciledDiscovery) =
@@ -501,35 +894,103 @@ fn initialize_state(
         interrupted: None,
         implementation: None,
         terminal: None,
+        migration_version: BUILD_STATE_MIGRATION,
+        stop: None,
+        stop_history: Vec::new(),
+        current_audit: None,
+        applied_resolution_id: None,
     };
     save_state(&build_dir.join("state.json"), &state)?;
     Ok(state)
 }
 
+fn migrate_state(
+    store: &Store,
+    effort: &Effort,
+    build_dir: &Path,
+    state_path: &Path,
+    state: &mut BuildState,
+) -> Result<()> {
+    if state.migration_version >= BUILD_STATE_MIGRATION {
+        return Ok(());
+    }
+    let original = fs::read(state_path)?;
+    let evidence_dir = build_dir.join("evidence");
+    fs::create_dir_all(&evidence_dir)?;
+    let original_path = evidence_dir.join("state-v3-original.json");
+    match OpenOptions::new().write(true).create_new(true).open(&original_path) {
+        Ok(mut file) => {
+            file.write_all(&original)?;
+            file.sync_all()?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            ensure!(fs::read(&original_path)? == original, "preserved state-v3 bytes differ from current migration source");
+        }
+        Err(error) => return Err(error.into()),
+    }
+    state.migration_version = BUILD_STATE_MIGRATION;
+    let original_digest = digest_bytes(&original);
+    append_journal_once(
+        store,
+        effort,
+        "build_state_migrated",
+        &original_digest,
+        serde_json::json!({"from": BUILD_STATE_VERSION, "to": BUILD_STATE_VERSION, "migration": BUILD_STATE_MIGRATION, "original_sha256": original_digest, "original_state": original_path}),
+    )?;
+    save_state(state_path, state)?;
+    Ok(())
+}
+
+fn append_journal_once(
+    store: &Store,
+    effort: &Effort,
+    event: &str,
+    operation_id: &str,
+    details: serde_json::Value,
+) -> Result<()> {
+    if store.read_journal(effort)?.iter().any(|entry| {
+        entry.event == event && entry.details["operation_id"] == operation_id
+    }) {
+        return Ok(());
+    }
+    let mut details = details;
+    details["operation_id"] = serde_json::json!(operation_id);
+    store.append_journal(effort, event, Some(operation_id), details)
+}
+
+/// Load one Build state and report, rather than raise, a frozen input that
+/// changed after execution began.  The caller records that as a typed stop.
 fn load_state(
     path: &Path,
-    _config: &BuildConfig,
     plan: &BuildPlan,
     build_dir: &Path,
-) -> Result<BuildState> {
+) -> Result<(BuildState, Option<String>)> {
     let state: BuildState = read_json(path)?;
     ensure!(
         state.schema_version == BUILD_STATE_VERSION,
         "unsupported Build state version"
     );
-    ensure!(
-        state.frozen.plan_digest == digest_file(&build_dir.join("plan.json"))?,
-        "Build plan changed after execution began"
-    );
-    ensure!(
-        state.frozen.config_digest == digest_file(&build_dir.join("config.toml"))?,
-        "Build config changed after execution began"
-    );
-    ensure!(
-        state.frozen.detailed_plan_digest == digest_file(&build_dir.join(&plan.detailed_plan))?,
-        "detailed implementation plan changed after execution began"
-    );
-    Ok(state)
+    let inputs = [
+        ("plan.json", "Build plan", state.frozen.plan_digest.as_str()),
+        (
+            "config.toml",
+            "Build config",
+            state.frozen.config_digest.as_str(),
+        ),
+        (
+            plan.detailed_plan.as_str(),
+            "detailed implementation plan",
+            state.frozen.detailed_plan_digest.as_str(),
+        ),
+    ];
+    let mut mismatch = None;
+    for (name, label, expected) in inputs {
+        let actual = fs::read(build_dir.join(name)).map(|bytes| digest_bytes(&bytes));
+        if actual.as_deref().ok() != Some(expected) {
+            mismatch.get_or_insert(format!("{label} changed after execution began"));
+        }
+    }
+    Ok((state, mismatch))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -538,7 +999,7 @@ fn perform_action(
     effort: &Effort,
     project: &Project,
     build_dir: &Path,
-    config: &BuildConfig,
+    config: &EffectiveConfig,
     plan: &BuildPlan,
     state_path: &Path,
     state: &mut BuildState,
@@ -579,9 +1040,9 @@ fn perform_action(
         ActionKind::Review | ActionKind::FinalAudit | ActionKind::Unblock => "reviewer",
     };
     let role_config = if role == "worker" {
-        &config.worker
+        &config.config.worker
     } else {
-        &config.reviewer
+        &config.config.reviewer
     };
     let action_dir = build_dir.join("artifacts").join(&state.action.id);
     fs::create_dir_all(&action_dir)?;
@@ -591,10 +1052,14 @@ fn perform_action(
             state.action.dispatch = DispatchState::Completed;
             save_state(state_path, state)?;
         } else {
-            bail!(
-                "provider invocation for action {} may still be running; it will not be resent automatically",
-                state.action.id
-            );
+            return Err(stop_error(
+                StopTrigger::UncertainAcceptance,
+                None,
+                format!(
+                    "provider invocation for action {} may still be running; it will not be resent automatically",
+                    state.action.id
+                ),
+            ));
         }
     }
     // Generated role instructions are refreshed immediately before dispatch so an
@@ -625,7 +1090,16 @@ fn perform_action(
         )?,
         _ => project.canonical_locator.clone(),
     };
-    write_action_file(store, effort, build_dir, plan, state, &action_dir, &cwd)?;
+    write_action_file(
+        store,
+        effort,
+        build_dir,
+        plan,
+        state,
+        &action_dir,
+        &cwd,
+        config.version,
+    )?;
     let persistent_session = match state.action.kind {
         ActionKind::Work => PersistentSession::Worker,
         ActionKind::Review => PersistentSession::Reviewer,
@@ -663,8 +1137,16 @@ fn perform_action(
                 write_bytes_sync(&completion_marker, b"completed\n")?;
                 save_state(state_path, state)?;
             }
-            InvocationCompletion::FailedBeforeAcceptance { .. } => {
-                recover_or_block(build_dir, state, "incomplete", role)?;
+            InvocationCompletion::FailedBeforeAcceptance { detail } => {
+                recover_or_block(
+                    store,
+                    effort,
+                    build_dir,
+                    state,
+                    RecoveryCall::Failed(StopTrigger::SpawnFailure),
+                    role,
+                    &detail,
+                )?;
                 return Ok(());
             }
             InvocationCompletion::AcceptedButIncomplete { detail } => {
@@ -672,27 +1154,55 @@ fn perform_action(
                 // may or may not have started, so it is never resent.
                 ensure!(
                     state.action.transport_session_id.is_some(),
-                    "action {} ended without a resumable transport identity ({detail}); its acceptance state is unknown and it will not be resent automatically. Inspect {} before resuming.",
-                    state.action.id,
-                    action_dir.join("transport.jsonl").display()
+                    stop_error(
+                        StopTrigger::UncertainAcceptance,
+                        None,
+                        format!(
+                            "action {} ended without a resumable transport identity ({detail}); its acceptance state is unknown and it will not be resent automatically. Inspect {} before resuming.",
+                            state.action.id,
+                            action_dir.join("transport.jsonl").display()
+                        )
+                    )
                 );
-                recover_or_block(build_dir, state, "incomplete", role)?;
+                recover_or_block(
+                    store,
+                    effort,
+                    build_dir,
+                    state,
+                    RecoveryCall::Failed(StopTrigger::ProviderExecutionFailure),
+                    role,
+                    &detail,
+                )?;
                 return Ok(());
             }
         }
     }
     let receipt: Receipt = read_json(&action_dir.join("result.json"))
-        .context("provider completed without a valid Build result receipt")?;
+        .context("provider completed without a valid Build result receipt")
+        .map_err(receipt_failure)?;
     consume_receipt(
         store,
         effort,
         build_dir,
-        config,
         plan,
         state,
         &receipt,
         &action_dir,
     )
+    .map_err(receipt_failure)
+}
+
+/// A receipt that cannot be validated stops the Build as a receipt problem
+/// unless it already carries a more specific typed stop.
+fn receipt_failure(error: anyhow::Error) -> anyhow::Error {
+    match error.downcast::<BuildStop>() {
+        Ok(stop) => anyhow::Error::new(stop),
+        Err(error) => stop_error(
+            StopTrigger::InvalidReceipt,
+            Some(StopTrigger::InvalidReceipt),
+            format!("{error:#}"),
+        ),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -729,6 +1239,7 @@ impl InvocationObserver for StateObserver<'_> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_action_file(
     store: &Store,
     effort: &Effort,
@@ -737,6 +1248,7 @@ fn write_action_file(
     state: &BuildState,
     action_dir: &Path,
     cwd: &Path,
+    config_version: u32,
 ) -> Result<()> {
     let requirement_path =
         ensure_requirement_projection(store, effort, action_dir, &state.frozen.reconciled)?;
@@ -810,7 +1322,18 @@ fn write_action_file(
         "report": action_dir.join("report.md"),
         "detailed_plan": build_dir.join(&plan.detailed_plan),
         "working_directory": cwd,
+        "config_version": config_version,
     });
+    if let Some(resolution_id) = &state.action.resolution_id {
+        let resolution = build_dir
+            .join(RESOLUTIONS_DIR)
+            .join(format!("{resolution_id}.json"));
+        let record: ResolutionRecord = read_json(&resolution)?;
+        value["resolution"] = serde_json::json!(resolution);
+        value["resolution_kind"] = serde_json::to_value(record.kind)?;
+        value["resolution_note"] = serde_json::json!(record.note);
+        value["resolution_evidence"] = serde_json::json!(record.evidence);
+    }
     if matches!(state.action.kind, ActionKind::Unblock) {
         let interrupted = state
             .interrupted
@@ -825,6 +1348,16 @@ fn write_action_file(
         value["interrupted_report"] = serde_json::json!(interrupted_dir.join("report.md"));
         value["interrupted_result"] = serde_json::json!(interrupted_dir.join("result.json"));
         value["prior_feedback"] = serde_json::json!(interrupted.feedback_path);
+        if let Some(stop) = &state.stop {
+            value["trigger"] = serde_json::to_value(&stop.trigger)?;
+            value["stop_record"] = serde_json::to_value(stop)?;
+            value["process_completion"] = serde_json::json!(stop.process_completion);
+            value["receipt_validation"] = serde_json::json!(stop.receipt_validation);
+            value["recovery_remaining"] = serde_json::json!(stop.recovery_remaining);
+            value["current_audit"] = serde_json::json!(stop.audit);
+            value["assessment"] = serde_json::json!(stop.assessment);
+            value["unresolved_requirement_ids"] = serde_json::json!(stop.unresolved_requirement_ids);
+        }
     }
     if matches!(state.action.kind, ActionKind::FinalAudit) {
         let implementation = state
@@ -855,6 +1388,8 @@ fn write_action_file(
         );
         value["verification_checkout"] = serde_json::json!(cwd);
         value["assessment"] = serde_json::json!(action_dir.join("assessment.json"));
+        value["audit_attempt_id"] = serde_json::json!(state.action.id);
+        value["current_audit"] = serde_json::json!(state.current_audit);
     }
     write_bytes_sync(
         &action_dir.join("action.json"),
@@ -912,9 +1447,7 @@ fn phase_authority(plan: &str, tasks: &[String]) -> Option<(Vec<String>, String,
             .all(|task| {
                 candidate.lines().any(|line| {
                     let item = line.trim_start().strip_prefix("- ").unwrap_or("").trim();
-                    item == task
-                        || item.starts_with(&format!("{task}:"))
-                        || item.starts_with(&format!("{task} —"))
+                    task_line(item, task)
                 })
             })
             .then_some(*start)
@@ -939,6 +1472,16 @@ fn phase_authority(plan: &str, tasks: &[String]) -> Option<(Vec<String>, String,
         section("Completion evidence"),
         section("Deliberate later-phase exclusions"),
     ))
+}
+
+/// A documented task line, in any of the forms a detailed plan may use.  The
+/// separator keeps `D1` from matching a `D10` line.
+fn task_line(item: &str, task: &str) -> bool {
+    item == task
+        || [" ", ":", " —"].iter().any(|separator| {
+            item.strip_prefix(task)
+                .is_some_and(|rest| rest.starts_with(separator))
+        })
 }
 
 fn invocation_prompt(build_dir: &Path, action_dir: &Path, action: &CurrentAction) -> String {
@@ -966,7 +1509,6 @@ fn consume_receipt(
     store: &Store,
     effort: &Effort,
     build_dir: &Path,
-    _config: &BuildConfig,
     plan: &BuildPlan,
     state: &mut BuildState,
     receipt: &Receipt,
@@ -1020,8 +1562,26 @@ fn consume_receipt(
                     Some(commit.into()),
                     Some(action_dir.join("report.md")),
                 );
+            } else if receipt.outcome == "blocked" {
+                recover_or_block(
+                    store,
+                    effort,
+                    build_dir,
+                    state,
+                    RecoveryCall::Blocked,
+                    "worker",
+                    "worker receipt reported blocked",
+                )?;
             } else {
-                recover_or_block(build_dir, state, &receipt.outcome, "worker")?;
+                recover_or_block(
+                    store,
+                    effort,
+                    build_dir,
+                    state,
+                    RecoveryCall::Failed(StopTrigger::IncompleteWork),
+                    "worker",
+                    "worker receipt reported incomplete work",
+                )?;
             }
         }
         ActionKind::Review => {
@@ -1079,7 +1639,15 @@ fn consume_receipt(
                     Some(action_dir.join("report.md")),
                 );
             } else {
-                recover_or_block(build_dir, state, "blocked", "reviewer")?;
+                recover_or_block(
+                    store,
+                    effort,
+                    build_dir,
+                    state,
+                    RecoveryCall::Blocked,
+                    "reviewer",
+                    "review receipt reported blocked",
+                )?;
             }
         }
         ActionKind::FinalAudit => {
@@ -1088,7 +1656,15 @@ fn consume_receipt(
                 "Audit action receipt has invalid outcome"
             );
             if receipt.outcome == "blocked" {
-                recover_or_block(build_dir, state, "blocked", "reviewer")?;
+                recover_or_block(
+                    store,
+                    effort,
+                    build_dir,
+                    state,
+                    RecoveryCall::Blocked,
+                    "reviewer",
+                    "Audit receipt reported blocked",
+                )?;
                 return Ok(());
             }
             let implementation = state
@@ -1103,18 +1679,19 @@ fn consume_receipt(
                     && assessment.implementation == implementation,
                 "Audit assessment lineage does not match current Build"
             );
-            // Only publish when no Audit already covers this exact implementation, so a restart
-            // after publication reuses it instead of appending a second immutable record.
-            let audit = match orchestrate_audit::find_audit(store, effort, &implementation)? {
-                Some(existing) => existing,
-                None => orchestrate_audit::finalize_audit_with_run_id(
-                    store,
-                    effort,
-                    assessment.clone(),
-                    build_provenance("audit", canonical_role_guide(&ActionKind::FinalAudit)),
-                    format!("build-audit-{}", state.action.id),
-                )?,
-            };
+            // This attempt's exact identity is its operation identity: a replay
+            // republishes the same bundle, and a genuinely new attempt at the same
+            // implementation publishes separately.  The Build consumes the attempt
+            // it just published, never an Audit chosen by implementation or recency.
+            let audit_run_id = format!("build-audit-{}", state.action.id);
+            let audit = orchestrate_audit::finalize_audit_with_run_id(
+                store,
+                effort,
+                assessment.clone(),
+                build_provenance("audit", canonical_role_guide(&ActionKind::FinalAudit)),
+                audit_run_id,
+            )?;
+            state.current_audit = Some(audit.clone());
             let (_, report): (_, orchestrate_contracts::AuditReport) =
                 store.load_json(effort, &audit, "audit.json")?;
             match report.verdict {
@@ -1133,7 +1710,50 @@ fn consume_receipt(
                         Some(action_dir.join("assessment.json")),
                     )
                 }
-                Verdict::Blocked => recover_or_block(build_dir, state, "blocked", "reviewer")?,
+                Verdict::Blocked => {
+                    let ids = unresolved_requirement_ids(
+                        store,
+                        effort,
+                        &state.frozen.reconciled,
+                        &report.assessment,
+                    )?;
+                    // A completed assessment is never retried by continuation or replacement:
+                    // at most one Unblock diagnosis may run, and a remedy may authorize one
+                    // fresh reassessment.  A second completed BLOCKED assessment stops here.
+                    if state.recovery.unblock_used {
+                        return Err(stop_error(
+                            StopTrigger::AuditBlocked,
+                            Some(StopTrigger::AuditBlocked),
+                            format!(
+                                "a second completed final Audit remains BLOCKED; unresolved requirements: {}",
+                                ids.join(", ")
+                            ),
+                        ));
+                    }
+                    let stopped = state.action.clone();
+                    let stop = stop_record(
+                        store,
+                        effort,
+                        build_dir,
+                        state,
+                        &stopped,
+                        StopTrigger::AuditBlocked,
+                        Some(StopTrigger::AuditBlocked),
+                        format!("completed formal Audit {} derived BLOCKED", audit.artifact_id),
+                        vec!["one unblock diagnosis".into()],
+                        Some(Box::new(stopped.clone())),
+                    )?;
+                    push_stop(store, effort, state, stop)?;
+                    state.interrupted = Some(Box::new(state.action.clone()));
+                    state.recovery.unblock_used = true;
+                    state.action = new_action(
+                        build_dir,
+                        ActionKind::Unblock,
+                        FINAL_SCOPE,
+                        state.action.target_commit.clone(),
+                        None,
+                    );
+                }
             }
         }
         ActionKind::Unblock => {
@@ -1144,12 +1764,23 @@ fn consume_receipt(
                 ),
                 "unblock receipt has invalid outcome"
             );
+            // Both outcomes must name the authorized condition that changes on
+            // retry, or the missing evidence and capability.  Regenerating an
+            // unchanged completed assessment is not a remedy.
+            ensure!(
+                fs::read_to_string(action_dir.join("report.md"))
+                    .map(|report| !report.trim().is_empty())
+                    .unwrap_or(false),
+                "unblock receipt claimed {} without a non-empty diagnosis report",
+                receipt.outcome
+            );
             if receipt.outcome == "remedy_available" {
                 let interrupted = state
                     .interrupted
                     .take()
                     .context("unblock action has no interrupted action to resume")?;
                 state.recovery.after_remedy();
+                state.stop = None;
                 state.action = new_action(
                     build_dir,
                     interrupted.kind,
@@ -1159,10 +1790,14 @@ fn consume_receipt(
                 );
                 return Ok(());
             }
-            bail!(
-                "unblocker identified an external requirement; see {}",
-                action_dir.join("report.md").display()
-            )
+            return Err(stop_error(
+                StopTrigger::ExternalRequirement,
+                Some(StopTrigger::ExternalRequirement),
+                format!(
+                    "unblocker identified an external requirement; see {}",
+                    action_dir.join("report.md").display()
+                ),
+            ));
         }
     }
     Ok(())
@@ -1172,13 +1807,25 @@ fn consume_receipt(
 /// then one fresh session-less unblocker diagnosis.  Each flag is consumed once, so an
 /// unattended run always reaches a decision instead of looping.
 fn recover_or_block(
+    store: &Store,
+    effort: &Effort,
     build_dir: &Path,
     state: &mut BuildState,
-    outcome: &str,
+    reason: RecoveryCall,
     role: &str,
+    detail: &str,
 ) -> Result<()> {
-    if outcome == "blocked" && !state.recovery.unblock_used {
-        return start_unblock(build_dir, state);
+    let action_failure = reason.action_failure();
+    if matches!(reason, RecoveryCall::Blocked) && !state.recovery.unblock_used {
+        return start_unblock(
+            store,
+            effort,
+            build_dir,
+            state,
+            StopTrigger::PhaseBlocker,
+            action_failure,
+            detail,
+        );
     }
     if !state.recovery.continuation_used {
         state.recovery.continuation_used = true;
@@ -1198,9 +1845,202 @@ fn recover_or_block(
         return Ok(());
     }
     if !state.recovery.unblock_used {
-        return start_unblock(build_dir, state);
+        return start_unblock(
+            store,
+            effort,
+            build_dir,
+            state,
+            StopTrigger::RecoveryExhausted,
+            action_failure,
+            detail,
+        );
     }
-    bail!("recovery is exhausted for scope {}", state.action.scope)
+    Err(stop_error(
+        StopTrigger::RecoveryExhausted,
+        Some(action_failure),
+        format!("recovery is exhausted for scope {} ({detail})", state.action.scope),
+    ))
+}
+
+fn record_stop(
+    store: &Store,
+    effort: &Effort,
+    build_dir: &Path,
+    state: &mut BuildState,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let typed = error.downcast_ref::<BuildStop>();
+    let trigger = typed.map_or_else(
+        || fallback_trigger(&state.action),
+        |stop| stop.trigger.clone(),
+    );
+    let action = state.action.clone();
+    let record = stop_record(
+        store,
+        effort,
+        build_dir,
+        state,
+        &action,
+        trigger,
+        typed.and_then(|stop| stop.action_failure.clone()),
+        format!("{error:#}"),
+        recovery_remaining(state),
+        state.interrupted.clone(),
+    )?;
+    push_stop(store, effort, state, record)
+}
+
+/// Conditions the controller can still name without a typed stop, for example an
+/// unexpected I/O failure around an action.
+fn fallback_trigger(action: &CurrentAction) -> StopTrigger {
+    match action.dispatch {
+        DispatchState::Running => StopTrigger::UncertainAcceptance,
+        DispatchState::Completed => StopTrigger::InvalidReceipt,
+        DispatchState::Prepared => StopTrigger::ControllerFailure,
+    }
+}
+
+/// The remaining bounded recovery budget, as durable recovery facts.
+fn recovery_remaining(state: &BuildState) -> Vec<String> {
+    [
+        (!state.recovery.continuation_used).then_some("one continuation of the stopped action"),
+        (!state.recovery.replacement_used).then_some("one replacement session"),
+        (!state.recovery.unblock_used).then_some("one unblock diagnosis"),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::to_owned)
+    .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stop_record(
+    store: &Store,
+    effort: &Effort,
+    build_dir: &Path,
+    state: &BuildState,
+    action: &CurrentAction,
+    trigger: StopTrigger,
+    action_failure: Option<StopTrigger>,
+    detail: String,
+    recovery_remaining: Vec<String>,
+    interrupted: Option<Box<CurrentAction>>,
+) -> Result<StopRecord> {
+    let result_path = build_dir.join("artifacts").join(&action.id).join("result.json");
+    let (audit, assessment, unresolved_requirement_ids) =
+        if let Some(reference) = &state.current_audit {
+            let (_, report): (_, orchestrate_contracts::AuditReport) =
+                store.load_json(effort, reference, "audit.json")?;
+            let unresolved = unresolved_requirement_ids(
+                store,
+                effort,
+                &state.frozen.reconciled,
+                &report.assessment,
+            )?;
+            let path = store
+                .artifact_dir(effort, &reference.artifact_id)?
+                .join("audit.json");
+            (
+                Some(reference.clone()),
+                Some(path.to_string_lossy().into_owned()),
+                unresolved,
+            )
+        } else {
+            (None, None, Vec::new())
+        };
+    let receipt_validation = match (action_failure.as_ref(), result_path.is_file()) {
+        (Some(StopTrigger::InvalidReceipt), true) => {
+            "receipt present; its validation failed".to_owned()
+        }
+        (Some(StopTrigger::InvalidReceipt), false) => "receipt missing".to_owned(),
+        (Some(StopTrigger::IncompleteWork), _) => {
+            "receipt present; the role reported incomplete work".to_owned()
+        }
+        (Some(StopTrigger::ProviderExecutionFailure), _) => {
+            "no valid receipt; the provider process did not complete".to_owned()
+        }
+        (Some(StopTrigger::SpawnFailure), _) => {
+            "no receipt; the provider action was never accepted".to_owned()
+        }
+        (Some(StopTrigger::PhaseBlocker), _) => {
+            "receipt present; the role reported the work blocked".to_owned()
+        }
+        (Some(StopTrigger::AuditBlocked), _) => {
+            "complete receipt and assessment lineage validated".to_owned()
+        }
+        (_, true) => "receipt present; the transition did not complete".to_owned(),
+        (_, false) => "receipt missing; the action produced no result".to_owned(),
+    };
+    Ok(StopRecord {
+        action: action.clone(),
+        trigger,
+        action_failure,
+        stopped_at_ms: now_ms(),
+        controller_pid: std::process::id(),
+        detail,
+        process_completion: match action.dispatch {
+            DispatchState::Prepared => {
+                "the provider action was not accepted; it never started or its start is unknown".into()
+            }
+            DispatchState::Running => "accepted; provider completion is uncertain".into(),
+            DispatchState::Completed => "provider process completed".into(),
+        },
+        receipt_validation,
+        recovery_remaining,
+        audit,
+        assessment,
+        unresolved_requirement_ids,
+        interrupted,
+    })
+}
+
+/// Record one durable stop, once per stopped action.
+fn push_stop(
+    store: &Store,
+    effort: &Effort,
+    state: &mut BuildState,
+    record: StopRecord,
+) -> Result<()> {
+    if state
+        .stop_history
+        .iter()
+        .any(|entry| entry.action.id == record.action.id)
+    {
+        return Ok(());
+    }
+    append_journal_once(
+        store,
+        effort,
+        "build_stopped",
+        &record.action.id,
+        serde_json::to_value(&record)?,
+    )?;
+    state.stop = Some(record.clone());
+    state.stop_history.push(record);
+    Ok(())
+}
+
+fn unresolved_requirement_ids(
+    store: &Store,
+    effort: &Effort,
+    reconciled_ref: &ArtifactRef,
+    assessment: &AuditAssessment,
+) -> Result<Vec<String>> {
+    let (_, reconciled): (_, orchestrate_contracts::ReconciledDiscovery) =
+        store.load_json(effort, reconciled_ref, "reconciled-discovery.json")?;
+    let coverage = assessment
+        .coverage
+        .iter()
+        .map(|row| (row.requirement_id.as_str(), row.state.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    Ok(reconciled
+        .requirements
+        .iter()
+        .filter_map(|item| match coverage.get(item.requirement.id.as_str()) {
+            Some(CoverageState::Unknown) | None => Some(item.requirement.id.clone()),
+            _ => None,
+        })
+        .collect())
 }
 
 /// Re-run the same action once more, keeping its scope, target commit, and feedback.
@@ -1215,8 +2055,30 @@ fn retry_action(build_dir: &Path, state: &BuildState) -> CurrentAction {
 }
 
 /// Preserve the interrupted action and ask a session-less unblocker to diagnose it.
-fn start_unblock(build_dir: &Path, state: &mut BuildState) -> Result<()> {
+fn start_unblock(
+    store: &Store,
+    effort: &Effort,
+    build_dir: &Path,
+    state: &mut BuildState,
+    trigger: StopTrigger,
+    action_failure: StopTrigger,
+    detail: &str,
+) -> Result<()> {
     state.recovery.unblock_used = true;
+    let interrupted = state.action.clone();
+    let record = stop_record(
+        store,
+        effort,
+        build_dir,
+        state,
+        &interrupted,
+        trigger,
+        Some(action_failure),
+        detail.into(),
+        recovery_remaining(state),
+        Some(Box::new(interrupted.clone())),
+    )?;
+    push_stop(store, effort, state, record)?;
     state.interrupted = Some(Box::new(state.action.clone()));
     state.action = new_action(
         build_dir,
@@ -1249,6 +2111,525 @@ fn new_action(
         feedback_path: feedback.map(|p| p.to_string_lossy().into_owned()),
         transport_session_id: None,
         dispatch: DispatchState::Prepared,
+        resolution_id: None,
+    }
+}
+
+/// The continuation boundary a resolution authorizes.  Its identity derives from
+/// the resolution record, so re-applying an interrupted resolution yields the
+/// same distinct action instead of a second, uncontrolled one.
+fn continuation_action(
+    resolution_id: &str,
+    kind: ActionKind,
+    scope: &str,
+    target_commit: Option<String>,
+    feedback_path: Option<String>,
+) -> CurrentAction {
+    CurrentAction {
+        id: format!(
+            "act-{}",
+            &digest_bytes(format!("{resolution_id}:continuation").as_bytes())[..24]
+        ),
+        kind,
+        scope: scope.into(),
+        target_commit,
+        feedback_path,
+        transport_session_id: None,
+        dispatch: DispatchState::Prepared,
+        resolution_id: Some(resolution_id.into()),
+    }
+}
+
+fn action_kind_name(kind: &ActionKind) -> &'static str {
+    match kind {
+        ActionKind::Work => "work",
+        ActionKind::Review => "review",
+        ActionKind::FinalAudit => "final_audit",
+        ActionKind::Unblock => "unblock",
+    }
+}
+
+fn resolution_kind_name(kind: ResolutionKind) -> &'static str {
+    match kind {
+        ResolutionKind::ExistingAuthorityClarification => "existing_authority_clarification",
+        ResolutionKind::EnvironmentRepair => "environment_repair",
+        ResolutionKind::NewVerificationEvidence => "new_verification_evidence",
+        ResolutionKind::AuthorityChange => "authority_change",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Operator resolution of a stopped Build
+// ---------------------------------------------------------------------------
+
+/// Resolve a stopped Build: record the exact operator intervention, then create
+/// the one continuation boundary it authorizes.  Resolution itself dispatches no
+/// provider action; the next Build invocation is still the dispatch entry point.
+pub fn resolve(store: &Store, request: ResolutionRequest) -> Result<ResolutionOutcome> {
+    let effort = store.load_effort(&request.effort)?;
+    let project = store.project_for(&effort)?;
+    let _lock = ProjectLock::acquire(store, &project)?;
+    let build_dir = store.phase_dir(&effort, "build")?;
+    let state_path = build_dir.join("state.json");
+    ensure!(
+        state_path.is_file(),
+        "no Build state exists for effort {}",
+        effort.id
+    );
+    let plan = load_plan(store, &effort, &build_dir)?;
+    let (mut state, frozen_mismatch) = load_state(&state_path, &plan, &build_dir)?;
+    if let Some(detail) = frozen_mismatch {
+        bail!(
+            "cannot resolve: {detail}; frozen Build input changes need their own successor path, not a resolution"
+        );
+    }
+    ensure!(
+        !request.note.trim().is_empty(),
+        "a resolution requires a note recording the intervention"
+    );
+    let evidence = read_evidence(&request.evidence)?;
+    let config_text = match &request.config {
+        Some(path) => {
+            ensure!(
+                matches!(request.kind, ResolutionKind::EnvironmentRepair),
+                "role configuration changes require an environment_repair resolution"
+            );
+            let text = fs::read_to_string(path)
+                .with_context(|| format!("cannot read {}", path.display()))?;
+            parse_config(&text).context("the supplied role configuration is not a valid Build config")?;
+            Some(text)
+        }
+        None => None,
+    };
+    let resolution_id = resolution_id(
+        &request.action,
+        request.kind,
+        &request.note,
+        &evidence,
+        config_text.as_deref(),
+    );
+    let record_path = resolution_path(&build_dir, &resolution_id);
+    if record_path.is_file() {
+        // An identical submission is idempotent: the record already owns its transition.
+        let existing: ResolutionRecord = read_json(&record_path)?;
+        ensure!(
+            existing.resolution_id == resolution_id,
+            "resolution record {} is inconsistent",
+            record_path.display()
+        );
+        return Ok(resolution_outcome(&record_path, &existing));
+    }
+    // A different submission for a stop that an applied resolution already
+    // continued is stale, even though the Build has moved past that stop.
+    if let Some(applied) = applied_resolution_for_stop(&build_dir, &request.action)? {
+        bail!(
+            "stopped action {} was already resolved by {}; the same stop accepts no second resolution",
+            request.action,
+            applied.resolution_id
+        );
+    }
+    ensure!(
+        state.terminal.is_none(),
+        "Build {} already completed; there is no stopped action to resolve",
+        effort.id
+    );
+    let stop = state
+        .stop
+        .clone()
+        .context("this Build is not stopped; there is nothing to resolve")?;
+    ensure!(
+        stop.action.id == request.action,
+        "action {} is not the stopped action {} of effort {}",
+        request.action,
+        stop.action.id,
+        effort.id
+    );
+    // Ambiguous in-flight provider work is never resent; it needs an explicit
+    // recorded confirmation that it is no longer running.
+    let in_flight = stop.action.dispatch == DispatchState::Running
+        || state.action.dispatch == DispatchState::Running;
+    ensure!(
+        !in_flight || request.confirm_not_running,
+        "action {} was accepted and its completion is uncertain; confirm the provider is no longer running before a fresh continuation boundary is created",
+        if stop.action.dispatch == DispatchState::Running { stop.action.id.as_str() } else { state.action.id.as_str() }
+    );
+    let binding = ResolutionBinding {
+        stop: stop.clone(),
+        trigger: stop.trigger.clone(),
+        action: stop.action.clone(),
+        reconciled: state.frozen.reconciled.clone(),
+        plan_digest: state.frozen.plan_digest.clone(),
+        detailed_plan_digest: state.frozen.detailed_plan_digest.clone(),
+        config_digest: state.frozen.config_digest.clone(),
+        head_commit: git(&project.canonical_locator, ["rev-parse", "HEAD"])?,
+        checkout_status: checkout_status(&project)?,
+        in_flight_confirmation: request.confirm_not_running,
+    };
+    if matches!(request.kind, ResolutionKind::AuthorityChange) {
+        let refusal = ResolutionRefusal {
+            reason: "a Build resolution cannot amend the adopted product authority".into(),
+            successor_guidance: format!(
+                "take the change through a new Discovery and Reconcile, then start a successor Build that links this effort's exact Reconciled Discovery {} and its commits; nothing in this Build changes",
+                state.frozen.reconciled.artifact_id
+            ),
+        };
+        let record = ResolutionRecord {
+            schema_version: RESOLUTION_SCHEMA_VERSION,
+            resolution_id: resolution_id.clone(),
+            kind: request.kind,
+            status: ResolutionStatus::Refused,
+            created_at_ms: now_ms(),
+            effort_id: effort.id.clone(),
+            note: request.note.clone(),
+            evidence,
+            binding,
+            transition: None,
+            config_overlay: None,
+            refusal: Some(refusal.clone()),
+        };
+        write_immutable(&record_path, &orchestrate_contracts::encode(&record)?)?;
+        append_journal_once(
+            store,
+            &effort,
+            "build_resolution_refused",
+            &resolution_id,
+            serde_json::json!({
+                "resolution": resolution_id,
+                "kind": resolution_kind_name(request.kind),
+                "stopped_action": stop.action.id,
+                "record": record_path,
+                "reason": refusal.reason,
+                "successor_guidance": refusal.successor_guidance,
+            }),
+        )?;
+        return Ok(ResolutionOutcome::Refused {
+            resolution: record_path,
+            resolution_id,
+            reason: refusal.reason,
+            successor_guidance: refusal.successor_guidance,
+        });
+    }
+    let (next_kind, scope, target_commit, feedback) = continuation_for(&state, &stop, request.kind)?;
+    let continuation = continuation_action(&resolution_id, next_kind, &scope, target_commit, feedback);
+    let mut config_overlay = config_text.map(|text| ConfigOverlay {
+        schema_version: CONFIG_OVERLAY_SCHEMA_VERSION,
+        version: 0,
+        config_digest: digest_bytes(text.as_bytes()),
+        config_text: text,
+        resolution_id: resolution_id.clone(),
+        first_action_id: continuation.id.clone(),
+        created_at_ms: now_ms(),
+    });
+    if let Some(overlay) = config_overlay.as_mut() {
+        overlay.version = next_config_version(&build_dir)?;
+    }
+    let record = ResolutionRecord {
+        schema_version: RESOLUTION_SCHEMA_VERSION,
+        resolution_id: resolution_id.clone(),
+        kind: request.kind,
+        status: ResolutionStatus::Resolved,
+        created_at_ms: now_ms(),
+        effort_id: effort.id.clone(),
+        note: request.note.clone(),
+        evidence,
+        binding,
+        transition: Some(ResolutionTransition {
+            governed_action: continuation.id.clone(),
+            action: continuation.clone(),
+            recovery_reset: true,
+        }),
+        config_overlay,
+        refusal: None,
+    };
+    // The immutable record and note exist before the bounded transition, so an
+    // interruption in between leaves a record the Build can apply exactly once.
+    write_immutable(&record_path, &orchestrate_contracts::encode(&record)?)?;
+    apply_resolution(store, &effort, &build_dir, &state_path, &mut state, &record)?;
+    Ok(resolution_outcome(&record_path, &record))
+}
+
+fn resolution_outcome(record_path: &Path, record: &ResolutionRecord) -> ResolutionOutcome {
+    match record.status {
+        ResolutionStatus::Refused => {
+            let refusal = record
+                .refusal
+                .clone()
+                .unwrap_or_else(|| ResolutionRefusal {
+                    reason: "refused".into(),
+                    successor_guidance: String::new(),
+                });
+            ResolutionOutcome::Refused {
+                resolution: record_path.to_path_buf(),
+                resolution_id: record.resolution_id.clone(),
+                reason: refusal.reason,
+                successor_guidance: refusal.successor_guidance,
+            }
+        }
+        ResolutionStatus::Resolved => {
+            let transition = record.transition.as_ref().expect("applied records transition");
+            ResolutionOutcome::Resolved {
+                resolution: record_path.to_path_buf(),
+                resolution_id: record.resolution_id.clone(),
+                kind: record.kind,
+                stopped_action: record.binding.action.id.clone(),
+                continuation_action: transition.action.id.clone(),
+                continuation_kind: action_kind_name(&transition.action.kind).into(),
+                config_version: record.config_overlay.as_ref().map(|overlay| overlay.version),
+            }
+        }
+    }
+}
+
+/// Which action the resolution authorizes next.
+fn continuation_for(
+    state: &BuildState,
+    stop: &StopRecord,
+    kind: ResolutionKind,
+) -> Result<(ActionKind, String, Option<String>, Option<String>)> {
+    let subject = stop.interrupted.as_deref().unwrap_or(&stop.action);
+    if matches!(kind, ResolutionKind::NewVerificationEvidence) {
+        ensure!(
+            stop.trigger == StopTrigger::AuditBlocked && subject.scope == FINAL_SCOPE,
+            "new verification evidence only applies to a final-scope Audit acceptance that completed and derived BLOCKED; this stop is {}",
+            trigger_name(&stop.trigger)
+        );
+        ensure!(
+            state.implementation.is_some(),
+            "this Build has no registered implementation to reassess"
+        );
+        return Ok((
+            ActionKind::FinalAudit,
+            FINAL_SCOPE.into(),
+            subject.target_commit.clone(),
+            subject.feedback_path.clone(),
+        ));
+    }
+    ensure!(
+        !matches!(subject.kind, ActionKind::Unblock),
+        "the stopped action is itself a diagnosis; resolve the action it interrupted instead"
+    );
+    Ok((
+        subject.kind.clone(),
+        subject.scope.clone(),
+        subject.target_commit.clone(),
+        subject.feedback_path.clone(),
+    ))
+}
+
+/// Apply one resolution record to Build state.  Every input comes from the
+/// immutable record, so re-applying an interrupted resolution is idempotent.
+fn apply_resolution(
+    store: &Store,
+    effort: &Effort,
+    build_dir: &Path,
+    state_path: &Path,
+    state: &mut BuildState,
+    record: &ResolutionRecord,
+) -> Result<()> {
+    ensure!(
+        record.status == ResolutionStatus::Resolved,
+        "resolution {} was refused and cannot transition a Build",
+        record.resolution_id
+    );
+    let transition = record
+        .transition
+        .as_ref()
+        .context("applied resolution carries no transition")?;
+    ensure!(
+        state
+            .stop
+            .as_ref()
+            .is_some_and(|stop| stop.action.id == record.binding.action.id),
+        "resolution {} does not belong to the current stopped action",
+        record.resolution_id
+    );
+    if let Some(overlay) = &record.config_overlay {
+        ensure!(
+            overlay.resolution_id == record.resolution_id
+                && overlay.first_action_id == transition.action.id
+                && digest_bytes(overlay.config_text.as_bytes()) == overlay.config_digest,
+            "config overlay does not belong to resolution {}",
+            record.resolution_id
+        );
+        write_immutable(
+            &config_history_path(build_dir, overlay),
+            &orchestrate_contracts::encode(overlay)?,
+        )?;
+    }
+    state.action = transition.action.clone();
+    state.interrupted = None;
+    state.stop = None;
+    if transition.recovery_reset {
+        state.recovery = Recovery::default();
+    }
+    state.applied_resolution_id = Some(record.resolution_id.clone());
+    save_state(state_path, state)?;
+    append_journal_once(
+        store,
+        effort,
+        "build_resolved",
+        &record.resolution_id,
+        serde_json::json!({
+            "resolution": record.resolution_id,
+            "record": resolution_path(build_dir, &record.resolution_id),
+            "kind": resolution_kind_name(record.kind),
+            "stopped_action": record.binding.action.id,
+            "stopped_trigger": trigger_name(&record.binding.trigger),
+            "head_commit": record.binding.head_commit,
+            "checkout_status": record.binding.checkout_status,
+            "in_flight_confirmation": record.binding.in_flight_confirmation,
+            "continuation_action": transition.action.id,
+            "continuation_kind": action_kind_name(&transition.action.kind),
+            "continuation_scope": transition.action.scope,
+            "recovery_reset": transition.recovery_reset,
+            "config_version": record.config_overlay.as_ref().map(|overlay| overlay.version),
+            "configured_action": record.config_overlay.as_ref().map(|overlay| overlay.first_action_id.clone()),
+            "evidence": record.evidence,
+            "note": record.note,
+        }),
+    )
+}
+
+/// Complete a resolution that recorded its transition but died before saving
+/// state, so an interrupted record-before-state operation takes effect once.
+fn apply_pending_resolution(
+    store: &Store,
+    effort: &Effort,
+    build_dir: &Path,
+    state_path: &Path,
+    state: &mut BuildState,
+) -> Result<()> {
+    let Some(stop) = state.stop.as_ref() else {
+        return Ok(());
+    };
+    let Some(record) = applied_resolution_for_stop(build_dir, &stop.action.id)? else {
+        return Ok(());
+    };
+    if state.applied_resolution_id.as_deref() == Some(record.resolution_id.as_str()) {
+        return Ok(());
+    }
+    apply_resolution(store, effort, build_dir, state_path, state, &record)
+}
+
+fn resolution_records(build_dir: &Path) -> Result<Vec<ResolutionRecord>> {
+    let dir = build_dir.join(RESOLUTIONS_DIR);
+    let mut records = Vec::new();
+    if !dir.is_dir() {
+        return Ok(records);
+    }
+    for entry in fs::read_dir(&dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let record: ResolutionRecord = read_json(&path)?;
+        ensure!(
+            record.schema_version == RESOLUTION_SCHEMA_VERSION,
+            "unsupported resolution record version in {}",
+            path.display()
+        );
+        records.push(record);
+    }
+    records.sort_by_key(|record| record.created_at_ms);
+    Ok(records)
+}
+
+fn applied_resolution_for_stop(
+    build_dir: &Path,
+    stopped_action: &str,
+) -> Result<Option<ResolutionRecord>> {
+    let mut found: Option<ResolutionRecord> = None;
+    for record in resolution_records(build_dir)? {
+        if record.status != ResolutionStatus::Resolved
+            || record.binding.action.id != stopped_action
+        {
+            continue;
+        }
+        ensure!(
+            found
+                .as_ref()
+                .is_none_or(|existing| existing.resolution_id == record.resolution_id),
+            "more than one resolution claims stopped action {stopped_action}"
+        );
+        found = Some(record);
+    }
+    Ok(found)
+}
+
+fn resolution_path(build_dir: &Path, resolution_id: &str) -> PathBuf {
+    build_dir.join(RESOLUTIONS_DIR).join(format!("{resolution_id}.json"))
+}
+
+fn config_history_path(build_dir: &Path, overlay: &ConfigOverlay) -> PathBuf {
+    build_dir.join(CONFIG_HISTORY_DIR).join(format!(
+        "v{:04}-{}.json",
+        overlay.version, overlay.resolution_id
+    ))
+}
+
+fn resolution_id(
+    stop_action: &str,
+    kind: ResolutionKind,
+    note: &str,
+    evidence: &[ResolutionEvidence],
+    config: Option<&str>,
+) -> String {
+    let mut material = format!("{stop_action}|{}|{note}", resolution_kind_name(kind));
+    for item in evidence {
+        material.push_str(&format!("|{}:{}", item.path, item.sha256));
+    }
+    if let Some(text) = config {
+        material.push_str(&format!("|config:{}", digest_bytes(text.as_bytes())));
+    }
+    format!("res-{}", &digest_bytes(material.as_bytes())[..24])
+}
+
+fn read_evidence(paths: &[PathBuf]) -> Result<Vec<ResolutionEvidence>> {
+    let mut evidence = Vec::new();
+    for path in paths {
+        let bytes = fs::read(path)
+            .with_context(|| format!("cannot read resolution evidence {}", path.display()))?;
+        evidence.push(ResolutionEvidence {
+            path: path.to_string_lossy().into_owned(),
+            sha256: digest_bytes(&bytes),
+        });
+    }
+    Ok(evidence)
+}
+
+fn checkout_status(project: &Project) -> Result<String> {
+    let status = git(
+        &project.canonical_locator,
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
+    Ok(if status.is_empty() {
+        "clean".into()
+    } else {
+        status
+    })
+}
+
+/// Publish immutable controller bytes once; identical bytes are a replay, and
+/// different bytes under the same identity are a conflict.
+fn write_immutable(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(mut file) => {
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            ensure!(
+                fs::read(path)? == bytes,
+                "{} already exists with different bytes",
+                path.display()
+            );
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -1540,6 +2921,10 @@ mod tests {
     };
     use std::{collections::BTreeMap, process::Command, sync::Mutex};
 
+    /// A detailed plan that documents the authority scope of every phase in the
+    /// test plan, which the controller requires before dispatching a role.
+    const DETAILED_PLAN: &str = "## Delivery phase D1 — First phase\n\n**Requirements:** R-1\n\n**Completion evidence:** D1 is complete.\n\n**Deliberate later-phase exclusions:** none.\n\nTasks:\n- T1 Implement the first phase.\n\n## Delivery phase D2 — Second phase\n\n**Requirements:** R-1\n\n**Completion evidence:** D2 is complete.\n\n**Deliberate later-phase exclusions:** none.\n\nTasks:\n- T2 Implement the second phase.\n";
+
     #[test]
     fn session_ids_are_read_from_provider_events() {
         assert_eq!(
@@ -1572,7 +2957,7 @@ mod tests {
                 &effort,
                 "reconcile",
                 ArtifactKind::ReconciledDiscovery,
-                "ready".into(),
+                "ready-conditional".into(),
                 "IMPLEMENTATION_READY".into(),
                 vec![],
                 build_provenance("test", orchestrate_guides::BUILD),
@@ -1816,7 +3201,7 @@ mod tests {
             )
             .unwrap();
         let build = store.phase_dir(&effort, "build").unwrap();
-        fs::write(build.join("implementation-plan.md"), "# Plan\n").unwrap();
+        fs::write(build.join("implementation-plan.md"), DETAILED_PLAN).unwrap();
         fs::write(
             build.join("config.toml"),
             "schema_version = 2\n[worker]\nadapter = \"codex\"\n[reviewer]\nadapter = \"cursor\"\n",
@@ -1855,9 +3240,8 @@ mod tests {
         git_ok(&repo, &["commit", "-m", "advance before build"]);
         let expected_start = git(&repo, ["rev-parse", "HEAD"]).unwrap();
         let build_dir = store.phase_dir(&effort, "build").unwrap();
-        let config = load_config(&build_dir).unwrap();
         let plan = load_plan(&store, &effort, &build_dir).unwrap();
-        let state = initialize_state(&store, &effort, &build_dir, &config, &plan).unwrap();
+        let state = initialize_state(&store, &effort, &build_dir, &plan).unwrap();
         assert_eq!(
             state.frozen.discovery_baseline_commit,
             effort.baseline_commit
@@ -1879,10 +3263,9 @@ mod tests {
         git_ok(&repo, &["add", "."]);
         git_ok(&repo, &["commit", "-m", "unrelated history"]);
         let build_dir = store.phase_dir(&effort, "build").unwrap();
-        let config = load_config(&build_dir).unwrap();
         let plan = load_plan(&store, &effort, &build_dir).unwrap();
         assert!(
-            initialize_state(&store, &effort, &build_dir, &config, &plan)
+            initialize_state(&store, &effort, &build_dir, &plan)
                 .unwrap_err()
                 .to_string()
                 .contains("not descended from the Discovery baseline")
@@ -1936,9 +3319,8 @@ mod tests {
                 .is_empty()
         );
         let build_dir = store.phase_dir(&effort, "build").unwrap();
-        let config = load_config(&build_dir).unwrap();
         let plan = load_plan(&store, &effort, &build_dir).unwrap();
-        initialize_state(&store, &effort, &build_dir, &config, &plan).unwrap();
+        initialize_state(&store, &effort, &build_dir, &plan).unwrap();
         assert!(build_dir.join("state.json").exists());
     }
 
@@ -1946,9 +3328,8 @@ mod tests {
     fn resumed_build_does_not_repeat_the_initial_checkout_check() {
         let (store, effort, repo, _reconciled, _adoption) = prepared();
         let build_dir = store.phase_dir(&effort, "build").unwrap();
-        let config = load_config(&build_dir).unwrap();
         let plan = load_plan(&store, &effort, &build_dir).unwrap();
-        initialize_state(&store, &effort, &build_dir, &config, &plan).unwrap();
+        initialize_state(&store, &effort, &build_dir, &plan).unwrap();
         fs::write(repo.join("worker-scratch.txt"), "worker state\n").unwrap();
         fs::write(repo.join("source.txt"), "work in progress\n").unwrap();
         let host = StaleGuideHost::default();
@@ -1956,15 +3337,14 @@ mod tests {
         assert!(matches!(result, BuildResult::Blocked { .. }));
         assert_eq!(host.invocations.lock().unwrap().len(), 1);
     }
-    /// Each role must be driven through its own configured adapter, not a shared default.
+    /// Each role must be driven through its own effective adapter, not a shared
+    /// default and not a superseded config version.
     fn assert_role_adapter(invocation: &Invocation) {
-        let config: BuildConfig =
-            toml::from_str(&fs::read_to_string(invocation.build_dir.join("config.toml")).unwrap())
-                .unwrap();
+        let config = effective_config(&invocation.build_dir).unwrap();
         let expected = if invocation.role == "worker" {
-            &config.worker.adapter
+            &config.config.worker.adapter
         } else {
-            &config.reviewer.adapter
+            &config.config.reviewer.adapter
         };
         assert_eq!(
             &invocation.adapter, expected,
@@ -2067,17 +3447,21 @@ mod tests {
         RepeatedCorrections,
         Remedy,
         ExternalRequirement,
+        SecondPhaseExternalRequirement,
         FailedBeforeAcceptance,
         AcceptedButIncomplete,
         InterruptedTwice,
         Uncertain,
         InvalidReview,
         NeverUnblocked,
+        AlwaysBlockedAudit,
+        BlockedAuditThenNewEvidence,
     }
 
     struct ScenarioHost {
         scenario: Scenario,
         calls: Mutex<Vec<String>>,
+        adapters: Mutex<Vec<String>>,
     }
 
     impl ScenarioHost {
@@ -2085,15 +3469,45 @@ mod tests {
             Self {
                 scenario,
                 calls: Mutex::new(Vec::new()),
+                adapters: Mutex::new(Vec::new()),
             }
         }
 
         fn call_count(&self, kind: &str) -> usize {
+            let prefix = format!("{kind}:");
             self.calls
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|call| call.as_str() == kind)
+                .filter(|call| call.starts_with(&prefix))
+                .count()
+        }
+
+        /// The adapter each invocation of one role was driven through.
+        fn adapters(&self, kind: &str) -> Vec<String> {
+            let prefix = format!("{kind}:");
+            self.adapters
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|call| call.strip_prefix(&prefix).map(str::to_owned))
+                .collect()
+        }
+
+        fn call_scopes(&self, kind: &str) -> Vec<String> {
+            let prefix = format!("{kind}:");
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|call| call.strip_prefix(&prefix).map(str::to_owned))
+                .collect()
+        }
+
+        fn scoped_count(&self, kind: &str, scope: &str) -> usize {
+            self.call_scopes(kind)
+                .iter()
+                .filter(|seen| seen.as_str() == scope)
                 .count()
         }
 
@@ -2101,26 +3515,31 @@ mod tests {
             &self,
             invocation: &Invocation,
             action: &serde_json::Value,
-            pass: bool,
+            state: CoverageState,
         ) -> Result<()> {
+            let (rationale, evidence, correction) = match state {
+                CoverageState::Pass => ("ok".to_owned(), vec!["test".to_owned()], String::new()),
+                CoverageState::Fail => (
+                    "needs correction".to_owned(),
+                    vec!["test".to_owned()],
+                    "fix it".to_owned(),
+                ),
+                _ => (
+                    "live evidence was unavailable".to_owned(),
+                    Vec::new(),
+                    String::new(),
+                ),
+            };
             let assessment = AuditAssessment {
                 reconciled: serde_json::from_value(action["reconciled"].clone())?,
                 adoption: serde_json::from_value(action["adoption"].clone())?,
                 implementation: serde_json::from_value(action["implementation"].clone())?,
                 coverage: vec![Coverage {
                     requirement_id: "R-1".into(),
-                    state: if pass {
-                        CoverageState::Pass
-                    } else {
-                        CoverageState::Fail
-                    },
-                    rationale: if pass {
-                        "ok".into()
-                    } else {
-                        "needs correction".into()
-                    },
-                    evidence: vec!["test".into()],
-                    correction: if pass { String::new() } else { "fix it".into() },
+                    state,
+                    rationale,
+                    evidence,
+                    correction,
                 }],
                 assessor_context: "test".into(),
             };
@@ -2161,7 +3580,11 @@ mod tests {
             let kind = action["kind"].as_str().unwrap();
             let scope = action["scope"].as_str().unwrap();
             assert_role_adapter(invocation);
-            self.calls.lock().unwrap().push(kind.into());
+            self.calls.lock().unwrap().push(format!("{kind}:{scope}"));
+            self.adapters
+                .lock()
+                .unwrap()
+                .push(format!("{kind}:{}", invocation.adapter));
             // A recovery regression would otherwise spin forever instead of failing.
             assert!(
                 self.calls.lock().unwrap().len() <= 64,
@@ -2249,12 +3672,15 @@ mod tests {
             }
             let receipt = match kind {
                 "work" => {
-                    if self.scenario == Scenario::NeverUnblocked
+                    let blocked = self.scenario == Scenario::NeverUnblocked
                         || matches!(
                             self.scenario,
                             Scenario::Remedy | Scenario::ExternalRequirement
                         ) && count == 1
-                    {
+                        || self.scenario == Scenario::SecondPhaseExternalRequirement
+                            && scope == "D2"
+                            && self.scoped_count("work", "D2") == 1;
+                    if blocked {
                         serde_json::json!({"action_id": action["action_id"], "scope": scope, "outcome": "blocked"})
                     } else {
                         self.complete_work(invocation, kind, scope)?
@@ -2275,16 +3701,39 @@ mod tests {
                         "commit": if self.scenario == Scenario::InvalidReview { serde_json::json!("stale") } else { action["target_commit"].clone() }
                     })
                 }
-                "unblock" => serde_json::json!({
-                    "action_id": action["action_id"],
-                    "scope": scope,
-                    "outcome": if self.scenario == Scenario::ExternalRequirement { "external_requirement" } else { "remedy_available" }
-                }),
+                "unblock" => {
+                    let outcome = if matches!(
+                        self.scenario,
+                        Scenario::ExternalRequirement | Scenario::SecondPhaseExternalRequirement
+                    ) {
+                        "external_requirement"
+                    } else {
+                        "remedy_available"
+                    };
+                    fs::write(
+                        invocation.action.join("report.md"),
+                        format!(
+                            "diagnosis: the interrupted {} needs {} before it can be retried\n",
+                            action["interrupted_action"]["kind"], outcome
+                        ),
+                    )?;
+                    serde_json::json!({
+                        "action_id": action["action_id"],
+                        "scope": scope,
+                        "outcome": outcome
+                    })
+                }
                 "final_audit" => {
                     let corrections_still_required = self.scenario == Scenario::Corrections
                         && count == 1
                         || self.scenario == Scenario::RepeatedCorrections && count <= 2;
-                    self.write_assessment(invocation, &action, !corrections_still_required)?;
+                    let coverage = match self.scenario {
+                        Scenario::AlwaysBlockedAudit => CoverageState::Unknown,
+                        Scenario::BlockedAuditThenNewEvidence if count <= 2 => CoverageState::Unknown,
+                        _ if corrections_still_required => CoverageState::Fail,
+                        _ => CoverageState::Pass,
+                    };
+                    self.write_assessment(invocation, &action, coverage)?;
                     serde_json::json!({"action_id": action["action_id"], "scope": scope, "outcome": "complete"})
                 }
                 other => bail!("unexpected scenario action {other}"),
@@ -2373,6 +3822,10 @@ mod tests {
         assert!(matches!(result, BuildResult::Completed(_)));
         assert_eq!(host.call_count("unblock"), 1);
         assert_eq!(host.call_count("work"), 3);
+        // The stop and both edges of the diagnosis are journaled.
+        assert!(journal_count(&store, &_effort, "build_stopped") >= 1);
+        assert_eq!(journal_count(&store, &_effort, "build_unblock_started"), 1);
+        assert_eq!(journal_count(&store, &_effort, "build_unblock_resolved"), 1);
     }
 
     #[test]
@@ -2483,6 +3936,17 @@ mod tests {
             .into_iter()
             .filter(|entry| entry.event == event)
             .count()
+    }
+
+    fn build_state_path(store: &Store, effort: &Effort) -> PathBuf {
+        store
+            .phase_dir(effort, "build")
+            .unwrap()
+            .join("state.json")
+    }
+
+    fn read_state(store: &Store, effort: &Effort) -> BuildState {
+        read_json(&build_state_path(store, effort)).unwrap()
     }
 
     fn rewrite_state(state_path: &Path, mutate: impl Fn(&mut serde_json::Value)) {
@@ -2844,6 +4308,32 @@ mod tests {
         assert_role_guides_match_canonical(&instructions);
         assert_eq!(host.invocations.lock().unwrap().len(), 1);
 
+        // The host never reported acceptance, so the stopped action is uncertain
+        // and a bare restart must not resend it.
+        let bare = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(bare, BuildResult::Blocked { .. }));
+        assert_eq!(host.invocations.lock().unwrap().len(), 1);
+
+        // The operator confirms the provider is gone, which authorizes one
+        // distinct continuation boundary instead of a resend.
+        let state = read_state(&store, &effort);
+        let stop = state.stop.as_ref().unwrap();
+        assert_eq!(stop.trigger, StopTrigger::UncertainAcceptance);
+        let resolution = resolve(
+            &store,
+            ResolutionRequest {
+                effort: effort.id.clone(),
+                action: stop.action.id.clone(),
+                kind: ResolutionKind::EnvironmentRepair,
+                note: "provider confirmed stopped; environment repaired".into(),
+                evidence: Vec::new(),
+                confirm_not_running: true,
+                config: None,
+            },
+        )
+        .unwrap();
+        assert!(matches!(resolution, ResolutionOutcome::Resolved { .. }));
+
         let stale = b"STALE GUIDE FROM AN OLDER CLI\n";
         for kind in role_kinds() {
             fs::write(instructions.join(instruction_name(&kind)), stale).unwrap();
@@ -3035,5 +4525,1173 @@ mod tests {
                 },
             })
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase B fixtures: durable stops, guarded recovery, exact Audit attempts
+    // -----------------------------------------------------------------------
+
+    /// How a role action fails, without any of them completing.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum FailureMode {
+        NeverAccepted,
+        ExitFailure,
+        IncompleteReceipt,
+    }
+
+    struct FailureHost {
+        mode: FailureMode,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FailureHost {
+        fn new(mode: FailureMode) -> Self {
+            Self {
+                mode,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn action_ids(&self, kind: &str) -> Vec<String> {
+            let prefix = format!("{kind}:");
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|call| call.strip_prefix(&prefix).map(str::to_owned))
+                .collect()
+        }
+    }
+
+    impl HostAdapter for FailureHost {
+        fn invoke(
+            &self,
+            invocation: &Invocation,
+            observer: &mut dyn InvocationObserver,
+        ) -> Result<InvocationResult> {
+            let action: serde_json::Value = read_json(&invocation.action.join("action.json"))?;
+            let kind = action["kind"].as_str().unwrap().to_owned();
+            assert_role_adapter(invocation);
+            self.calls.lock().unwrap().push(format!(
+                "{kind}:{}",
+                action["action_id"].as_str().unwrap()
+            ));
+            assert!(
+                self.calls.lock().unwrap().len() <= 64,
+                "the controller stopped making progress"
+            );
+            match kind.as_str() {
+                "work" => match self.mode {
+                    FailureMode::NeverAccepted => {
+                        return Ok(InvocationResult {
+                            completion: InvocationCompletion::FailedBeforeAcceptance {
+                                detail: "cannot launch codex: No such file or directory".into(),
+                            },
+                        });
+                    }
+                    FailureMode::ExitFailure => {
+                        observer.accepted()?;
+                        observer.session_id("worker-session")?;
+                        return Ok(InvocationResult {
+                            completion: InvocationCompletion::AcceptedButIncomplete {
+                                detail: "provider exited with 1".into(),
+                            },
+                        });
+                    }
+                    FailureMode::IncompleteReceipt => {
+                        observer.accepted()?;
+                        observer.session_id("worker-session")?;
+                        write_bytes_sync(
+                            &invocation.action.join("result.json"),
+                            &serde_json::to_vec(&serde_json::json!({
+                                "action_id": action["action_id"],
+                                "scope": action["scope"],
+                                "outcome": "incomplete"
+                            }))?,
+                        )?;
+                    }
+                },
+                "unblock" => {
+                    fs::write(
+                        invocation.action.join("report.md"),
+                        "diagnosis: the interrupted role can resume once the provider launches\n",
+                    )?;
+                    write_bytes_sync(
+                        &invocation.action.join("result.json"),
+                        &serde_json::to_vec(&serde_json::json!({
+                            "action_id": action["action_id"],
+                            "scope": action["scope"],
+                            "outcome": "remedy_available"
+                        }))?,
+                    )?;
+                }
+                other => bail!("unexpected failure-host action {other}"),
+            }
+            Ok(InvocationResult {
+                completion: InvocationCompletion::Completed,
+            })
+        }
+    }
+
+    fn stop_of(store: &Store, effort: &Effort) -> StopRecord {
+        read_state(store, effort)
+            .stop
+            .expect("the Build should hold a durable stop")
+    }
+
+    /// A resolution request naming the current stopped action.
+    fn resolve_stop(
+        store: &Store,
+        effort: &Effort,
+        kind: ResolutionKind,
+        note: &str,
+        confirm_not_running: bool,
+        config: Option<PathBuf>,
+        evidence: Vec<PathBuf>,
+    ) -> Result<ResolutionOutcome> {
+        let action = stop_of(store, effort).action.id;
+        resolve_action(
+            store,
+            effort,
+            &action,
+            kind,
+            note,
+            confirm_not_running,
+            config,
+            evidence,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_action(
+        store: &Store,
+        effort: &Effort,
+        action: &str,
+        kind: ResolutionKind,
+        note: &str,
+        confirm_not_running: bool,
+        config: Option<PathBuf>,
+        evidence: Vec<PathBuf>,
+    ) -> Result<ResolutionOutcome> {
+        resolve(
+            store,
+            ResolutionRequest {
+                effort: effort.id.clone(),
+                action: action.into(),
+                kind,
+                note: note.into(),
+                evidence,
+                confirm_not_running,
+                config,
+            },
+        )
+    }
+
+    fn resolution_files(store: &Store, effort: &Effort) -> Vec<PathBuf> {
+        let dir = store
+            .phase_dir(effort, "build")
+            .unwrap()
+            .join(RESOLUTIONS_DIR);
+        if !dir.is_dir() {
+            return Vec::new();
+        }
+        let mut paths = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn process_failures_stop_with_typed_durable_records() {
+        for (mode, action_failure) in [
+            (FailureMode::NeverAccepted, StopTrigger::SpawnFailure),
+            (FailureMode::ExitFailure, StopTrigger::ProviderExecutionFailure),
+            (
+                FailureMode::IncompleteReceipt,
+                StopTrigger::IncompleteWork,
+            ),
+        ] {
+            let (store, effort, repo, _reconciled, _adoption) = prepared();
+            let host = FailureHost::new(mode);
+            let result = run_with_adapter(&store, request(&repo), &host).unwrap();
+            assert!(
+                matches!(result, BuildResult::Blocked { .. }),
+                "{mode:?} did not stop"
+            );
+            let state = read_state(&store, &effort);
+            let stop = state
+                .stop
+                .as_ref()
+                .unwrap_or_else(|| panic!("{mode:?} left no durable stop"));
+            assert_eq!(stop.trigger, StopTrigger::RecoveryExhausted);
+            assert_eq!(stop.action_failure, Some(action_failure.clone()));
+            assert!(
+                stop.recovery_remaining.is_empty(),
+                "{mode:?} still claims recovery: {:?}",
+                stop.recovery_remaining
+            );
+            // Every attempt was a distinct action; no uncertain action was resent.
+            let attempts = host.action_ids("work");
+            assert_eq!(attempts.len(), 6, "{mode:?}");
+            let distinct = attempts.iter().collect::<HashSet<_>>();
+            assert_eq!(distinct.len(), attempts.len(), "{mode:?} resent an action");
+            assert_eq!(host.action_ids("unblock").len(), 1, "{mode:?}");
+            assert_eq!(
+                journal_count(&store, &effort, "build_stopped"),
+                state.stop_history.len()
+            );
+            // The first record is the one the ladder wrote before diagnosing.
+            assert_eq!(state.stop_history[0].trigger, StopTrigger::RecoveryExhausted);
+            assert_eq!(state.stop_history[0].action_failure, Some(action_failure));
+            assert!(stop.process_completion.contains("provider"));
+        }
+    }
+
+    #[test]
+    fn frozen_input_changes_record_a_stop_instead_of_a_bare_error() {
+        for (name, suffix) in [
+            ("plan.json", "\n"),
+            ("config.toml", "\n# edited after execution began\n"),
+            ("implementation-plan.md", "\n# edited after execution began\n"),
+        ] {
+            let (store, effort, repo, _reconciled, _adoption) = prepared();
+            let build_dir = store.phase_dir(&effort, "build").unwrap();
+            let plan = load_plan(&store, &effort, &build_dir).unwrap();
+            let state = initialize_state(&store, &effort, &build_dir, &plan).unwrap();
+            let before = read_state(&store, &effort);
+            let input = build_dir.join(name);
+            let mut bytes = fs::read(&input).unwrap();
+            bytes.extend_from_slice(suffix.as_bytes());
+            fs::write(&input, bytes).unwrap();
+
+            let host = ScenarioHost::new(Scenario::Basic);
+            let result = run_with_adapter(&store, request(&repo), &host).unwrap();
+            let BuildResult::Blocked { trigger, .. } = result else {
+                panic!("{name} did not stop the Build")
+            };
+            assert_eq!(trigger.as_deref(), Some("frozen_input_mismatch"), "{name}");
+            assert_eq!(host.call_count("work"), 0, "{name} dispatched a role");
+            let after = read_state(&store, &effort);
+            assert_eq!(after.action.id, before.action.id, "{name}");
+            assert_eq!(after.phase_index, before.phase_index, "{name}");
+            assert_eq!(after.frozen.reconciled, before.frozen.reconciled, "{name}");
+            let stop = after.stop.clone().unwrap();
+            assert_eq!(stop.trigger, StopTrigger::FrozenInputMismatch);
+            assert_eq!(state.action.id, before.action.id);
+
+            // A frozen input that changed in place is not resolvable either.
+            let error = resolve_action(
+                &store,
+                &effort,
+                &stop.action.id,
+                ResolutionKind::EnvironmentRepair,
+                "repair the environment",
+                false,
+                None,
+                Vec::new(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("cannot resolve"), "{name}: {error:#}");
+            assert!(resolution_files(&store, &effort).is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_blocked_audit_stops_on_the_exact_unresolved_requirements() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::AlwaysBlockedAudit);
+        let result = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(result, BuildResult::Blocked { .. }));
+        // One Unblock diagnosis and no more than two completed Audit attempts.
+        assert_eq!(host.call_count("final_audit"), 2);
+        assert_eq!(host.call_count("unblock"), 1);
+        assert_eq!(artifact_count(&store, &effort, ArtifactKind::Audit), 2);
+
+        let state = read_state(&store, &effort);
+        let stop = state.stop.as_ref().unwrap();
+        assert_eq!(stop.trigger, StopTrigger::AuditBlocked);
+        assert_eq!(stop.unresolved_requirement_ids, vec!["R-1".to_owned()]);
+        assert_eq!(state.current_audit, stop.audit);
+        let first = state
+            .stop_history
+            .iter()
+            .find(|record| record.trigger == StopTrigger::AuditBlocked)
+            .unwrap();
+        assert_ne!(first.audit, stop.audit, "the second attempt reused the first");
+        assert_eq!(first.unresolved_requirement_ids, vec!["R-1".to_owned()]);
+
+        // R-041: the formal truth table is unchanged — unknown coverage is BLOCKED.
+        let (_, report): (_, orchestrate_contracts::AuditReport) =
+            store.load_json(&effort, stop.audit.as_ref().unwrap(), "audit.json").unwrap();
+        assert_eq!(report.verdict, Verdict::Blocked);
+    }
+
+    #[test]
+    fn resolution_resumes_the_interrupted_scope_and_dispatches_nothing() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let stopped = stop_of(&store, &effort);
+        assert_eq!(stopped.trigger, StopTrigger::ExternalRequirement);
+        let host_calls = host.call_count("work");
+        // Partial work in the checkout is surfaced by the resolution, not discarded.
+        fs::write(repo.join("partial-work.txt"), "unfinished attempt\n").unwrap();
+
+        let outcome = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "the missing deployment access was granted",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        let ResolutionOutcome::Resolved {
+            resolution,
+            stopped_action,
+            continuation_action,
+            continuation_kind,
+            ..
+        } = outcome
+        else {
+            panic!("environment repair was refused")
+        };
+        // Resolution is records and transitions only: no provider action ran.
+        assert_eq!(host.call_count("work"), host_calls);
+        assert_eq!(stopped_action, stopped.action.id);
+        assert_eq!(continuation_kind, "work");
+
+        let record: ResolutionRecord = read_json(&resolution).unwrap();
+        assert_eq!(record.binding.action.id, stopped.action.id);
+        assert_eq!(record.binding.trigger, StopTrigger::ExternalRequirement);
+        assert_eq!(record.binding.reconciled, stopped_action_reconciled(&store, &effort));
+        assert_eq!(record.binding.plan_digest, read_state(&store, &effort).frozen.plan_digest);
+        assert_eq!(record.binding.detailed_plan_digest, read_state(&store, &effort).frozen.detailed_plan_digest);
+        assert_eq!(record.binding.config_digest, read_state(&store, &effort).frozen.config_digest);
+        assert_eq!(record.binding.head_commit, git(&repo, ["rev-parse", "HEAD"]).unwrap());
+        assert!(
+            record.binding.checkout_status.contains("partial-work.txt"),
+            "dirty work was not surfaced: {}",
+            record.binding.checkout_status
+        );
+        assert!(repo.join("partial-work.txt").exists());
+        assert_eq!(record.transition.as_ref().unwrap().governed_action, continuation_action);
+        assert!(record.evidence.is_empty());
+
+        let state = read_state(&store, &effort);
+        assert!(state.stop.is_none());
+        assert_eq!(state.applied_resolution_id.as_deref(), Some(record.resolution_id.as_str()));
+        assert_eq!(state.action.id, continuation_action);
+        assert_eq!(state.action.scope, "D2");
+        assert!(state.interrupted.is_none());
+
+        // The next Build resumes the interrupted scope with the accepted phase and
+        // its session retained, then finishes normally.
+        let resumed = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(resumed, BuildResult::Completed(_)));
+        assert_eq!(host.call_scopes("work"), vec!["D1", "D2", "D2"]);
+        assert_eq!(
+            host.adapters("work").len(),
+            3,
+            "the continuation was not the only resumed action"
+        );
+        assert_eq!(state.phase_index, 1);
+        assert_no_build_files_leaked(&repo);
+    }
+
+    fn stopped_action_reconciled(store: &Store, effort: &Effort) -> ArtifactRef {
+        read_state(store, effort).frozen.reconciled
+    }
+
+    #[test]
+    fn duplicate_resolutions_are_idempotent_and_conflicts_are_stale() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let stopped_action = stop_of(&store, &effort).action.id;
+        let first = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::ExistingAuthorityClarification,
+            "the role already had authority for this phase",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        let ResolutionOutcome::Resolved { resolution_id, continuation_action, .. } = &first else {
+            panic!("clarification was refused")
+        };
+        let after_first = fs::read(build_state_path(&store, &effort)).unwrap();
+        assert_eq!(resolution_files(&store, &effort).len(), 1);
+        assert_eq!(journal_count(&store, &effort, "build_resolved"), 1);
+
+        // An identical submission reuses the record and changes nothing.
+        let repeat = resolve_action(
+            &store,
+            &effort,
+            &stopped_action,
+            ResolutionKind::ExistingAuthorityClarification,
+            "the role already had authority for this phase",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        let ResolutionOutcome::Resolved { resolution_id: repeat_id, continuation_action: repeat_action, .. } = &repeat else {
+            panic!("repeat was refused")
+        };
+        assert_eq!(repeat_id, resolution_id);
+        assert_eq!(repeat_action, continuation_action);
+        assert_eq!(resolution_files(&store, &effort).len(), 1);
+        assert_eq!(journal_count(&store, &effort, "build_resolved"), 1);
+        assert_eq!(fs::read(build_state_path(&store, &effort)).unwrap(), after_first);
+
+        // A different submission for an already-resolved stop is stale.
+        let error = resolve_action(
+            &store,
+            &effort,
+            &stopped_action,
+            ResolutionKind::EnvironmentRepair,
+            "a different intervention",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("already resolved"),
+            "{error:#}"
+        );
+        assert_eq!(resolution_files(&store, &effort).len(), 1);
+        assert_eq!(fs::read(build_state_path(&store, &effort)).unwrap(), after_first);
+
+        // The single authorized continuation runs exactly once.
+        let resumed = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(resumed, BuildResult::Completed(_)));
+        assert_eq!(host.call_scopes("work"), vec!["D1", "D2", "D2"]);
+    }
+
+    #[test]
+    fn resolution_rejects_stale_foreign_terminal_and_unstopped_targets() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let before = fs::read(build_state_path(&store, &effort)).unwrap();
+
+        // A foreign action id names no stopped action of this effort.
+        let error = resolve(
+            &store,
+            ResolutionRequest {
+                effort: effort.id.clone(),
+                action: "act-forged".into(),
+                kind: ResolutionKind::EnvironmentRepair,
+                note: "repair".into(),
+                evidence: Vec::new(),
+                confirm_not_running: false,
+                config: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("is not the stopped action"), "{error:#}");
+        assert_eq!(fs::read(build_state_path(&store, &effort)).unwrap(), before);
+        assert!(resolution_files(&store, &effort).is_empty());
+
+        // A live controller lock refuses the resolution outright.
+        let lock = store.project_dir(&store.project_for(&effort).unwrap()).join(".build-controller.lock");
+        fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
+        let error = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "repair",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("another Build driver"), "{error:#}");
+        fs::remove_file(&lock).unwrap();
+
+        // An empty note is not a recorded intervention.
+        let error = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "   ",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("requires a note"), "{error:#}");
+        assert_eq!(fs::read(build_state_path(&store, &effort)).unwrap(), before);
+
+        // An unstopped Build has nothing to resolve.
+        let (fresh_store, fresh_effort, _fresh_repo, _reconciled, _adoption) = prepared();
+        let error = resolve(
+            &fresh_store,
+            ResolutionRequest {
+                effort: fresh_effort.id.clone(),
+                action: "act-none".into(),
+                kind: ResolutionKind::EnvironmentRepair,
+                note: "repair".into(),
+                evidence: Vec::new(),
+                confirm_not_running: false,
+                config: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("no Build state exists"), "{error:#}");
+
+        // A terminal Build cannot be resolved.
+        let (done_store, done_effort, done_repo, _r, _a) = prepared();
+        let done_host = ScenarioHost::new(Scenario::Basic);
+        assert!(matches!(
+            run_with_adapter(&done_store, request(&done_repo), &done_host).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let error = resolve(
+            &done_store,
+            ResolutionRequest {
+                effort: done_effort.id.clone(),
+                action: "act-none".into(),
+                kind: ResolutionKind::EnvironmentRepair,
+                note: "repair".into(),
+                evidence: Vec::new(),
+                confirm_not_running: false,
+                config: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("already completed"), "{error:#}");
+        assert!(resolution_files(&done_store, &done_effort).is_empty());
+    }
+
+    #[test]
+    fn in_flight_work_needs_a_recorded_confirmation_before_continuation() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::Uncertain);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let stopped = stop_of(&store, &effort);
+        assert_eq!(stopped.trigger, StopTrigger::UncertainAcceptance);
+        assert_eq!(stopped.process_completion, "accepted; provider completion is uncertain");
+        let before = fs::read(build_state_path(&store, &effort)).unwrap();
+        let uncertain_id = stopped.action.id.clone();
+        let action_dir = store.phase_dir(&effort, "build").unwrap().join("artifacts").join(&uncertain_id);
+        assert!(action_dir.is_dir());
+
+        // Without a recorded confirmation the uncertain action blocks resolution.
+        let error = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "the provider is gone",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("confirm the provider"), "{error:#}");
+        assert_eq!(fs::read(build_state_path(&store, &effort)).unwrap(), before);
+        assert!(resolution_files(&store, &effort).is_empty());
+
+        let outcome = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "the provider is gone",
+            true,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        let ResolutionOutcome::Resolved {
+            resolution,
+            continuation_action,
+            ..
+        } = outcome
+        else {
+            panic!("confirmed repair was refused")
+        };
+        let record: ResolutionRecord = read_json(&resolution).unwrap();
+        assert!(record.binding.in_flight_confirmation);
+        // The continuation is a distinct boundary, not a resend of the old action.
+        assert_ne!(continuation_action, uncertain_id);
+        assert!(action_dir.is_dir(), "the uncertain action's artifacts were discarded");
+        let state = read_state(&store, &effort);
+        assert_eq!(state.stop_history.len(), 1);
+        assert_eq!(state.stop_history[0].action.id, uncertain_id);
+
+        let resumed = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(resumed, BuildResult::Completed(_)));
+        assert_eq!(host.call_count("work"), 3);
+        assert_eq!(host.call_scopes("work"), vec!["D1", "D1", "D2"]);
+    }
+
+    #[test]
+    fn authority_changes_are_refused_with_successor_guidance_and_leave_state_alone() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let before = fs::read(build_state_path(&store, &effort)).unwrap();
+        let host_calls = host.call_count("work");
+
+        let outcome = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::AuthorityChange,
+            "R-003 should not require a typed stop record",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        let ResolutionOutcome::Refused {
+            resolution,
+            successor_guidance,
+            reason,
+            ..
+        } = outcome
+        else {
+            panic!("an authority amendment was accepted")
+        };
+        assert!(reason.contains("cannot amend"));
+        assert!(successor_guidance.contains("Discovery"));
+        assert!(successor_guidance.contains("Reconcile"));
+        assert!(successor_guidance.contains("successor Build"));
+        let record: ResolutionRecord = read_json(&resolution).unwrap();
+        assert_eq!(record.status, ResolutionStatus::Refused);
+        assert!(record.transition.is_none());
+        // Execution state is untouched and no continuation was authorized.
+        assert_eq!(fs::read(build_state_path(&store, &effort)).unwrap(), before);
+        assert_eq!(host.call_count("work"), host_calls);
+        assert_eq!(journal_count(&store, &effort, "build_resolution_refused"), 1);
+        // A later Build still refuses to progress the old action.
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        assert_eq!(host.call_count("work"), host_calls);
+    }
+
+    #[test]
+    fn new_evidence_publishes_a_distinct_audit_at_the_unchanged_implementation() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::BlockedAuditThenNewEvidence);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        assert_eq!(host.call_count("final_audit"), 2);
+        assert_eq!(host.call_count("unblock"), 1);
+        let stopped = stop_of(&store, &effort);
+        assert_eq!(stopped.trigger, StopTrigger::AuditBlocked);
+        let blocked_audit = stopped.audit.clone().unwrap();
+        let implementation = read_state(&store, &effort).implementation.clone().unwrap();
+
+        let evidence = temp("new-evidence");
+        fs::write(evidence.join("deployment.txt"), "live deployment verified\n").unwrap();
+        let evidence_file = evidence.join("deployment.txt");
+        let outcome = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::NewVerificationEvidence,
+            "live deployment evidence is now available",
+            false,
+            None,
+            vec![evidence_file.clone()],
+        )
+        .unwrap();
+        let ResolutionOutcome::Resolved {
+            resolution,
+            continuation_action,
+            continuation_kind,
+            ..
+        } = outcome
+        else {
+            panic!("new evidence was refused")
+        };
+        assert_eq!(continuation_kind, "final_audit");
+        let record: ResolutionRecord = read_json(&resolution).unwrap();
+        assert_eq!(continuation_action, record.transition.as_ref().unwrap().governed_action);
+        assert_eq!(record.evidence.len(), 1);
+        assert_eq!(record.evidence[0].path, evidence_file.to_string_lossy());
+        assert_eq!(record.evidence[0].sha256, digest_bytes(&fs::read(&evidence_file).unwrap()));
+
+        let resumed = run_with_adapter(&store, request(&repo), &host).unwrap();
+        let BuildResult::Completed(done) = resumed else {
+            panic!("the new evidence did not produce a Build verdict")
+        };
+        assert_eq!(host.call_count("final_audit"), 3);
+        assert_eq!(artifact_count(&store, &effort, ArtifactKind::Audit), 3);
+        // The new attempt is at the same implementation and the old Audit survives.
+        assert_eq!(done.implementation, implementation);
+        assert_ne!(done.audit, blocked_audit);
+        let (_, old_report): (_, orchestrate_contracts::AuditReport) =
+            store.load_json(&effort, &blocked_audit, "audit.json").unwrap();
+        assert_eq!(old_report.verdict, Verdict::Blocked);
+        assert_eq!(old_report.assessment.implementation, implementation);
+        let (_, new_report): (_, orchestrate_contracts::AuditReport) =
+            store.load_json(&effort, &done.audit, "audit.json").unwrap();
+        assert_eq!(new_report.verdict, Verdict::Pass);
+        assert_eq!(new_report.assessment.implementation, implementation);
+
+        // The new attempt's packet carries the recorded evidence context.
+        let new_packet: serde_json::Value = read_json(
+            &store
+                .phase_dir(&effort, "build")
+                .unwrap()
+                .join("artifacts")
+                .join(&record.transition.as_ref().unwrap().governed_action)
+                .join("action.json"),
+        )
+        .unwrap();
+        assert_eq!(new_packet["resolution_kind"], "new_verification_evidence");
+        assert_eq!(new_packet["resolution_evidence"][0]["sha256"], record.evidence[0].sha256);
+        assert_eq!(new_packet["current_audit"], serde_json::json!(blocked_audit));
+    }
+
+    #[test]
+    fn new_evidence_is_refused_outside_a_blocked_final_audit() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let before = fs::read(build_state_path(&store, &effort)).unwrap();
+        let error = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::NewVerificationEvidence,
+            "live evidence",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("final-scope Audit"),
+            "{error:#}"
+        );
+        assert_eq!(fs::read(build_state_path(&store, &effort)).unwrap(), before);
+        assert!(resolution_files(&store, &effort).is_empty());
+    }
+
+    #[test]
+    fn an_interrupted_record_before_state_resolution_takes_effect_exactly_once() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let before = fs::read(build_state_path(&store, &effort)).unwrap();
+        let overlay = temp("overlay");
+        fs::write(
+            overlay.join("config.toml"),
+            "schema_version = 2\n[worker]\nadapter = \"cursor\"\n[reviewer]\nadapter = \"codex\"\n",
+        )
+        .unwrap();
+
+        let outcome = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "the worker environment was repaired",
+            false,
+            Some(overlay.join("config.toml")),
+            Vec::new(),
+        )
+        .unwrap();
+        let ResolutionOutcome::Resolved { continuation_action, .. } = &outcome else {
+            panic!("repair was refused")
+        };
+        let continuation_action = continuation_action.clone();
+
+        // Simulate dying after the record was written but before its state save.
+        write_bytes_sync(&build_state_path(&store, &effort), &before).unwrap();
+        let recovered = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(recovered, BuildResult::Completed(_)));
+
+        let state = read_state(&store, &effort);
+        assert!(state.applied_resolution_id.is_some());
+        assert_eq!(journal_count(&store, &effort, "build_resolved"), 1);
+        // The config overlay was published once, not once per application.
+        let history = store.phase_dir(&effort, "build").unwrap().join(CONFIG_HISTORY_DIR);
+        assert_eq!(fs::read_dir(history).unwrap().count(), 1);
+        assert!(state.action.id != continuation_action || state.terminal.is_some());
+        assert_eq!(host.call_scopes("work"), vec!["D1", "D2", "D2"]);
+    }
+
+    #[test]
+    fn config_overlays_are_versioned_and_govern_only_future_actions() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let original_config = fs::read(build_dir.join("config.toml")).unwrap();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        assert_eq!(host.adapters("work"), vec!["codex", "codex"]);
+
+        // A config overlay outside an environment repair is not a resolution path.
+        let overlay = temp("overlay");
+        fs::write(
+            overlay.join("config.toml"),
+            "schema_version = 2\n[worker]\nadapter = \"cursor\"\n[reviewer]\nadapter = \"codex\"\n",
+        )
+        .unwrap();
+        let error = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::ExistingAuthorityClarification,
+            "clarified",
+            false,
+            Some(overlay.join("config.toml")),
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("environment_repair"),
+            "{error:#}"
+        );
+
+        // A malformed overlay is rejected before anything is recorded.
+        fs::write(overlay.join("bad.toml"), "schema_version = 9\n").unwrap();
+        let error = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "repaired",
+            false,
+            Some(overlay.join("bad.toml")),
+            Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("valid Build config") || error.to_string().contains("unsupported"), "{error:#}");
+        assert!(resolution_files(&store, &effort).is_empty());
+
+        let outcome = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "the worker adapter moved to cursor",
+            false,
+            Some(overlay.join("config.toml")),
+            Vec::new(),
+        )
+        .unwrap();
+        let ResolutionOutcome::Resolved { resolution_id, continuation_action, config_version, .. } = &outcome else {
+            panic!("overlay repair was refused")
+        };
+        assert_eq!(*config_version, Some(2));
+
+        // The original config bytes and frozen digest are untouched.
+        assert_eq!(fs::read(build_dir.join("config.toml")).unwrap(), original_config);
+        let state = read_state(&store, &effort);
+        assert_eq!(state.frozen.config_digest, digest_bytes(&original_config));
+        let effective = effective_config(&build_dir).unwrap();
+        assert_eq!(effective.version, 2);
+        assert_eq!(effective.config.worker.adapter, "cursor");
+        let record: ResolutionRecord = read_json(&resolution_files(&store, &effort)[0]).unwrap();
+        let overlay_record = record.config_overlay.as_ref().unwrap();
+        assert_eq!(overlay_record.version, 2);
+        assert_eq!(overlay_record.resolution_id, *resolution_id);
+        assert_eq!(overlay_record.first_action_id, *continuation_action);
+        assert!(overlay_record.first_action_id == read_state(&store, &effort).action.id);
+
+        // Prior records keep the settings they ran under; the continuation uses the overlay.
+        let stopped_action = record.binding.action.id.clone();
+        let prior_packet: serde_json::Value = read_json(
+            &build_dir.join("artifacts").join(&stopped_action).join("action.json"),
+        )
+        .unwrap();
+        assert_eq!(prior_packet["config_version"], 1);
+
+        let resumed = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(resumed, BuildResult::Completed(_)));
+        assert_eq!(host.adapters("work"), vec!["codex", "codex", "cursor"]);
+        let continuation_packet: serde_json::Value = read_json(
+            &build_dir.join("artifacts").join(continuation_action).join("action.json"),
+        )
+        .unwrap();
+        assert_eq!(continuation_packet["config_version"], 2);
+    }
+
+    #[test]
+    fn state_v3_migration_preserves_original_bytes_and_lineage() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let modern = read_state(&store, &effort);
+        assert_eq!(modern.phase_index, 1, "the first phase should be accepted");
+        let accepted_commit = git(&repo, ["rev-parse", "HEAD"]).unwrap();
+
+        // Rewrite the state as the pre-migration schema: the same version without
+        // any of the additive stop/resolution fields.
+        let state_path = build_state_path(&store, &effort);
+        let mut legacy: serde_json::Value = read_json(&state_path).unwrap();
+        for field in ["migration_version", "stop", "stop_history", "current_audit", "applied_resolution_id"] {
+            legacy.as_object_mut().unwrap().remove(field);
+        }
+        legacy["action"].as_object_mut().unwrap().remove("resolution_id");
+        let legacy_bytes = serde_json::to_vec_pretty(&legacy).unwrap();
+        write_bytes_sync(&state_path, &legacy_bytes).unwrap();
+
+        let blocked = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(blocked, BuildResult::Blocked { .. }));
+        // Original bytes are retained as evidence exactly once.
+        let preserved = build_dir.join("evidence").join("state-v3-original.json");
+        assert_eq!(fs::read(&preserved).unwrap(), legacy_bytes);
+        assert_eq!(journal_count(&store, &effort, "build_state_migrated"), 1);
+        let migrated = read_state(&store, &effort);
+        assert_eq!(migrated.migration_version, BUILD_STATE_MIGRATION);
+        assert_eq!(migrated.phase_index, modern.phase_index);
+        assert_eq!(migrated.action.id, modern.action.id);
+        assert_eq!(migrated.frozen.reconciled, modern.frozen.reconciled);
+        assert_eq!(migrated.frozen.config_digest, modern.frozen.config_digest);
+        assert_eq!(host.call_scopes("work"), vec!["D1", "D2"]);
+        assert_eq!(git(&repo, ["rev-parse", "HEAD"]).unwrap(), accepted_commit);
+
+        // The migrated Build resolves and continues without repeating accepted work.
+        let outcome = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "the missing access was supplied",
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, ResolutionOutcome::Resolved { .. }));
+        let resumed = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(resumed, BuildResult::Completed(_)));
+        assert_eq!(host.call_scopes("work"), vec!["D1", "D2", "D2"]);
+        assert_eq!(journal_count(&store, &effort, "build_state_migrated"), 1);
+    }
+
+    #[test]
+    fn a_restart_runs_the_bounded_diagnosis_a_stop_left_pending() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let plan = load_plan(&store, &effort, &build_dir).unwrap();
+        let mut state = initialize_state(&store, &effort, &build_dir, &plan).unwrap();
+        // The crash window between recording a stop and dispatching its one
+        // diagnostic turn: the diagnosis is prepared but was never accepted.
+        let stopped = state.action.clone();
+        let record = stop_record(
+            &store,
+            &effort,
+            &build_dir,
+            &state,
+            &stopped,
+            StopTrigger::PhaseBlocker,
+            Some(StopTrigger::PhaseBlocker),
+            "role reported blocked".into(),
+            recovery_remaining(&state),
+            Some(Box::new(stopped.clone())),
+        )
+        .unwrap();
+        push_stop(&store, &effort, &mut state, record).unwrap();
+        state.interrupted = Some(Box::new(state.action.clone()));
+        state.recovery.unblock_used = true;
+        state.action = new_action(
+            &build_dir,
+            ActionKind::Unblock,
+            &state.action.scope,
+            None,
+            None,
+        );
+        save_state(&build_state_path(&store, &effort), &state).unwrap();
+
+        let host = ScenarioHost::new(Scenario::NeverUnblocked);
+        let outcome = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(outcome, BuildResult::Blocked { .. }));
+        assert_eq!(host.call_count("unblock"), 1, "the diagnosis did not run");
+        assert_eq!(host.call_scopes("work"), vec!["D1", "D1", "D1"]);
+        // The bounded stop is durable and names the exhausted recovery.
+        let stopped = stop_of(&store, &effort);
+        assert_eq!(stopped.trigger, StopTrigger::RecoveryExhausted);
+        assert_eq!(stopped.action_failure, Some(StopTrigger::PhaseBlocker));
+        assert!(stopped.recovery_remaining.is_empty());
+    }
+
+    #[test]
+    fn migrated_final_scope_blocked_recovery_continues_with_new_evidence() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let host = ScenarioHost::new(Scenario::BlockedAuditThenNewEvidence);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        assert_eq!(host.call_count("final_audit"), 2);
+        let migrated_action = read_state(&store, &effort).action.id.clone();
+
+        // The same additive migration applies to a final-scope exhausted BLOCKED recovery.
+        let state_path = build_state_path(&store, &effort);
+        let mut legacy: serde_json::Value = read_json(&state_path).unwrap();
+        for field in [
+            "migration_version",
+            "stop",
+            "stop_history",
+            "current_audit",
+            "applied_resolution_id",
+        ] {
+            legacy.as_object_mut().unwrap().remove(field);
+        }
+        legacy["action"].as_object_mut().unwrap().remove("resolution_id");
+        let legacy_bytes = serde_json::to_vec_pretty(&legacy).unwrap();
+        write_bytes_sync(&state_path, &legacy_bytes).unwrap();
+
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        assert_eq!(
+            host.call_count("final_audit"),
+            2,
+            "migration dispatched a provider action"
+        );
+        assert_eq!(
+            fs::read(build_dir.join("evidence").join("state-v3-original.json")).unwrap(),
+            legacy_bytes
+        );
+        let migrated = read_state(&store, &effort);
+        assert_eq!(migrated.action.id, migrated_action);
+        assert_eq!(migrated.migration_version, BUILD_STATE_MIGRATION);
+        assert_eq!(journal_count(&store, &effort, "build_state_migrated"), 1);
+
+        let evidence = temp("migrated-evidence");
+        fs::write(evidence.join("deployment.txt"), "live deployment verified\n").unwrap();
+        let outcome = resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::NewVerificationEvidence,
+            "live deployment evidence is now available",
+            false,
+            None,
+            vec![evidence.join("deployment.txt")],
+        )
+        .unwrap();
+        assert!(matches!(outcome, ResolutionOutcome::Resolved { .. }));
+        let resumed = run_with_adapter(&store, request(&repo), &host).unwrap();
+        assert!(matches!(resumed, BuildResult::Completed(_)));
+        assert_eq!(host.call_count("final_audit"), 3);
+        assert_eq!(artifact_count(&store, &effort, ArtifactKind::Audit), 3);
+        assert_eq!(journal_count(&store, &effort, "build_state_migrated"), 1);
+    }
+
+    #[test]
+    fn standalone_audits_neither_ambigify_nor_supply_the_build_verdict() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::Basic);
+        let BuildResult::Completed(done) =
+            run_with_adapter(&store, request(&repo), &host).unwrap()
+        else {
+            panic!("Build did not complete")
+        };
+        let implementation = done.implementation.clone();
+        let (_, implementation_record): (_, orchestrate_contracts::Implementation) =
+            store.load_json(&effort, &implementation, "implementation.json").unwrap();
+        assert_eq!(implementation_record.target_commit, git(&repo, ["rev-parse", "HEAD"]).unwrap());
+
+        // A standalone Audit for the same implementation, with a different verdict.
+        let assessment = AuditAssessment {
+            reconciled: read_state(&store, &effort).frozen.reconciled,
+            adoption: read_state(&store, &effort).frozen.adoption,
+            implementation: implementation.clone(),
+            coverage: vec![Coverage {
+                requirement_id: "R-1".into(),
+                state: CoverageState::Fail,
+                rationale: "standalone assessment".into(),
+                evidence: vec!["standalone".into()],
+                correction: "standalone correction".into(),
+            }],
+            assessor_context: "standalone".into(),
+        };
+        let standalone = orchestrate_audit::finalize_audit(
+            &store,
+            &effort,
+            assessment,
+            build_provenance("audit", canonical_role_guide(&ActionKind::FinalAudit)),
+        )
+        .unwrap();
+        assert_ne!(standalone, done.audit);
+        assert_eq!(artifact_count(&store, &effort, ArtifactKind::Audit), 2);
+        let (_, standalone_report): (_, orchestrate_contracts::AuditReport) =
+            store.load_json(&effort, &standalone, "audit.json").unwrap();
+        assert_eq!(standalone_report.verdict, Verdict::ChangesRequired);
+        assert_eq!(standalone_report.assessment.implementation, implementation);
+
+        // The Build keeps its own attempt, its own verdict, and its own event.
+        let replay = run_with_adapter(&store, request(&repo), &host).unwrap();
+        let BuildResult::Completed(replayed) = replay else {
+            panic!("standalone Audit changed the Build verdict")
+        };
+        assert_eq!(replayed.audit, done.audit);
+        assert_eq!(journal_count(&store, &effort, "audit_finalized"), 2);
+        assert_eq!(host.call_count("final_audit"), 1);
+    }
+
+    #[test]
+    fn conflicting_bytes_under_one_audit_attempt_identity_are_rejected() {
+        let (store, effort, repo, _reconciled, _adoption) = prepared();
+        let host = ScenarioHost::new(Scenario::Basic);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let state = read_state(&store, &effort);
+        let audit_action = state.action.id.clone();
+
+        // A replay that would publish different bytes under the same operation
+        // identity is a conflict, not a second publication.
+        let assessment_path = store
+            .phase_dir(&effort, "build")
+            .unwrap()
+            .join("artifacts")
+            .join(&audit_action)
+            .join("assessment.json");
+        let mut assessment: serde_json::Value = read_json(&assessment_path).unwrap();
+        assessment["assessor_context"] = serde_json::json!("rewritten after publication");
+        write_bytes_sync(&assessment_path, &serde_json::to_vec(&assessment).unwrap()).unwrap();
+        rewrite_state(&build_state_path(&store, &effort), |state| {
+            state["terminal"] = serde_json::Value::Null
+        });
+
+        let replay = run_with_adapter(&store, request(&repo), &host).unwrap();
+        let BuildResult::Blocked { detail, .. } = replay else {
+            panic!("conflicting bytes were published again")
+        };
+        assert!(detail.contains("operation identity conflicts"), "{detail}");
+        assert_eq!(artifact_count(&store, &effort, ArtifactKind::Audit), 1);
+        assert_eq!(journal_count(&store, &effort, "audit_finalized"), 1);
     }
 }
