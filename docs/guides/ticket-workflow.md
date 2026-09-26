@@ -43,12 +43,12 @@ Keep the reconciled document path and effort ID.
 
 ## 4. Build
 
-Later, use `$build` to prepare the effort and detailed implementation plan. `$build` does not run
-the CLI or start the driver; explicitly authorize the exact Build CLI operation when ready.
+Later, use `$build` to prepare the ordered phases and their implementation documents. This does not
+start the driver. Explicitly authorize the exact Build launch when ready.
 
-Build runs the delivery phases, reviews, corrections, implementation registration, and the final
-Audit until it finishes or cannot safely continue automatically. A user or infrastructure need is
-one common blocker.
+After launch, Rust runs Work ↔ Review across the phases. Once every phase passes, it registers the
+exact Implementation and invokes independent Audit. Audit is distinct from phase Review, although
+the same driver coordinates both stages.
 
 That is the full ticket workflow.
 

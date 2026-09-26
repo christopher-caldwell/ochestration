@@ -1,6 +1,11 @@
-# Planned specification: Discovery and Reconcile hardening
+# Historical plan: Discovery and Reconcile hardening
 
-Status: planned; implementation and model evaluation have not started.
+Status: implemented; retained as a historical planning record.
+
+The implementation work described here has landed. Model-quality evaluation remains pending. This
+document records the original reviewed scope and should not be used as the current workflow guide.
+See the current [Discovery](../guides/discovery.md) and [Reconcile](../guides/reconcile.md) guides
+for present behavior.
 
 Prepared against commit `1ffc97370b9de4652ebc31df0c289f3273c5d691` on September 22, 2026.
 

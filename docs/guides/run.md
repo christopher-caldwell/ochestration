@@ -10,7 +10,9 @@ read-only help command is `orchestrate build prepare`.
 ```text
 Prepare → Discovery × N → Reconcile → STOP
 
-Later, explicitly: Build → done
+Later, explicitly authorized:
+
+Build → Implementation → Audit → reviewed final product
 ```
 
 ## 1. Prepare the request
@@ -164,38 +166,33 @@ For more detail, see [Reconcile](reconcile.md).
 
 ## 4. Build, then independent Audit
 
-Later, use `$build` to discuss and prepare the exact effort, Reconciled Discovery, and phase
-implementation documents. Invoking `$build` does not run a CLI command, write Build files, start or
-continue the driver, or dispatch provider work. Explicitly authorize each CLI operation. Scaffold the
-Build directory, bind the exact Reconciled artifact and ordered phase directory names in plan
-schema 4, and configure the worker/reviewer (and optional unblocker) in config schema 4. Each phase
-has a required `phase.md` and optional immediate Markdown task/context files. Only `plan.json`
-bytes are frozen by digest at initialization. Phase Markdown may be refined after a semantic stop.
-Each explicit Build launch validates the plan and documents and loads config once.
+Later, use `$build` to prepare the ordered phases and their implementation documents for the exact
+Reconciled Discovery. Preparation does not run a CLI command, start the driver, or dispatch provider
+work. See [Build and Audit](build-and-audit.md) for setup details. When ready, explicitly authorize
+the Build launch:
 
-An explicit `orchestrate build --effort "<effort>"` launch authorizes Rust to run the Work ↔ Review
-phase loop, register the exact Implementation candidate, and invoke the independent Audit stage
-automatically. No additional confirmation or orchestration command is needed before Audit. Work
-commits at the product checkpoint. Review and Audit use disposable detached checkouts. A phase
-Review passes to the next phase or, after the last phase, Implementation registration; corrections
-return to Work with the complete report. Rust derives the Audit verdict from exact requirement
-coverage: `PASS` permits reviewed completion; `CHANGES_REQUIRED` routes to final-scope Build Work,
-then a new registered Implementation and another Audit; unknown or missing coverage routes through
-one bounded Unblock detour. Technical suggestions remain advisory.
+```sh
+orchestrate build --effort "<effort>"
+```
 
-Audit also remains independently callable for eligible registered Implementations from manual or
-external work: Reconciled Discovery → Adoption → implementation → Implementation registration →
-Audit. Use the public [Audit workflow](../../crates/guides/resources/guides/audit.md); no Build
-controller run or Build state is required.
+When Build begins, Rust creates or reuses Adoption for that exact Reconciled Discovery. Each phase
+runs through Work and Review; Review corrections return to Work, and the phase advances after Review
+passes. After every phase passes, Rust registers the exact Implementation and invokes independent
+Audit automatically; no separate process or approval is needed before Audit. Audit checks that
+Implementation against the complete adopted Reconciled Discovery. If Audit requires changes, the
+same driver sends them to final-scope Build Work, registers a new Implementation, and audits it
+again.
 
-`orchestrate build status --effort "<effort>"` reports durable state only. Provider failure,
-malformed output, Git invariant failure, or interrupted execution stops for explicit reset.
-`orchestrate build reset` restores the saved commit, removes ordinary untracked files while
-preserving ignored files, and requeues the same gate. Unblock `blocked` or a repeated gate block
-stops cleanly as `stopped / blocked`; once addressed, explicitly launch `orchestrate build` again. That launch preserves a
-clean operator repair and continues the loop. Stderr carries compact transitions; stdout carries one
-JSON result. Provider sessions are optional process-local conveniences; a new launch starts fresh
-conversations from complete action packets.
+Audit can also run independently against any eligible registered Implementation, including manual
+or external work. Use the public [Audit workflow](../../crates/guides/resources/guides/audit.md) to
+select one exact Reconciled Discovery → Adoption → Implementation chain.
+
+If an operation is blocked, Rust allows one bounded Unblock detour. If that cannot resolve the
+blocker, Rust stops cleanly; address it and explicitly launch Build again. If provider failure,
+malformed output, Git invariant failure, or interruption makes execution uncertain, explicitly
+reset to the saved checkpoint before continuing. `orchestrate build status --effort <effort>` reports
+state without dispatching work, and `orchestrate build reset --effort <effort>` restores the
+checkpoint and requeues the same gate.
 
 For more detail, see [Build and Audit](build-and-audit.md).
 
@@ -216,8 +213,9 @@ Once installed:
 
 4. Review the Reconciled Discovery; Reconcile stops.
 
-5. Later, use $build to prepare. Separately authorize the exact CLI launch when ready.
-
+5. Later, use $build to prepare the phase implementation documents. Explicitly authorize the Build
+   launch when ready; Rust runs Work ↔ Review across phases, registers the exact Implementation,
+   and invokes independent Audit.
 ```
 
 Everything else in the docs is explanation or reference.

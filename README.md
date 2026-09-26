@@ -32,10 +32,9 @@ The short version is:
 
 4. Review the Reconciled Discovery. Reconcile stops here.
 
-5. Later, use `$build` to discuss and prepare the effort and detailed implementation plan. It does
-   not run the CLI or start/continue the driver. Separately authorize the exact Build CLI operation
-   when ready; the Rust driver then runs Work ↔ Review phases, registers the exact Implementation, and
-   invokes independent Audit automatically until reviewed completion or a safe stop.
+5. Later, use `$build` to prepare the ordered phases and their implementation documents. Then
+   explicitly authorize the Build launch. Rust runs Work ↔ Review across the phases, registers the
+   exact Implementation, and invokes independent Audit automatically.
 ```
 
 You normally interact through Orchestrate skills. A skill may load its current instructions from
@@ -64,7 +63,7 @@ build
 
 See the [installation guide](docs/guides/agent-installation.md) for the manual fallback.
 
-## What each phase does
+## What each stage does
 
 - **Prepare** reads the original ticket or freeform request and may ask focused questions about
   missing user intent before freezing the common input. It preserves the ticket verbatim and does
@@ -72,6 +71,8 @@ See the [installation guide](docs/guides/agent-installation.md) for the manual f
 - **Discovery** investigates the frozen repository and may ask you material questions.
 - **Reconcile** analyzes only the Discovery outputs you explicitly give it and produces the
   authoritative answer to "what are we actually going to do?"
+- **Adoption** records the exact Reconciled Discovery that Build will follow and Audit will assess
+  against.
 - **Build** runs checkpointed Work ↔ Review across ordered phases and produces an exact Implementation candidate.
 - **Audit** independently checks that exact registered Implementation against the complete binding
   Reconciled Discovery. The unattended Rust driver invokes it automatically under the Build launch

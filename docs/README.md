@@ -19,9 +19,9 @@
 - [Build reliability lessons](evaluations/build-reliability/lessons.md) — why the controller is checkpointed and historical state is not migrated.
 - [Discovery/Reconcile evaluation procedure](evaluations/discovery-reconcile/README.md) — repeatable, output-only evaluation using explicitly supplied attempts, with a separate operator rubric.
 
-## Planned changes
+## Historical design records
 
-- [Discovery and Reconcile hardening](plans/discovery-reconcile-hardening.md) — planned scope, acceptance criteria, and compatibility boundaries for four targeted fixes; implementation and model evaluation are separate steps.
+- [Discovery and Reconcile hardening](plans/discovery-reconcile-hardening.md) — original scope and acceptance criteria for implemented changes; model-quality evaluation remains pending.
 
 The CLI is the versioned product and embeds the canonical workflow guides. A skill may request a
 guide command only when the human explicitly authorizes that CLI operation. The `$build` skill is

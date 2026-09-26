@@ -30,8 +30,9 @@ build
 audit
 ```
 
-That is all you need for normal use. Work, review, final Audit, and unblock instructions are not
-skills. The Build driver loads them from the installed CLI.
+That is all you need for normal use. The standalone `audit` skill is public and installed. Work,
+Review, Unblock, and the controller's internal Audit instruction are not user-installed skills; the
+Build controller uses these guides embedded in the CLI.
 
 ## Manual fallback
 

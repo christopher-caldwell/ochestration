@@ -13,7 +13,7 @@ Adoption → Build (Work ↔ Review across ordered phases) → Implementation
 
 ## Authority and instruction ownership
 
-The prepared request and frozen user constraints establish intent. Discovery investigates; Reconcile publishes the binding contract. The detailed Build plan controls only implementation approach and ordering. Work, Review, and Audit make engineering judgments. Rust validates exact artifacts, commits, response schemas, and checkout state, then routes the fixed state machine. It does not infer engineering truth from reports.
+The prepared request and frozen user constraints establish intent. Discovery investigates; Reconcile publishes the binding contract. `plan.json` names the exact Reconciled Discovery and ordered phase directories. Phase Markdown describes implementation approach, ordering, boundaries, and task/context guidance. Rust routes work by phase but does not parse that prose. Work, Review, and Audit make engineering judgments. Rust validates exact artifacts, commits, response schemas, and checkout state, then routes the fixed state machine. It does not infer engineering truth from reports.
 
 Checked-in skills dispatch substantive work. Build is intentionally different: `$build`, readiness discussion, or preparation is not CLI authorization. The canonical human boundary is in the embedded [Build guide](../crates/guides/resources/guides/build.md). An explicit Build launch authorizes Rust to run the Work ↔ Review phase loop, register the exact Implementation candidate, and invoke independent Audit automatically; individual transitions and Audit invocation require no additional approval.
 
@@ -62,12 +62,10 @@ An explicit blocked result permits one Unblock detour in a disposable source che
 
 Phase packets include `phase.md` first, then other immediate Markdown documents in filename order. Rust does not parse their prose. Phase Markdown is not hashed and may change between a semantic stop and the next launch; the ordered machine plan remains frozen. Worker and Reviewer sessions are optional process-local adapter state; Unblock is sessionless. New Rust invocations rely on complete packets and start fresh provider conversations. The supported operating model is one person, one local machine, and one Build process at a time.
 
-Every launch records the selected native adapter config and exact argv before atomically marking state `running`. The adapters handle executable selection, native argv ordering, cwd/prompt delivery, streaming raw transport and stderr to ordinary action files, final-response/session extraction, and process exit. Rust persists parsed `result.json`, `report.md`, and Audit `assessment.json`. There are no provider callbacks, heartbeat supervision, recovery ladders, or inferred continuation sessions.
+Every launch records the selected native adapter config and exact argv before atomically marking state `running`. The adapters handle executable selection, native argv ordering, cwd/prompt delivery, streaming raw transport and stderr to ordinary action files, final-response/session extraction, and process exit. Rust persists parsed `result.json`, `report.md`, and Audit `assessment.json`.
 
 ## Artifacts and storage
 
 Adoption binds one exact Reconciled artifact. Implementation records the start and target commits/trees and names Adoption and Reconciled ancestry; it may be registered by the Build controller or through the public registration workflow. Audit publishes immutable assessment plus derived verdict. Bundle manifests hash payloads and record parent refs; the journal is diagnostic, while artifacts and Build state are authoritative. Store format and artifact schema version 6 remain independent of the breaking Build-local schemas.
 
 `orchestrate lineage` walks artifact parentage: Discovery artifacts → Reconciled Discovery → Adoption → Implementation → Audit. The Effort separately holds the original request, frozen context/constraints, and baseline. Together these provide traceability from user intent to the reviewed implementation; the original request is not an additional artifact in the lineage command’s graph.
-
-The CLI retains `build guide`, `prepare`, `scaffold`, and `status`; adds `reset`; and removes resume, preflight, cleanup, export, resolve, and authority-amendment machinery. Optional OnceOver and evidence-output protocols are removed.

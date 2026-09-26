@@ -70,4 +70,4 @@ The supported operating model is one person running one local Rust Build process
 
 The controller streams provider stdout and stderr into the action directory while the process runs, then writes parsed `result.json`, `report.md`, and Audit `assessment.json`; provider roles return a single JSON object and do not own controller evidence. Action history remains in the Build directory. Stderr carries compact gate/transition messages; stdout carries one JSON command result. A stopped result is not a completed Build.
 
-Build state schema 5 and the current plan/config versions are intentionally strict. Older versions are unsupported; start a new Build from current accepted artifacts rather than adding a migration or recovery ladder.
+Build state schema 5 and the current plan/config versions are intentionally strict. Older versions are unsupported; start a new Build from current accepted artifacts.
