@@ -448,8 +448,8 @@ pub fn validate_reconciled_discovery(reconciled: &ReconciledDiscovery) -> Result
         "reconciled Discovery needs identity, goal, problem, and a core result"
     );
     ensure!(
-        reconciled.discovery_attribution.len() >= 2,
-        "reconciled Discovery needs at least two attributed Discovery sources"
+        !reconciled.discovery_attribution.is_empty(),
+        "reconciled Discovery needs an attributed Discovery source"
     );
     ensure!(
         !reconciled.evidence_synthesis.is_empty(),

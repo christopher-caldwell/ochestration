@@ -7,12 +7,206 @@ use orchestrate_contracts::{
 use orchestrate_core::Store;
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Barrier},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+fn chat_zip(path: &Path, discovery: &str, phase: Option<&str>) {
+    let file = fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file("discovery.json", options).unwrap();
+    zip.write_all(discovery.as_bytes()).unwrap();
+    if let Some(phase) = phase {
+        zip.start_file("build/phase_01_delivery/phase.md", options)
+            .unwrap();
+        zip.write_all(phase.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+fn chat_input() -> &'static str {
+    r#"{
+      "effort": "chat-import", "request": "Add a compact status page",
+      "constraints": ["Keep the existing API"],
+      "problem": "The current status is hard to find",
+      "selected_direction": "Add a compact status page",
+      "evidence_summary": "The user chose this direction in a collaborative conversation; repository behavior was not checked.",
+      "findings": ["The user wants a compact page"],
+      "decisions": ["Keep the API stable"],
+      "product_behavior_changed": ["Status becomes visible on one page"],
+      "product_behavior_unchanged": ["Existing API behavior"],
+      "requirements": [{"id":"R-1","text":"Show status on one page","acceptance":"The page displays status"}],
+      "advisory_technical_suggestions": ["Use existing UI components"]
+    }"#
+}
+
+#[test]
+fn chat_import_stops_at_exact_single_source_reconciled_boundary() {
+    let root = temporary("chat-import-store");
+    let repo = create_repo("chat-import");
+    fs::write(repo.join("source.txt"), "new committed baseline\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "import baseline"]);
+    let baseline = git_text(&repo, &["rev-parse", "HEAD"]);
+    let bundle = temporary("chat-import-bundle").join("chat-discovery.zip");
+    let phase = "# Delivery\n\nImplement status without changing the API.\n";
+    chat_zip(&bundle, chat_input(), Some(phase));
+    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .args(["import", bundle.to_str().unwrap()])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let effort_id = result["details"]["effort"].as_str().unwrap();
+    let discovery = reference(&result, "discovery");
+    let reconciled = reference(&result, "reconciled");
+    let store = Store::open(&root).unwrap();
+    let effort = store.load_effort(effort_id).unwrap();
+    assert_eq!(effort.baseline_commit, baseline);
+    assert_eq!(effort.context.request, "Add a compact status page");
+    let (discovery_envelope, summary, _) =
+        orchestrate_discovery::load_discovery(&store, &effort, &discovery).unwrap();
+    assert_eq!(summary.baseline_commit, baseline);
+    let discovery_files = store.load_bundle(&effort, &discovery).unwrap().1;
+    let spec = String::from_utf8(discovery_files["technical-spec.md"].clone()).unwrap();
+    assert!(spec.contains("The page displays status"));
+    assert!(spec.contains("Keep the API stable"));
+    assert_eq!(discovery_envelope.provenance.host, "collaborative_chat");
+    assert_eq!(discovery_envelope.provenance.provider, None);
+    assert_eq!(discovery_envelope.provenance.model, None);
+    assert_eq!(
+        discovery_envelope.provenance.independence,
+        orchestrate_contracts::Independence::Unknown
+    );
+    let (envelope, authority): (_, ReconciledDiscovery) = store
+        .load_json(&effort, &reconciled, "reconciled-discovery.json")
+        .unwrap();
+    assert_eq!(envelope.parents, vec![discovery.clone()]);
+    assert_eq!(authority.discovery_attribution.len(), 1);
+    assert_eq!(authority.requirements.len(), 2);
+    assert_eq!(
+        authority.requirements[0].requirement.acceptance,
+        "The page displays status"
+    );
+    assert_eq!(
+        authority.requirements[0].source_refs[0].discovery_artifact_id,
+        discovery.artifact_id
+    );
+    assert!(authority.requirements[1].frozen_user_constraint);
+    assert_eq!(
+        authority.requirements[1].requirement.text,
+        "Keep the existing API"
+    );
+    assert_eq!(authority.technical_suggestions.len(), 1);
+    assert!(
+        authority.evidence_synthesis[0]
+            .evidence_summary
+            .contains("The user wants a compact page")
+    );
+    assert!(
+        authority.evidence_synthesis[0]
+            .evidence_summary
+            .contains("Keep the API stable")
+    );
+    assert!(
+        !serde_json::to_string(&authority)
+            .unwrap()
+            .contains("Implement status without changing the API")
+    );
+    assert!(
+        command_error(
+            &root,
+            &[
+                "reconcile",
+                "inputs",
+                "--effort",
+                effort_id,
+                "--discovery",
+                &discovery.artifact_id
+            ]
+        )
+        .contains("at least two")
+    );
+    let build_dir = PathBuf::from(result["details"]["build_dir"].as_str().unwrap());
+    let plan = orchestrate_build::state::load_plan(&build_dir.join("plan.json")).unwrap();
+    assert_eq!(plan.reconciled, reconciled);
+    assert_eq!(plan.phases, ["phase_01_delivery"]);
+    assert_eq!(
+        fs::read_to_string(build_dir.join("phase_01_delivery/phase.md")).unwrap(),
+        phase
+    );
+    assert!(build_dir.join("config.toml").exists());
+    assert!(!build_dir.join("state.json").exists());
+    assert!(
+        !store
+            .list_artifacts(&effort)
+            .unwrap()
+            .iter()
+            .any(|item| item.kind == ArtifactKind::Adoption)
+    );
+}
+
+#[test]
+fn chat_import_rejects_incomplete_bundle_before_creating_effort() {
+    let root = temporary("chat-import-invalid-store");
+    let repo = create_repo("chat-import-invalid");
+    let bundle = temporary("chat-import-invalid-bundle").join("chat-discovery.zip");
+    chat_zip(
+        &bundle,
+        r#"{"effort":"chat-import","request":"Do work"}"#,
+        None,
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .args(["import", bundle.to_str().unwrap()])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing field"));
+    assert!(!root.join("projects").exists());
+}
+
+#[test]
+fn chat_import_without_phases_uses_normal_build_scaffold() {
+    let root = temporary("chat-import-no-phase-store");
+    let repo = create_repo("chat-import-no-phase");
+    let bundle = temporary("chat-import-no-phase-bundle").join("chat-discovery.zip");
+    chat_zip(&bundle, chat_input(), None);
+    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .args(["import", bundle.to_str().unwrap()])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let build_dir = PathBuf::from(result["details"]["build_dir"].as_str().unwrap());
+    let reconciled = reference(&result, "reconciled");
+    let plan = orchestrate_build::state::load_plan(&build_dir.join("plan.json")).unwrap();
+    assert_eq!(plan.reconciled, reconciled);
+    assert_eq!(plan.phases, ["phase_01_foundation"]);
+    assert!(build_dir.join("phase_01_foundation/phase.md").is_file());
+    assert!(!build_dir.join("state.json").exists());
+}
 
 fn temporary(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
