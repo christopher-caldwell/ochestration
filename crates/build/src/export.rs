@@ -52,6 +52,8 @@ const ACTION_MEMBERS: &[&str] = &[
     "provider-stderr.log",
     "provider-exit.json",
     "invocation.json",
+    "output-contract.md",
+    "transport-evidence.json",
 ];
 
 /// Root files of one effort.
@@ -77,6 +79,7 @@ const BUILD_MEMBERS: &[&str] = &["state.json", "plan.json", "config.toml"];
 const CONTROLLER_DIRECTORIES: &[(&str, &str)] = &[
     ("evidence", "build/evidence"),
     ("resolutions", "build/resolutions"),
+    ("authority-amendments", "build/authority-amendments"),
     ("config-history", "build/config-history"),
     ("preflight", "build/preflight"),
 ];
@@ -165,6 +168,7 @@ struct ExpectedMember {
     /// the hash a resolution recorded for operator-supplied evidence.  Bytes
     /// that no longer match it are a change, not a copy.
     expected_sha256: Option<String>,
+    expected_bytes: Option<u64>,
     /// True for a file an immutable durable record explicitly references at a
     /// path the operator chose, which may legitimately live outside the effort.
     /// It is an exact digest-bound reference, not a traversal of the effort's
@@ -182,6 +186,7 @@ impl ExpectedMember {
             refusal: None,
             staging: false,
             expected_sha256: None,
+            expected_bytes: None,
             external_reference: false,
             detail: None,
         }
@@ -189,6 +194,11 @@ impl ExpectedMember {
 
     fn with_expected_sha256(mut self, sha256: impl Into<String>) -> Self {
         self.expected_sha256 = Some(sha256.into());
+        self
+    }
+
+    fn with_expected_bytes(mut self, bytes: u64) -> Self {
+        self.expected_bytes = Some(bytes);
         self
     }
 
@@ -422,6 +432,7 @@ fn action_obligations(
     state: Option<&BuildState>,
     published_audits: &BTreeSet<String>,
     transitioned_audits: &BTreeSet<String>,
+    accepted_report_actions: &BTreeSet<String>,
 ) -> (HashSet<String>, HashMap<String, String>) {
     let mut required: HashSet<String> = HashSet::new();
     let mut details = HashMap::new();
@@ -441,6 +452,20 @@ fn action_obligations(
         .and_then(serde_json::Value::as_str);
     let receipt = matching_receipt(action_dir);
     let stop = action_stop(state, action_id);
+    if accepted_report_actions.contains(action_id)
+        && ((kind == Some("review") && receipt.as_deref() == Some("changes_required"))
+            || (kind == Some("unblock")
+                && matches!(
+                    receipt.as_deref(),
+                    Some("remedy_available" | "external_requirement")
+                )))
+    {
+        required.insert("report.md".into());
+        details.insert(
+            "report.md".into(),
+            "the controller retained the matching accepted correction or diagnosis transition; its validated nonempty report is required evidence, so its later absence is a loss".into(),
+        );
+    }
     if completed {
         required.insert("transport.jsonl".into());
         let recorded_missing_receipt = stop.is_some_and(|stop| {
@@ -492,9 +517,8 @@ fn action_obligations(
                 _ => {
                     let failure = stop.map(|stop| {
                         format!(
-                            "the recorded {} stop says `{}`",
-                            format!("{:?}", stop.trigger),
-                            stop.receipt_validation
+                            "the recorded {:?} stop says `{}`",
+                            stop.trigger, stop.receipt_validation
                         )
                     });
                     details.insert(
@@ -513,6 +537,7 @@ fn action_obligations(
         // supplied and the requirement projection the action read.
         required.insert("instruction.md".into());
         required.insert("binding-requirements.json".into());
+        required.insert("output-contract.md".into());
         let exit_recorded = fs::read(action_dir.join("invocation.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -556,6 +581,28 @@ fn transitioned_final_audits(store: &Store, effort: &Effort) -> Result<BTreeSet<
         let from = &entry.details["from_action"];
         if from["kind"] == "final_audit"
             && let Some(action_id) = from["id"].as_str().filter(|id| safe_action_reference(id))
+        {
+            actions.insert(action_id.to_owned());
+        }
+    }
+    Ok(actions)
+}
+
+/// Actions for which a durable transition proves the controller consumed a
+/// correction/diagnosis receipt. The receipt outcome is checked alongside this
+/// set before a report is considered required.
+fn accepted_report_actions(store: &Store, effort: &Effort) -> Result<BTreeSet<String>> {
+    let mut actions = BTreeSet::new();
+    for entry in store.read_journal(effort)? {
+        if !matches!(
+            entry.event.as_str(),
+            "build_action_transition" | "build_unblock_resolved"
+        ) {
+            continue;
+        }
+        if let Some(action_id) = entry.details["from_action"]["id"]
+            .as_str()
+            .filter(|id| safe_action_reference(id))
         {
             actions.insert(action_id.to_owned());
         }
@@ -707,6 +754,7 @@ fn inventory(
         "unblock.md",
         "once-over.md",
         "final-audit.md",
+        "evidence-output.md",
     ] {
         members.push(ExpectedMember::new(
             format!("build/instructions/{name}"),
@@ -771,6 +819,13 @@ fn inventory(
     let referenced = referenced_action_ids(store, effort, state)?;
     let published_audits = published_audit_attempts(store, effort)?;
     let transitioned_audits = transitioned_final_audits(store, effort)?;
+    let mut accepted_report_actions = accepted_report_actions(store, effort)?;
+    if let Some(stop) = state.and_then(|state| state.stop.as_ref())
+        && matches!(stop.action.kind, crate::ActionKind::Unblock)
+        && matches!(stop.trigger, crate::StopTrigger::ExternalRequirement)
+    {
+        accepted_report_actions.insert(stop.action.id.clone());
+    }
     if let Some(pending) = &referenced.pending
         && !on_disk.contains(pending)
     {
@@ -806,8 +861,13 @@ fn inventory(
     }
     for action in &on_disk {
         let dir = actions_dir.join(action);
-        let (required, details) =
-            action_obligations(&dir, state, &published_audits, &transitioned_audits);
+        let (required, details) = action_obligations(
+            &dir,
+            state,
+            &published_audits,
+            &transitioned_audits,
+            &accepted_report_actions,
+        );
         for name in ACTION_MEMBERS {
             let mut member = ExpectedMember::new(
                 format!("build/artifacts/{action}/{name}"),
@@ -860,7 +920,34 @@ fn inventory(
             );
         }
     }
-    // Authority, lineage and every published bundle this effort owns.
+    // Authority-amendment refusals use the same explicit, digest-bound
+    // operator evidence contract as ordinary resolutions. Select only paths
+    // named by those immutable records.
+    for record in authority_amendment_records(build_dir)? {
+        for (index, evidence) in record.evidence.iter().enumerate() {
+            members.push(
+                ExpectedMember::new(
+                    format!(
+                        "authority-amendments/evidence/{}-{index}-{}",
+                        record.amendment_id,
+                        evidence.file_name()
+                    ),
+                    PathBuf::from(&evidence.path),
+                    true,
+                )
+                .with_expected_sha256(evidence.sha256.clone())
+                .referenced()
+                .with_detail(format!(
+                    "evidence the operator supplied for authority-amendment refusal {}; it is explicitly referenced by that immutable record",
+                    record.amendment_id
+                )),
+            );
+        }
+    }
+    // Authority, lineage and every published bundle this effort owns. The
+    // manifest is the inventory for each immutable artifact: payload paths may
+    // be nested, and the manifest's recorded hashes and sizes are the identity
+    // the archive must retain.
     for reference in store.list_artifacts(effort)? {
         let dir = store.artifact_dir(effort, &reference.artifact_id)?;
         if !contained_in(&effort_dir, &dir) {
@@ -874,22 +961,85 @@ fn inventory(
             );
             continue;
         }
-        let mut entries = fs::read_dir(&dir)?
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file())
-            .collect::<Vec<_>>();
-        entries.sort();
-        for path in entries {
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            members.push(ExpectedMember::new(
-                format!("artifacts/{}/{name}", reference.artifact_id),
-                path,
-                name == "manifest.json",
-            ));
+        let manifest_path = dir.join("manifest.json");
+        let manifest_name = format!("artifacts/{}/manifest.json", reference.artifact_id);
+        members.push(
+            ExpectedMember::new(manifest_name.clone(), manifest_path.clone(), true)
+                .with_expected_sha256(reference.digest.clone()),
+        );
+        match fs::symlink_metadata(&manifest_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => continue,
+            Err(error) if error.kind() != ErrorKind::NotFound => continue,
+            Err(_) => continue,
+            _ => {}
+        }
+        let manifest_bytes = match fs::read(&manifest_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                members.push(
+                    ExpectedMember::new(
+                        format!("artifacts/{}/.manifest-error", reference.artifact_id),
+                        manifest_path,
+                        true,
+                    )
+                    .refused(format!("cannot read published artifact manifest: {error}")),
+                );
+                continue;
+            }
+        };
+        if let Some(manifest) = members.last_mut() {
+            manifest.expected_bytes = Some(manifest_bytes.len() as u64);
+        }
+        let envelope =
+            match orchestrate_contracts::decode::<orchestrate_contracts::Envelope>(&manifest_bytes)
+                .and_then(|envelope| {
+                    orchestrate_contracts::validate_envelope(&envelope)?;
+                    Ok(envelope)
+                }) {
+                Ok(envelope)
+                    if envelope.artifact_id == reference.artifact_id
+                        && envelope.kind == reference.kind
+                        && envelope.effort_id == effort.id
+                        && digest_bytes(&manifest_bytes) == reference.digest =>
+                {
+                    envelope
+                }
+                Ok(_) => {
+                    members.push(
+                    ExpectedMember::new(
+                        format!("artifacts/{}/.manifest-error", reference.artifact_id),
+                        manifest_path,
+                        true,
+                    )
+                    .refused(
+                        "published manifest identity does not match its durable artifact reference",
+                    ),
+                );
+                    continue;
+                }
+                Err(error) => {
+                    members.push(
+                        ExpectedMember::new(
+                            format!("artifacts/{}/.manifest-error", reference.artifact_id),
+                            manifest_path,
+                            true,
+                        )
+                        .refused(format!("published artifact manifest is invalid: {error:#}")),
+                    );
+                    continue;
+                }
+            };
+        for payload in envelope.payloads {
+            let name = format!("artifacts/{}/{}", reference.artifact_id, payload.path);
+            let path = dir.join(&payload.path);
+            let mut member = ExpectedMember::new(name.clone(), path, true)
+                .with_expected_sha256(payload.sha256)
+                .with_expected_bytes(payload.bytes)
+                .with_detail("this exact nested payload path, hash and byte count are declared by the published artifact manifest");
+            if !safe_member_name(&name) {
+                member = member.refused("manifest payload path is unsafe as an archive member");
+            }
+            members.push(member);
         }
     }
     // Containment of the containing directory is established for every selected
@@ -913,6 +1063,12 @@ fn inventory(
 #[derive(Clone, Debug, serde::Deserialize)]
 struct ResolutionEvidenceView {
     resolution_id: String,
+    evidence: Vec<ResolutionEvidenceRef>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct AuthorityEvidenceView {
+    amendment_id: String,
     evidence: Vec<ResolutionEvidenceRef>,
 }
 
@@ -947,6 +1103,25 @@ fn resolution_records(build_dir: &Path) -> Result<Vec<ResolutionEvidenceView>> {
         }
     }
     records.sort_by(|left, right| left.resolution_id.cmp(&right.resolution_id));
+    Ok(records)
+}
+
+fn authority_amendment_records(build_dir: &Path) -> Result<Vec<AuthorityEvidenceView>> {
+    let dir = build_dir.join("authority-amendments");
+    let mut records = Vec::new();
+    if !dir.is_dir() {
+        return Ok(records);
+    }
+    for entry in fs::read_dir(&dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(record) = read_json::<AuthorityEvidenceView>(&path) {
+            records.push(record);
+        }
+    }
+    records.sort_by(|left, right| left.amendment_id.cmp(&right.amendment_id));
     Ok(records)
 }
 
@@ -1452,8 +1627,12 @@ pub(super) fn export_with_record_reader(
             .expected_sha256
             .as_deref()
             .is_some_and(|expected| expected != collected_digest);
+        let size_mismatch = item
+            .expected_bytes
+            .is_some_and(|expected| expected != bytes.len() as u64);
         let changed_during = changed_during_collection(before, after.as_ref(), bytes.len() as u64)
-            || digest_mismatch;
+            || digest_mismatch
+            || size_mismatch;
         let written = if changed_during {
             changed += 1;
             None
@@ -1479,6 +1658,9 @@ pub(super) fn export_with_record_reader(
                 .then(|| {
                     if digest_mismatch {
                         "this referenced evidence no longer matches the digest the durable record published for it"
+                            .to_owned()
+                    } else if size_mismatch {
+                        "this payload's byte count no longer matches the size the artifact manifest published for it"
                             .to_owned()
                     } else {
                         "the source changed while it was being collected".to_owned()

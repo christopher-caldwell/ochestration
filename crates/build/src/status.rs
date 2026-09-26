@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use orchestrate_contracts::{AuditReport, CoverageState, Verdict};
+use orchestrate_contracts::{AuditReport, Verdict};
 use orchestrate_core::{Effort, Store};
 use serde_json::json;
 
@@ -62,7 +62,7 @@ pub fn build_status(store: &Store, effort: &Effort) -> Result<serde_json::Value>
         .map(|plan| accepted_phases(&state, plan))
         .unwrap_or((0, 0, 0));
     let activity = provider_activity(&build_dir, &state);
-    let (audit_verdict, unresolved) = current_acceptance(store, effort, &state);
+    let (audit_verdict, unresolved) = current_acceptance(store, effort, &state)?;
     let controller = lock;
     Ok(json!({
         "effort": effort.id,
@@ -112,7 +112,15 @@ pub fn build_status(store: &Store, effort: &Effort) -> Result<serde_json::Value>
 fn role_json(config: &crate::RoleConfig) -> serde_json::Value {
     json!({
         "adapter": config.adapter,
+        // `model` is the native-name field retained by frozen schema v2.
+        // Schema v3 requests a provider-neutral tier through model_strength;
+        // neither field is a provider-observed effective model.
         "model": config.model,
+        "model_strength": config.model_strength,
+        "requested_model": {
+            "model_strength": config.model_strength,
+            "legacy_native_model": config.model,
+        },
         "reasoning_effort": config.reasoning_effort,
         "permission": config.permission,
         "full_access": config.permission.as_deref() == Some("full_access"),
@@ -209,28 +217,27 @@ fn current_acceptance(
     store: &Store,
     effort: &Effort,
     state: &BuildState,
-) -> (serde_json::Value, Vec<String>) {
+) -> Result<(serde_json::Value, Vec<String>)> {
     let Some(reference) = &state.current_audit else {
-        return (json!(null), Vec::new());
+        return Ok((json!(null), Vec::new()));
     };
     let report: Result<(_, AuditReport)> = store.load_json(effort, reference, "audit.json");
     match report {
         Ok((_, report)) => {
-            let unresolved = report
-                .assessment
-                .coverage
-                .iter()
-                .filter(|row| matches!(row.state, CoverageState::Unknown))
-                .map(|row| row.requirement_id.clone())
-                .collect::<Vec<_>>();
+            let unresolved = crate::unresolved_requirement_ids(
+                store,
+                effort,
+                &state.frozen.reconciled,
+                &report.assessment,
+            )?;
             let verdict = match report.verdict {
                 Verdict::Pass => "PASS",
                 Verdict::ChangesRequired => "CHANGES_REQUIRED",
                 Verdict::Blocked => "BLOCKED",
             };
-            (json!(verdict), unresolved)
+            Ok((json!(verdict), unresolved))
         }
-        Err(error) => (json!(format!("unreadable: {error}")), Vec::new()),
+        Err(error) => Ok((json!(format!("unreadable: {error}")), Vec::new())),
     }
 }
 
@@ -318,9 +325,14 @@ pub fn status_lines(store: &Store, effort: &Effort) -> Result<Vec<String>> {
         let adapter = current["configured_role"]["adapter"]
             .as_str()
             .unwrap_or("?");
-        let model = current["configured_role"]["model"]
+        let model = current["configured_role"]["model_strength"]
             .as_str()
-            .map(str::to_owned)
+            .map(|strength| format!("requested {strength} model strength"))
+            .or_else(|| {
+                current["configured_role"]["model"]
+                    .as_str()
+                    .map(|model| format!("requested native model {model}"))
+            })
             .unwrap_or_else(|| "provider default".into());
         let dispatch = serde_json::to_string(&current["dispatch"])?;
         let elapsed = current["elapsed_ms"]

@@ -102,8 +102,62 @@ pub(crate) fn program_for(adapter: &str) -> Result<&'static str> {
 pub(crate) fn resolve_executable(program: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|directory| directory.join(program))
-        .find(|candidate| candidate.is_file())
+        .flat_map(|directory| executable_candidates(&directory, program))
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn executable_candidates(directory: &Path, program: &str) -> Vec<PathBuf> {
+    let candidate = directory.join(program);
+    #[cfg(windows)]
+    {
+        if candidate.extension().is_some() {
+            return vec![candidate];
+        }
+        let extensions =
+            std::env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
+        return extensions
+            .to_string_lossy()
+            .split(';')
+            .filter(|extension| !extension.is_empty())
+            .map(|extension| directory.join(format!("{program}{extension}")))
+            .collect();
+    }
+    #[cfg(not(windows))]
+    {
+        vec![candidate]
+    }
+}
+
+fn is_executable_file(candidate: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(candidate) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(windows)]
+    {
+        candidate.extension().is_some_and(|extension| {
+            std::env::var_os("PATHEXT")
+                .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into())
+                .to_string_lossy()
+                .split(';')
+                .any(|allowed| {
+                    allowed
+                        .trim_start_matches('.')
+                        .eq_ignore_ascii_case(&extension.to_string_lossy())
+                })
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        true
+    }
 }
 
 /// The installed version, when the executable answers a bounded local

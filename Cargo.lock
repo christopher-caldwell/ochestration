@@ -292,6 +292,7 @@ dependencies = [
  "orchestrate-audit",
  "orchestrate-contracts",
  "orchestrate-core",
+ "orchestrate-discovery",
  "orchestrate-guides",
  "serde",
  "serde_json",

@@ -1107,6 +1107,21 @@ pub(crate) fn effective_config(build_dir: &Path) -> Result<EffectiveConfig> {
     Ok(effective)
 }
 
+/// Load the configuration immediately preceding a recorded overlay version.
+/// An overlay may already be on disk when resolution replay resumes after a
+/// crash, so comparing against `effective_config` would compare the new config
+/// with itself and retain sessions owned by the previous adapter.
+fn config_before_overlay(build_dir: &Path, version: u32) -> Result<BuildConfig> {
+    let mut config = load_config(build_dir)?;
+    for overlay in config_overlays(build_dir)? {
+        if overlay.version >= version {
+            break;
+        }
+        config = parse_config(&overlay.config_text)?;
+    }
+    Ok(config)
+}
+
 /// Every recorded overlay, verified against its own bytes.  A corrupt or
 /// conflicting history entry is a hard failure rather than a silent fallback.
 fn config_overlays(build_dir: &Path) -> Result<Vec<ConfigOverlay>> {
@@ -4166,6 +4181,14 @@ fn apply_resolution(
             "config overlay does not belong to resolution {}",
             record.resolution_id
         );
+        let previous_config = config_before_overlay(build_dir, overlay.version)?;
+        let next_config = parse_config(&overlay.config_text)?;
+        if previous_config.worker.adapter != next_config.worker.adapter {
+            state.sessions.worker = None;
+        }
+        if previous_config.reviewer.adapter != next_config.reviewer.adapter {
+            state.sessions.reviewer = None;
+        }
         write_immutable(
             &config_history_path(build_dir, overlay),
             &orchestrate_contracts::encode(overlay)?,
@@ -4408,10 +4431,17 @@ fn resolution_id(
 fn read_evidence(paths: &[PathBuf]) -> Result<Vec<ResolutionEvidence>> {
     let mut evidence = Vec::new();
     for path in paths {
-        let bytes = fs::read(path)
+        let selected = if path.is_absolute() {
+            path.clone()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let stable_path = fs::canonicalize(&selected)
+            .with_context(|| format!("cannot resolve resolution evidence {}", path.display()))?;
+        let bytes = fs::read(&stable_path)
             .with_context(|| format!("cannot read resolution evidence {}", path.display()))?;
         evidence.push(ResolutionEvidence {
-            path: path.to_string_lossy().into_owned(),
+            path: stable_path.to_string_lossy().into_owned(),
             sha256: digest_bytes(&bytes),
         });
     }
@@ -4826,6 +4856,7 @@ fn write_invocation_record(
         "adapter": config.adapter,
         "config_version": config_version,
         "mode": invocation_mode(action, requested_session),
+        "build_action_continuation": action.handoff.is_some(),
         "session": {
             "requested": requested_session,
             "resumed": requested_session.is_some(),
@@ -4944,9 +4975,8 @@ fn invocation_mode(action: &CurrentAction, requested_session: &Option<String>) -
         .map(|handoff| handoff.kind.as_str())
     {
         Some("replacement") => "replacement",
-        Some(_) => "resumed",
-        None if requested_session.is_some() => "resumed",
-        None => "fresh",
+        _ if requested_session.is_some() => "resumed",
+        _ => "fresh",
     }
 }
 
@@ -5544,6 +5574,30 @@ mod tests {
                 files,
             )
             .unwrap()
+    }
+
+    fn publish_finalized_discovery_with_nested_graph(
+        store: &Store,
+        effort: &Effort,
+    ) -> ArtifactRef {
+        let (run_id, workspace) = orchestrate_discovery::prepare(
+            store,
+            effort,
+            build_provenance("test", orchestrate_guides::DISCOVERY),
+        )
+        .unwrap();
+        fs::write(
+            workspace.join("technical-spec.md"),
+            "A tested discovery spec.\n",
+        )
+        .unwrap();
+        fs::create_dir_all(workspace.join("graph")).unwrap();
+        fs::write(
+            workspace.join("graph/F-1.md"),
+            "---\nid: F-1\nkind: finding\nstatus: accepted\nsources:\n  - src/lib.rs:1\nverification: inspection\n---\n# Finding\nA checked discovery fact.\n",
+        )
+        .unwrap();
+        orchestrate_discovery::finalize(store, effort, &run_id).unwrap()
     }
 
     /// Write one effort's frozen Build files, optionally declaring a predecessor.
@@ -8535,7 +8589,10 @@ mod tests {
             record.transition.as_ref().unwrap().governed_action
         );
         assert_eq!(record.evidence.len(), 1);
-        assert_eq!(record.evidence[0].path, evidence_file.to_string_lossy());
+        assert_eq!(
+            record.evidence[0].path,
+            evidence_file.canonicalize().unwrap().to_string_lossy()
+        );
         assert_eq!(
             record.evidence[0].sha256,
             digest_bytes(&fs::read(&evidence_file).unwrap())
@@ -8579,6 +8636,336 @@ mod tests {
             new_packet["current_audit"],
             serde_json::json!(blocked_audit)
         );
+    }
+
+    #[test]
+    fn relative_evidence_child_entry() {
+        let Ok(mode) = std::env::var("ORCHESTRATE_B3_CHILD_MODE") else {
+            return;
+        };
+        match mode.as_str() {
+            "accept" => {
+                let evidence = read_evidence(&[PathBuf::from("verification.md")]).unwrap();
+                fs::write(
+                    std::env::var_os("ORCHESTRATE_B3_RECORD").unwrap(),
+                    orchestrate_contracts::encode(&evidence).unwrap(),
+                )
+                .unwrap();
+            }
+            "consume" => {
+                let evidence: Vec<ResolutionEvidence> = read_json(Path::new(
+                    &std::env::var_os("ORCHESTRATE_B3_RECORD").unwrap(),
+                ))
+                .unwrap();
+                let record = &evidence[0];
+                let bytes = fs::read(&record.path).unwrap();
+                assert_eq!(bytes, b"accepted from directory A\n");
+                assert_eq!(digest_bytes(&bytes), record.sha256);
+            }
+            "resolve" => {
+                let store = Store::open(Path::new(
+                    &std::env::var_os("ORCHESTRATE_B3_STORE").unwrap(),
+                ))
+                .unwrap();
+                let effort = store
+                    .load_effort(&std::env::var("ORCHESTRATE_B3_EFFORT").unwrap())
+                    .unwrap();
+                let state = read_state(&store, &effort);
+                let outcome = resolve(
+                    &store,
+                    ResolutionRequest {
+                        effort: effort.id,
+                        action: state.stop.unwrap().action.id,
+                        kind: ResolutionKind::NewVerificationEvidence,
+                        note: "relative verification accepted from its selected directory".into(),
+                        evidence: vec![PathBuf::from("verification.md")],
+                        confirm_not_running: false,
+                        config: None,
+                    },
+                )
+                .unwrap();
+                let ResolutionOutcome::Resolved { resolution, .. } = outcome else {
+                    panic!("the selected verification evidence was refused");
+                };
+                fs::write(
+                    std::env::var_os("ORCHESTRATE_B3_RESULT").unwrap(),
+                    resolution.to_string_lossy().as_bytes(),
+                )
+                .unwrap();
+            }
+            "amend" => {
+                let store = Store::open(Path::new(
+                    &std::env::var_os("ORCHESTRATE_B3_STORE").unwrap(),
+                ))
+                .unwrap();
+                let effort_id = std::env::var("ORCHESTRATE_B3_EFFORT").unwrap();
+                let effort = store.load_effort(&effort_id).unwrap();
+                let state = read_state(&store, &effort);
+                let outcome = amend_authority(
+                    &store,
+                    AuthorityAmendmentRequest {
+                        effort: effort.id,
+                        action: state.action.id,
+                        note: "relative authority evidence accepted from its selected directory"
+                            .into(),
+                        evidence: vec![PathBuf::from("verification.md")],
+                        confirm_not_running: true,
+                    },
+                )
+                .unwrap();
+                fs::write(
+                    std::env::var_os("ORCHESTRATE_B3_RESULT").unwrap(),
+                    outcome.record.to_string_lossy().as_bytes(),
+                )
+                .unwrap();
+            }
+            "export" => {
+                let store = Store::open(Path::new(
+                    &std::env::var_os("ORCHESTRATE_B3_STORE").unwrap(),
+                ))
+                .unwrap();
+                let effort = store
+                    .load_effort(&std::env::var("ORCHESTRATE_B3_EFFORT").unwrap())
+                    .unwrap();
+                let archive_path =
+                    PathBuf::from(std::env::var_os("ORCHESTRATE_B3_ARCHIVE").unwrap());
+                let outcome = export::export(&store, &effort, &archive_path).unwrap();
+                fs::write(
+                    std::env::var_os("ORCHESTRATE_B3_RESULT").unwrap(),
+                    serde_json::to_vec(&outcome).unwrap(),
+                )
+                .unwrap();
+            }
+            other => panic!("unexpected child mode {other}"),
+        }
+    }
+
+    #[test]
+    fn relative_operator_evidence_keeps_its_origin_and_digest_across_directories() {
+        let first = temp("evidence-origin-a");
+        let second = temp("evidence-origin-b");
+        let record_path = first.join("accepted-record.json");
+        fs::write(
+            first.join("verification.md"),
+            b"accepted from directory A\n",
+        )
+        .unwrap();
+        fs::write(
+            second.join("verification.md"),
+            b"different bytes in directory B\n",
+        )
+        .unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let child = |mode: &str, cwd: &Path| {
+            Command::new(&executable)
+                .args([
+                    "--exact",
+                    "tests::relative_evidence_child_entry",
+                    "--nocapture",
+                ])
+                .current_dir(cwd)
+                .env("ORCHESTRATE_B3_CHILD_MODE", mode)
+                .env("ORCHESTRATE_B3_RECORD", &record_path)
+                .output()
+                .unwrap()
+        };
+        let accepted = child("accept", &first);
+        assert!(
+            accepted.status.success(),
+            "acceptance child failed: {}",
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+        let evidence: Vec<ResolutionEvidence> = read_json(&record_path).unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(
+            Path::new(&evidence[0].path),
+            fs::canonicalize(first.join("verification.md")).unwrap()
+        );
+        assert_eq!(
+            evidence[0].sha256,
+            digest_bytes(b"accepted from directory A\n")
+        );
+        let repeated = read_evidence(&[first.join("./verification.md")]).unwrap();
+        assert_eq!(
+            repeated, evidence,
+            "equivalent selections got different identities"
+        );
+        assert_eq!(
+            resolution_id(
+                "act-evidence-test",
+                ResolutionKind::NewVerificationEvidence,
+                "same accepted evidence",
+                &repeated,
+                None,
+            ),
+            resolution_id(
+                "act-evidence-test",
+                ResolutionKind::NewVerificationEvidence,
+                "same accepted evidence",
+                &evidence,
+                None,
+            )
+        );
+
+        let consumed = child("consume", &second);
+        assert!(
+            consumed.status.success(),
+            "evidence was substituted from directory B: {}",
+            String::from_utf8_lossy(&consumed.stderr)
+        );
+        fs::write(
+            first.join("verification.md"),
+            b"modified after acceptance\n",
+        )
+        .unwrap();
+        let changed = child("consume", &second);
+        assert!(
+            !changed.status.success(),
+            "modified accepted bytes passed the digest check"
+        );
+    }
+
+    #[test]
+    fn relative_evidence_stays_bound_through_both_public_acceptance_operations_and_export() {
+        let executable = std::env::current_exe().unwrap();
+        let run_child = |mode: &str,
+                         cwd: &Path,
+                         store: &Store,
+                         effort: &Effort,
+                         result_path: &Path,
+                         archive_path: Option<&Path>| {
+            let mut command = Command::new(&executable);
+            command
+                .args([
+                    "--exact",
+                    "tests::relative_evidence_child_entry",
+                    "--nocapture",
+                ])
+                .current_dir(cwd)
+                .env("ORCHESTRATE_B3_CHILD_MODE", mode)
+                .env("ORCHESTRATE_B3_STORE", store.root())
+                .env("ORCHESTRATE_B3_EFFORT", &effort.id)
+                .env("ORCHESTRATE_B3_RESULT", result_path);
+            if let Some(archive_path) = archive_path {
+                command.env("ORCHESTRATE_B3_ARCHIVE", archive_path);
+            }
+            command.output().unwrap()
+        };
+        let a = temp("public-evidence-origin-a");
+        let b = temp("public-evidence-origin-b");
+        fs::write(a.join("verification.md"), b"accepted from directory A\n").unwrap();
+        fs::write(
+            b.join("verification.md"),
+            b"different bytes in directory B\n",
+        )
+        .unwrap();
+
+        let (store, effort, repo, _, _) = prepared();
+        let host = ScenarioHost::new(Scenario::BlockedAuditThenNewEvidence);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let result_path = a.join("resolution-record-path.txt");
+        let accepted = run_child("resolve", &a, &store, &effort, &result_path, None);
+        assert!(
+            accepted.status.success(),
+            "resolve child failed: {}",
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+        let resolution_path = PathBuf::from(fs::read_to_string(&result_path).unwrap());
+        let resolution: ResolutionRecord = read_json(&resolution_path).unwrap();
+        assert_eq!(
+            resolution.evidence[0].path,
+            fs::canonicalize(a.join("verification.md"))
+                .unwrap()
+                .to_string_lossy()
+        );
+        assert_eq!(
+            resolution.evidence[0].sha256,
+            digest_bytes(b"accepted from directory A\n")
+        );
+        let archive_path = temp("public-resolution-export").join("resolution.zip");
+        let export_result = b.join("resolution-export.json");
+        let exported = run_child(
+            "export",
+            &b,
+            &store,
+            &effort,
+            &export_result,
+            Some(&archive_path),
+        );
+        assert!(
+            exported.status.success(),
+            "export child failed: {}",
+            String::from_utf8_lossy(&exported.stderr)
+        );
+        let export_outcome: serde_json::Value = read_json(&export_result).unwrap();
+        assert_eq!(export_outcome["complete"], true);
+        let members = archive::members_by_name(&archive_path).unwrap();
+        let evidence_name = format!(
+            "resolutions/evidence/{}-0-verification.md",
+            resolution.resolution_id
+        );
+        let evidence_member = members.get(&evidence_name).unwrap();
+        let (bytes, digest) = archive::read_member(&archive_path, evidence_member).unwrap();
+        assert_eq!(bytes, b"accepted from directory A\n");
+        assert_eq!(digest, resolution.evidence[0].sha256);
+
+        let (store, effort, _repo, _, _) = prepared();
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let plan = load_plan(&store, &effort, &build_dir).unwrap();
+        let mut state = initialize_state(&store, &effort, &build_dir, &plan).unwrap();
+        state.action.dispatch = DispatchState::Running;
+        save_state(&build_dir.join("state.json"), &state).unwrap();
+        let action_dir = build_dir.join("artifacts").join(&state.action.id);
+        fs::create_dir_all(&action_dir).unwrap();
+        write_bytes_sync(
+            &action_dir.join("action.json"),
+            &serde_json::to_vec_pretty(&json!({"action_id": state.action.id})).unwrap(),
+        )
+        .unwrap();
+        let result_path = a.join("authority-record-path.txt");
+        let amended = run_child("amend", &a, &store, &effort, &result_path, None);
+        assert!(
+            amended.status.success(),
+            "amend child failed: {}",
+            String::from_utf8_lossy(&amended.stderr)
+        );
+        let amendment_path = PathBuf::from(fs::read_to_string(&result_path).unwrap());
+        let amendment: AuthorityAmendmentRecord = read_json(&amendment_path).unwrap();
+        assert_eq!(
+            amendment.evidence[0].path,
+            fs::canonicalize(a.join("verification.md"))
+                .unwrap()
+                .to_string_lossy()
+        );
+        let archive_path = temp("public-amendment-export").join("amendment.zip");
+        let export_result = b.join("amendment-export.json");
+        let exported = run_child(
+            "export",
+            &b,
+            &store,
+            &effort,
+            &export_result,
+            Some(&archive_path),
+        );
+        assert!(
+            exported.status.success(),
+            "amendment export child failed: {}",
+            String::from_utf8_lossy(&exported.stderr)
+        );
+        let export_outcome: serde_json::Value = read_json(&export_result).unwrap();
+        assert_eq!(export_outcome["complete"], true);
+        let members = archive::members_by_name(&archive_path).unwrap();
+        let evidence_name = format!(
+            "authority-amendments/evidence/{}-0-verification.md",
+            amendment.amendment_id
+        );
+        let evidence_member = members.get(&evidence_name).unwrap();
+        let (bytes, digest) = archive::read_member(&archive_path, evidence_member).unwrap();
+        assert_eq!(bytes, b"accepted from directory A\n");
+        assert_eq!(digest, amendment.evidence[0].sha256);
     }
 
     #[test]
@@ -8783,10 +9170,19 @@ mod tests {
             BuildResult::Blocked { .. }
         ));
         assert_eq!(host.adapters("work"), vec!["codex", "codex"]);
+        let stopped_state = read_state(&store, &effort);
+        assert_eq!(
+            stopped_state.sessions.worker.as_deref(),
+            Some("worker-session")
+        );
+        assert_eq!(
+            stopped_state.sessions.reviewer.as_deref(),
+            Some("reviewer-session")
+        );
         let overlay = temp("overlay");
         fs::write(
             overlay.join("config.toml"),
-            "schema_version = 2\n[worker]\nadapter = \"cursor\"\n[reviewer]\nadapter = \"codex\"\n",
+            "schema_version = 2\n[worker]\nadapter = \"cursor\"\n[reviewer]\nadapter = \"cursor\"\n",
         )
         .unwrap();
 
@@ -8805,7 +9201,15 @@ mod tests {
         let continuation = record.transition.as_ref().unwrap().action.id.clone();
         assert_eq!(overlay_record.first_action_id, continuation);
         assert_eq!(overlay_record.version, 2);
-        assert!(!build_dir.join(CONFIG_HISTORY_DIR).is_dir());
+        // The immutable overlay was published, but the state/session transition
+        // was interrupted. Replay must compare against v1, not the now-effective
+        // v2 config, and expire only the worker session whose adapter changed.
+        write_immutable(
+            &config_history_path(&build_dir, overlay_record),
+            &orchestrate_contracts::encode(overlay_record).unwrap(),
+        )
+        .unwrap();
+        assert!(build_dir.join(CONFIG_HISTORY_DIR).is_dir());
         assert_eq!(journal_count(&store, &effort, "build_resolved"), 0);
 
         let resumed = run_with_adapter(&store, request(&repo), &host).unwrap();
@@ -8821,6 +9225,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(continuation_packet["config_version"], 2);
+        let continuation_invocation: serde_json::Value = read_json(
+            &build_dir
+                .join("artifacts")
+                .join(&continuation)
+                .join("invocation.json"),
+        )
+        .unwrap();
+        assert_eq!(continuation_invocation["adapter"], "cursor");
+        assert_eq!(
+            continuation_invocation["session"]["requested"],
+            serde_json::Value::Null
+        );
+        assert_eq!(continuation_invocation["session"]["resumed"], false);
+        assert_eq!(continuation_invocation["mode"], "fresh");
+        assert_eq!(continuation_invocation["build_action_continuation"], true);
+        assert!(
+            action_packets(&build_dir).iter().any(|(id, packet)| {
+                packet["kind"] == "work"
+                    && *id != continuation
+                    && read_json::<serde_json::Value>(
+                        &build_dir.join("artifacts").join(id).join("invocation.json"),
+                    )
+                    .is_ok_and(|record| record["session"]["observed"] == "worker-session")
+            }),
+            "the prior adapter's observed session was not retained in immutable invocation evidence"
+        );
+        assert!(
+            action_packets(&build_dir).iter().any(|(id, packet)| {
+                packet["kind"] == "review"
+                    && read_json::<serde_json::Value>(
+                        &build_dir.join("artifacts").join(id).join("invocation.json"),
+                    )
+                    .is_ok_and(|record| record["session"]["requested"] == "reviewer-session")
+            }),
+            "the unchanged reviewer role lost its saved session"
+        );
+        let applied_record: ResolutionRecord =
+            read_json(&resolution_files(&store, &effort)[0]).unwrap();
+        let mut applied_state = read_state(&store, &effort);
+        let established_session = applied_state.sessions.worker.clone();
+        assert!(established_session.is_some());
+        apply_resolution(
+            &store,
+            &effort,
+            &store.project_for(&effort).unwrap(),
+            &build_dir,
+            &build_dir.join("state.json"),
+            &mut applied_state,
+            &applied_record,
+        )
+        .unwrap();
+        assert_eq!(applied_state.sessions.worker, established_session);
         assert_eq!(
             fs::read_dir(build_dir.join(CONFIG_HISTORY_DIR))
                 .unwrap()
@@ -9300,9 +9756,19 @@ mod tests {
         state.action.dispatch = DispatchState::Running;
         let state_path = predecessor_build.join("state.json");
         save_state(&state_path, &state).unwrap();
+        let action_dir = predecessor_build.join("artifacts").join(&state.action.id);
+        fs::create_dir_all(&action_dir).unwrap();
+        write_bytes_sync(
+            &action_dir.join("action.json"),
+            &serde_json::to_vec_pretty(&json!({"action_id": state.action.id})).unwrap(),
+        )
+        .unwrap();
         let state_before = fs::read(&state_path).unwrap();
         let config_before = fs::read(predecessor_build.join("config.toml")).unwrap();
         let plan_before = fs::read(predecessor_build.join("plan.json")).unwrap();
+        let supplied = temp("authority-amendment-evidence");
+        let supplied_file = supplied.join("authorization.txt");
+        fs::write(&supplied_file, b"authority reviewed\n").unwrap();
 
         let outcome = amend_authority(
             &store,
@@ -9310,7 +9776,7 @@ mod tests {
                 effort: predecessor.id.clone(),
                 action: state.action.id.clone(),
                 note: "Record the changed authority without resuming the interrupted action".into(),
-                evidence: Vec::new(),
+                evidence: vec![supplied_file.clone()],
                 confirm_not_running: true,
             },
         )
@@ -9330,6 +9796,25 @@ mod tests {
         assert_eq!(record.predecessor_reconciled, predecessor_reconciled);
         assert!(record.in_flight_confirmation);
         assert_eq!(record.successor.successor_reconciled, None);
+        assert_eq!(record.evidence.len(), 1);
+        assert_eq!(
+            record.evidence[0].path,
+            fs::canonicalize(&supplied_file).unwrap().to_string_lossy()
+        );
+        let archive_path = temp("authority-amendment-export-out").join("amendment.zip");
+        let exported = export::export(&store, &predecessor, &archive_path).unwrap();
+        assert!(exported.complete, "{exported:#?}");
+        let archived = archive::members_by_name(&archive_path).unwrap();
+        let evidence_name = format!(
+            "authority-amendments/evidence/{}-0-authorization.txt",
+            outcome.amendment_id
+        );
+        let evidence_member = archived
+            .get(&evidence_name)
+            .expect("authority-amendment operator evidence was not selected");
+        let (bytes, digest) = archive::read_member(&archive_path, evidence_member).unwrap();
+        assert_eq!(bytes, b"authority reviewed\n");
+        assert_eq!(digest, record.evidence[0].sha256);
         assert_eq!(
             journal_count(&store, &predecessor, "build_authority_amendment_refused"),
             1
@@ -9663,6 +10148,90 @@ mod tests {
         )
         .unwrap();
         assert_eq!(continuation_packet["config_version"], 2);
+    }
+
+    #[test]
+    fn changing_the_reviewer_adapter_clears_only_its_session() {
+        let (store, effort, repo, _, _) = prepared();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let before = read_state(&store, &effort);
+        assert_eq!(before.sessions.worker.as_deref(), Some("worker-session"));
+        assert_eq!(
+            before.sessions.reviewer.as_deref(),
+            Some("reviewer-session")
+        );
+        let overlay = temp("reviewer-adapter-overlay");
+        fs::write(
+            overlay.join("config.toml"),
+            "schema_version = 2\n[worker]\nadapter = \"codex\"\n[reviewer]\nadapter = \"codex\"\n",
+        )
+        .unwrap();
+        resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "repair reviewer adapter",
+            false,
+            Some(overlay.join("config.toml")),
+            Vec::new(),
+        )
+        .unwrap();
+        let applied = read_state(&store, &effort);
+        assert_eq!(applied.sessions.worker.as_deref(), Some("worker-session"));
+        assert!(applied.sessions.reviewer.is_none());
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let (_, review) = action_packets(&build_dir)
+            .into_iter()
+            .find(|(_, packet)| packet["kind"] == "review" && packet["scope"] == "D2")
+            .expect("the repaired reviewer action did not run");
+        let record: serde_json::Value = read_json(
+            &build_dir
+                .join("artifacts")
+                .join(review["action_id"].as_str().unwrap())
+                .join("invocation.json"),
+        )
+        .unwrap();
+        assert_eq!(record["adapter"], "codex");
+        assert_eq!(record["session"]["requested"], serde_json::Value::Null);
+        assert_eq!(record["session"]["resumed"], false);
+    }
+
+    #[test]
+    fn same_adapter_overlay_preserves_persistent_sessions() {
+        let (store, effort, repo, _, _) = prepared();
+        let host = ScenarioHost::new(Scenario::SecondPhaseExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let before = read_state(&store, &effort);
+        let overlay = temp("same-adapter-overlay");
+        fs::write(
+            overlay.join("config.toml"),
+            "schema_version = 2\n[worker]\nadapter = \"codex\"\n[reviewer]\nadapter = \"cursor\"\n",
+        )
+        .unwrap();
+        resolve_stop(
+            &store,
+            &effort,
+            ResolutionKind::EnvironmentRepair,
+            "same adapter, repaired local environment",
+            false,
+            Some(overlay.join("config.toml")),
+            Vec::new(),
+        )
+        .unwrap();
+        let after = read_state(&store, &effort);
+        assert_eq!(after.sessions.worker, before.sessions.worker);
+        assert_eq!(after.sessions.reviewer, before.sessions.reviewer);
     }
 
     #[test]
@@ -10418,6 +10987,7 @@ mod tests {
                     "role",
                     "adapter",
                     "mode",
+                    "build_action_continuation",
                     "config_version",
                     "session",
                     "requested",
@@ -10981,6 +11551,21 @@ mod tests {
             phases.values().any(|kind| kind == "final_audit"),
             "the Build never reached its formal Audit"
         );
+        let out = temp("export-transported-role-evidence");
+        let archive_path = out.join("transported.zip");
+        let exported = export::export(&store, &effort, &archive_path).unwrap();
+        assert!(exported.complete, "{exported:#?}");
+        let members = archive::members_by_name(&archive_path).unwrap();
+        for (id, kind) in &phases {
+            if matches!(kind.as_str(), "review" | "final_audit") {
+                for leaf in ["output-contract.md", "transport-evidence.json"] {
+                    assert!(
+                        members.contains_key(&format!("build/artifacts/{id}/{leaf}")),
+                        "the transported {kind} evidence omitted {leaf}"
+                    );
+                }
+            }
+        }
         assert_no_build_files_leaked(&repo);
     }
 
@@ -12336,6 +12921,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn export_detects_lost_accepted_correction_and_diagnosis_reports() {
+        let (store, effort, repo, _, _) = prepared();
+        let host = ScenarioHost::new(Scenario::Corrections);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let correction = fs::read_dir(build_dir.join("artifacts"))
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .find(|directory| {
+                read_json::<serde_json::Value>(&directory.join("action.json"))
+                    .is_ok_and(|action| action["kind"] == "review")
+                    && read_json::<serde_json::Value>(&directory.join("result.json"))
+                        .is_ok_and(|receipt| receipt["outcome"] == "changes_required")
+            })
+            .expect("the correction review did not run");
+        let correction_report = correction.join("report.md");
+        fs::remove_file(&correction_report).unwrap();
+        let out = temp("export-lost-correction-report");
+        let correction_export =
+            export::export(&store, &effort, &out.join("correction.zip")).unwrap();
+        assert!(!correction_export.complete && correction_export.archive.is_none());
+        assert!(correction_export.members.iter().any(|member| {
+            member.name.ends_with("/report.md")
+                && member.source == correction_report.to_string_lossy()
+                && member.required
+                && member.class == export::MemberClass::Failed
+        }));
+
+        let (store, effort, repo, _, _) = prepared();
+        let host = ScenarioHost::new(Scenario::ExternalRequirement);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        let stopped = read_state(&store, &effort).stop.unwrap();
+        assert!(matches!(stopped.action.kind, ActionKind::Unblock));
+        let diagnosis_report = store
+            .phase_dir(&effort, "build")
+            .unwrap()
+            .join("artifacts")
+            .join(&stopped.action.id)
+            .join("report.md");
+        fs::remove_file(&diagnosis_report).unwrap();
+        let out = temp("export-lost-diagnosis-report");
+        let diagnosis_export = export::export(&store, &effort, &out.join("diagnosis.zip")).unwrap();
+        assert!(!diagnosis_export.complete && diagnosis_export.archive.is_none());
+        assert!(diagnosis_export.members.iter().any(|member| {
+            member.name.ends_with("/report.md")
+                && member.source == diagnosis_report.to_string_lossy()
+                && member.required
+                && member.class == export::MemberClass::Failed
+        }));
+    }
+
     /// R-029/R-030: action ids created by resolution are opaque digest ids.
     /// The exporter must retain the reference from controller records and
     /// refuse complete promotion if that executed continuation later vanishes.
@@ -12511,6 +13154,66 @@ mod tests {
             }
             Ok(paths)
         }
+    }
+
+    #[test]
+    fn export_uses_finalized_discovery_manifest_for_nested_payloads_and_integrity() {
+        let (store, effort, _repo) = completed_build("export-discovery-manifest");
+        let reference = publish_finalized_discovery_with_nested_graph(&store, &effort);
+        let (envelope, files) = store.load_bundle(&effort, &reference).unwrap();
+        assert!(files.contains_key("graph/F-1.md"));
+        let out = temp("export-discovery-manifest-out");
+        let archive_path = out.join("discovery.zip");
+        let outcome = export::export(&store, &effort, &archive_path).unwrap();
+        assert!(outcome.complete, "{outcome:#?}");
+        let archive_members = archive::members_by_name(&archive_path).unwrap();
+        for payload in &envelope.payloads {
+            let name = format!("artifacts/{}/{}", reference.artifact_id, payload.path);
+            let archived = archive_members
+                .get(&name)
+                .unwrap_or_else(|| panic!("manifest payload {name} is missing"));
+            let (bytes, digest) = archive::read_member(&archive_path, archived).unwrap();
+            assert_eq!(bytes, files[&payload.path], "payload bytes changed: {name}");
+            assert_eq!(digest, payload.sha256, "payload digest changed: {name}");
+            assert_eq!(
+                bytes.len() as u64,
+                payload.bytes,
+                "payload size changed: {name}"
+            );
+        }
+
+        let discovery_dir = store.artifact_dir(&effort, &reference.artifact_id).unwrap();
+        let nested = discovery_dir.join("graph/F-1.md");
+        let original = fs::read(&nested).unwrap();
+        fs::remove_file(&nested).unwrap();
+        let missing_path = out.join("missing-payload.zip");
+        let missing = export::export(&store, &effort, &missing_path).unwrap();
+        let member_name = format!("artifacts/{}/graph/F-1.md", reference.artifact_id);
+        assert!(!missing.complete && missing.archive.is_none() && !missing_path.exists());
+        assert!(missing.members.iter().any(|member| {
+            member.name == member_name
+                && member.required
+                && member.class == export::MemberClass::Failed
+        }));
+        assert!(discovery_dir.join("manifest.json").is_file());
+        assert!(discovery_dir.join("technical-spec.md").is_file());
+
+        let altered = b"altered graph payload\n";
+        fs::write(&nested, altered).unwrap();
+        let altered_path = out.join("altered-payload.zip");
+        let changed = export::export(&store, &effort, &altered_path).unwrap();
+        assert!(!changed.complete && changed.archive.is_none() && !altered_path.exists());
+        assert!(changed.members.iter().any(|member| {
+            member.name == member_name
+                && member.required
+                && member.class == export::MemberClass::Changed
+        }));
+        assert_eq!(
+            fs::read(&nested).unwrap(),
+            altered,
+            "export changed the source file"
+        );
+        assert_ne!(original, altered);
     }
 
     /// R-029/R-030: deterministic failures at the actual directory inventory
@@ -13368,6 +14071,154 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("R-1")));
     }
 
+    #[test]
+    fn build_status_labels_requested_model_strength_and_keeps_default_and_legacy_cases() {
+        let v3 = "schema_version = 3\n[worker]\nadapter = \"codex\"\nmodel_strength = \"strong\"\n[reviewer]\nadapter = \"cursor\"\nmodel_strength = \"strong\"\n";
+        let (store, effort, repo) = prepared_with_config(v3);
+        let host = ScenarioHost::new(Scenario::Basic);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let status = status::build_status(&store, &effort).unwrap();
+        assert_eq!(
+            status["current"]["configured_role"]["model_strength"],
+            "strong"
+        );
+        assert_eq!(
+            status["current"]["configured_role"]["model"],
+            serde_json::Value::Null
+        );
+        assert!(status["current"]["configured_role"]["observed_model"].is_null());
+        let lines = status::status_lines(&store, &effort).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("requested strong model strength"))
+        );
+        assert!(lines.iter().all(|line| !line.contains("provider default")));
+
+        let unset_v3 =
+            "schema_version = 3\n[worker]\nadapter = \"codex\"\n[reviewer]\nadapter = \"cursor\"\n";
+        let (store, effort, repo) = prepared_with_config(unset_v3);
+        let host = ScenarioHost::new(Scenario::Basic);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let lines = status::status_lines(&store, &effort).unwrap();
+        assert!(lines.iter().any(|line| line.contains("provider default")));
+
+        let legacy_v2 = "schema_version = 2\n[worker]\nadapter = \"codex\"\nmodel = \"worker-model\"\n[reviewer]\nadapter = \"cursor\"\nmodel = \"reviewer-model\"\n";
+        let (store, effort, repo) = prepared_with_config(legacy_v2);
+        let host = ScenarioHost::new(Scenario::Basic);
+        assert!(matches!(
+            run_with_adapter(&store, request(&repo), &host).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let status = status::build_status(&store, &effort).unwrap();
+        assert_eq!(
+            status["current"]["configured_role"]["model"],
+            "reviewer-model"
+        );
+        assert!(status["current"]["configured_role"]["model_strength"].is_null());
+        let lines = status::status_lines(&store, &effort).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("requested native model reviewer-model"))
+        );
+    }
+
+    #[test]
+    fn build_status_reports_binding_requirements_missing_from_the_current_audit() {
+        let (store, effort, _repo, original, _) = prepared();
+        let (_, mut reconciled): (_, ReconciledDiscovery) = store
+            .load_json(&effort, &original, "reconciled-discovery.json")
+            .unwrap();
+        let mut second = reconciled.requirements[0].clone();
+        second.requirement.id = "R-2".into();
+        second.requirement.text = "second bound requirement".into();
+        second.requirement.acceptance = "second check".into();
+        reconciled.requirements.push(second);
+        let mut files = BTreeMap::new();
+        files.insert(
+            "reconciled-discovery.json".into(),
+            orchestrate_contracts::encode(&reconciled).unwrap(),
+        );
+        let reconciled_ref = store
+            .publish_bundle(
+                &effort,
+                "reconcile",
+                ArtifactKind::ReconciledDiscovery,
+                "status-two-requirements".into(),
+                "IMPLEMENTATION_READY".into(),
+                Vec::new(),
+                build_provenance("test", orchestrate_guides::BUILD),
+                files,
+            )
+            .unwrap();
+        prepare_build_files(&store, &effort, &reconciled_ref, None);
+        let build_dir = store.phase_dir(&effort, "build").unwrap();
+        let plan = load_plan(&store, &effort, &build_dir).unwrap();
+        let mut state = initialize_state(&store, &effort, &build_dir, &plan).unwrap();
+        let assessment = AuditAssessment {
+            reconciled: reconciled_ref.clone(),
+            adoption: state.frozen.adoption.clone(),
+            implementation: state.frozen.adoption.clone(),
+            coverage: vec![Coverage {
+                requirement_id: "R-1".into(),
+                state: CoverageState::Pass,
+                rationale: "the first requirement passed".into(),
+                evidence: vec!["test".into()],
+                correction: String::new(),
+            }],
+            assessor_context: "status projection fixture".into(),
+        };
+        let report = orchestrate_contracts::AuditReport {
+            assessment,
+            verdict: Verdict::Blocked,
+        };
+        let mut audit_files = BTreeMap::new();
+        audit_files.insert(
+            "audit.json".into(),
+            orchestrate_contracts::encode(&report).unwrap(),
+        );
+        let audit = store
+            .publish_bundle(
+                &effort,
+                "audit",
+                ArtifactKind::Audit,
+                "status-missing-coverage".into(),
+                "BLOCKED".into(),
+                vec![reconciled_ref],
+                build_provenance("test", orchestrate_guides::BUILD),
+                audit_files,
+            )
+            .unwrap();
+        state.current_audit = Some(audit);
+        save_state(&build_dir.join("state.json"), &state).unwrap();
+
+        let before = tree_snapshot(&store.effort_dir(&effort));
+        let status = status::build_status(&store, &effort).unwrap();
+        assert_eq!(status["acceptance"]["last_audit_verdict"], "BLOCKED");
+        assert_eq!(
+            status["acceptance"]["unresolved_requirement_ids"],
+            json!(["R-2"])
+        );
+        let lines = status::status_lines(&store, &effort).unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("acceptance: BLOCKED") && line.contains("R-2"))
+        );
+        assert_eq!(
+            before,
+            tree_snapshot(&store.effort_dir(&effort)),
+            "status wrote to the effort"
+        );
+    }
+
     /// A host whose configured provider executables cannot be launched, so the
     /// controller must find that out before any product-changing work.
     struct MissingExecutableHost {
@@ -13400,6 +14251,48 @@ mod tests {
         ) -> Result<InvocationResult> {
             *self.invoked.lock().unwrap() += 1;
             bail!("no dispatch may occur when a required role cannot be launched")
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_readiness_child_entry() {
+        let Ok(mode) = std::env::var("ORCHESTRATE_B4_CHILD_MODE") else {
+            return;
+        };
+        match mode.as_str() {
+            "readiness" => {
+                let store = Store::open(Path::new(
+                    &std::env::var_os("ORCHESTRATE_B4_STORE").unwrap(),
+                ))
+                .unwrap();
+                let request = BuildRequest {
+                    effort: Some(std::env::var("ORCHESTRATE_B4_EFFORT").unwrap()),
+                    project: PathBuf::from(std::env::var_os("ORCHESTRATE_B4_PROJECT").unwrap()),
+                };
+                let result = run(&store, request).unwrap();
+                let BuildResult::Blocked { detail, .. } = result else {
+                    panic!("a non-executable reviewer passed required-role readiness: {result:?}");
+                };
+                assert!(
+                    detail.contains("reviewer") && detail.contains("claude"),
+                    "{detail}"
+                );
+            }
+            "path-search" => {
+                let expected = PathBuf::from(std::env::var_os("ORCHESTRATE_B4_EXPECTED").unwrap());
+                assert_eq!(
+                    preflight::resolve_executable("claude").as_deref(),
+                    Some(expected.as_path())
+                );
+                let output = Command::new("claude").arg("--version").output().unwrap();
+                assert!(output.status.success());
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    "later executable"
+                );
+            }
+            other => panic!("unexpected child mode {other}"),
         }
     }
 
@@ -13444,6 +14337,96 @@ mod tests {
         assert_eq!(record["trigger"], "spawn_failure");
         assert_eq!(record["action"]["kind"], "work");
         assert!(journal_count(&store, &effort, "build_stopped") >= 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_readiness_skips_non_executable_role_files_and_matches_path_launch_search() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let first = temp("readiness-path-first");
+        let later = temp("readiness-path-later");
+        let marker = first.join("worker-was-launched");
+        let mut worker = fs::File::create(first.join("codex")).unwrap();
+        use std::io::Write as _;
+        writeln!(worker, "#!/bin/sh\nprintf x > '{}'", marker.display()).unwrap();
+        fs::set_permissions(first.join("codex"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(first.join("claude"), b"#!/bin/sh\necho wrong\n").unwrap();
+        fs::set_permissions(first.join("claude"), fs::Permissions::from_mode(0o644)).unwrap();
+        let (store, effort, repo) = prepared_with_config(
+            "schema_version = 2\n[worker]\nadapter = \"codex\"\n[reviewer]\nadapter = \"claude\"\n",
+        );
+        let head_before = git(&repo, ["rev-parse", "HEAD"]).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let launch_path = preflight::resolve_executable("git")
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let make_path = |paths: &[&Path]| std::env::join_paths(paths.iter().copied()).unwrap();
+        let first_path = make_path(&[
+            &first,
+            &launch_path,
+            Path::new("/usr/bin"),
+            Path::new("/bin"),
+        ]);
+        let readiness = Command::new(&executable)
+            .args([
+                "--exact",
+                "tests::executable_readiness_child_entry",
+                "--nocapture",
+            ])
+            .env("ORCHESTRATE_B4_CHILD_MODE", "readiness")
+            .env("ORCHESTRATE_B4_STORE", store.root())
+            .env("ORCHESTRATE_B4_EFFORT", &effort.id)
+            .env("ORCHESTRATE_B4_PROJECT", &repo)
+            .env("PATH", first_path)
+            .output()
+            .unwrap();
+        assert!(
+            readiness.status.success(),
+            "readiness child failed: {}",
+            String::from_utf8_lossy(&readiness.stderr)
+        );
+        assert!(
+            !marker.exists(),
+            "the worker launched before reviewer readiness passed"
+        );
+        assert_eq!(git(&repo, ["rev-parse", "HEAD"]).unwrap(), head_before);
+        let state = store
+            .phase_dir(&effort, "build")
+            .unwrap()
+            .join("state.json");
+        let state: BuildState = read_json(&state).unwrap();
+        let stop = state.stop.unwrap();
+        assert!(stop.detail.contains("reviewer") && stop.detail.contains("claude"));
+
+        let mut later_claude = fs::File::create(later.join("claude")).unwrap();
+        writeln!(later_claude, "#!/bin/sh\necho 'later executable'").unwrap();
+        fs::set_permissions(later.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+        let search_path = make_path(&[
+            &first,
+            &later,
+            &launch_path,
+            Path::new("/usr/bin"),
+            Path::new("/bin"),
+        ]);
+        let search = Command::new(&executable)
+            .args([
+                "--exact",
+                "tests::executable_readiness_child_entry",
+                "--nocapture",
+            ])
+            .env("ORCHESTRATE_B4_CHILD_MODE", "path-search")
+            .env("ORCHESTRATE_B4_EXPECTED", later.join("claude"))
+            .env("PATH", search_path)
+            .output()
+            .unwrap();
+        assert!(
+            search.status.success(),
+            "PATH-search child failed: {}",
+            String::from_utf8_lossy(&search.stderr)
+        );
     }
 
     /// R-021/R-013: the readiness check follows an applied overlay, so a Build
