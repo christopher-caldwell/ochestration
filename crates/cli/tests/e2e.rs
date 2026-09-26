@@ -149,12 +149,21 @@ fn chat_import_stops_at_exact_single_source_reconciled_boundary() {
     );
     assert!(build_dir.join("config.toml").exists());
     assert!(!build_dir.join("state.json").exists());
-    assert!(
-        !store
-            .list_artifacts(&effort)
-            .unwrap()
+    let artifacts = store.list_artifacts(&effort).unwrap();
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(
+        artifacts
             .iter()
-            .any(|item| item.kind == ArtifactKind::Adoption)
+            .filter(|item| item.kind == ArtifactKind::Discovery)
+            .count(),
+        1
+    );
+    assert_eq!(
+        artifacts
+            .iter()
+            .filter(|item| item.kind == ArtifactKind::ReconciledDiscovery)
+            .count(),
+        1
     );
 }
 

@@ -3,12 +3,14 @@
 Orchestrate is deterministic machinery for an interactive model-window workflow:
 
 ```text
+Normal:
 Prepare → Discovery × N → Reconcile ─┐
-                                    ├→ Reconciled Discovery → STOP
-Chat Discovery → import ────────────┘
+                                     ├→ Reconciled Discovery → STOP
+Chat:
+Conversation → import as 1 Discovery ┘
 
-Later, explicitly authorized:
-Adoption → Build (Work ↔ Review phases) → Implementation → Audit → reviewed final product
+Later, explicitly:
+Reconciled Discovery → Adoption → Build → Implementation → Audit
 ```
 
 The model does the engineering work. Orchestrate keeps the request, Discovery runs, reconciled

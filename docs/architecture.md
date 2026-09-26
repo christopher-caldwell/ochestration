@@ -1,16 +1,14 @@
 # Architecture
 
 ```text
+Normal:
 Prepare → Discovery × N → Reconcile ─┐
-                                    ├→ Reconciled Discovery → STOP
-Chat Discovery → import ────────────┘
+                                     ├→ Reconciled Discovery → STOP
+Chat:
+Conversation → import as 1 Discovery ┘
 
-Later, explicitly authorized:
-Adoption → Build (Work ↔ Review across ordered phases) → Implementation
-                                                           ↓
-                                                         Audit
-                                                           ↓
-                                                  reviewed final product
+Later, explicitly:
+Reconciled Discovery → Adoption → Build → Implementation → Audit
 ```
 
 ## Authority and instruction ownership
