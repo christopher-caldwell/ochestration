@@ -1,31 +1,14 @@
-schema_version = 3
+schema_version = 4
 
 [worker]
 adapter = "codex"
-# Codex v3 supports read_only roles. Its sandbox protects Git metadata, so
-# workspace_write is rejected for a Worker that must stage and commit.
-# Provider-neutral values: standard | strong
-# model_strength = "standard"
-# Provider-neutral values: low | medium | high
-# reasoning_effort = "medium"
-# Provider-neutral values: read_only | workspace_write | full_access
-# full_access is the explicit unrestricted mapping; nothing selects it for you.
-# permission = "workspace_write"
+# Optional provider-native model and opaque native arguments.
+# model = "native-model-name"
+# args = ["--search"]
 
 [reviewer]
 adapter = "codex"
 
-# Optional: a separately configured unblocker. Omit the table to reuse the
-# reviewer's settings for Unblock turns.
+# Optional. If omitted, Unblock uses reviewer settings but never its session.
 # [unblocker]
 # adapter = "codex"
-# model_strength = "standard"
-# reasoning_effort = "medium"
-# permission = "read_only"
-
-# Optional advisory once-over. Absent, the role never runs and the Build goes
-# straight from final delivery Review to the formal Audit.
-# [once_over]
-# adapter = "codex"
-# model_strength = "standard"
-# permission = "read_only"

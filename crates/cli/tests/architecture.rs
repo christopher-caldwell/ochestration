@@ -72,7 +72,7 @@ fn skills_are_dispatchers_only() {
         if name == "build" {
             assert!(body.contains("`$build` is not authorization"));
             assert!(body.contains("Do not execute `orchestrate build guide`"));
-            assert!(body.contains("Never infer that launch authorization"));
+            assert!(body.contains("Never infer launch authorization from"));
             assert!(!body.contains("You must run `orchestrate"));
         } else {
             assert_eq!(
@@ -259,18 +259,17 @@ fn reconcile_guide_is_closed_world_convergent_and_stops_before_build() {
 
 #[test]
 fn embedded_guides_preserve_high_value_instruction_boundaries() {
-    assert!(orchestrate_guides::BUILD.contains("## First preparation"));
+    assert!(orchestrate_guides::BUILD.contains("## Human-controlled CLI boundary"));
+    assert!(orchestrate_guides::BUILD.contains("## Authority and preparation"));
+    assert!(orchestrate_guides::BUILD.contains("## Launch and durable state"));
+    assert!(orchestrate_guides::BUILD.contains("Resume itself dispatches no provider."));
+    assert!(orchestrate_guides::WORK.contains("detailed plan is implementation guidance"));
+    assert!(orchestrate_guides::REVIEW.contains("detailed plan"));
     assert!(
-        orchestrate_guides::BUILD.contains("## Existing prepared or active Build")
-            && orchestrate_guides::BUILD.contains("do not scaffold again")
+        orchestrate_guides::FINAL_AUDIT.contains("Assess only the exact implementation artifact")
     );
-    assert!(orchestrate_guides::WORK.contains("detailed implementation plan"));
-    assert!(orchestrate_guides::REVIEW.contains("detailed implementation plan"));
-    assert!(
-        orchestrate_guides::FINAL_AUDIT.contains("must never mutate the stored immutable snapshot")
-    );
-    assert!(orchestrate_guides::UNBLOCK.contains("Unblock is diagnosis-only"));
-    assert!(orchestrate_guides::UNBLOCK.contains("Do not modify product source"));
+    assert!(orchestrate_guides::UNBLOCK.contains("Unblock is sessionless and diagnosis-only"));
+    assert!(orchestrate_guides::UNBLOCK.contains("do not modify product files"));
     for guide in [
         orchestrate_guides::PREP_DISCOVERY_TICKET,
         orchestrate_guides::PREP_DISCOVERY_FREEFORM,

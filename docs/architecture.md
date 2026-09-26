@@ -1,135 +1,50 @@
 # Architecture
 
 ```text
-Raw ticket or request → Prepare → reviewed frozen request
-                                    ↓
-Discovery 1 ─┐
-Discovery 2 ─┼──→ Reconciled Discovery → STOP
-Discovery N ─┘
+Prepare → Discovery × N → Reconcile → STOP
 
-Later: explicit Build → Adoption → Implementation → Audit
+Later: explicit Build → Adoption → Work → Review → Audit → done
+                                      ↑          │
+                                      └─ correction
 ```
 
-## Instruction ownership
+## Authority and instruction ownership
 
-Checked-in skills are stable dispatchers. Each substantive body follows exactly this pattern:
+The prepared request and frozen user constraints establish intent. Discovery investigates; Reconcile publishes the binding contract. The detailed Build plan controls only implementation approach and ordering. Work, Review, and Audit make engineering judgments. Rust validates exact artifacts, commits, response schemas, and checkout state, then routes the fixed state machine. It does not infer engineering truth from reports.
+
+Checked-in skills dispatch substantive work. Build is intentionally different: `$build`, readiness discussion, or preparation is not CLI authorization. The canonical human boundary is in the embedded [Build guide](../crates/guides/resources/guides/build.md). An explicit Build launch authorizes the full internal gate loop; individual transitions require no additional approval.
+
+## Discovery and Reconcile
+
+Each Discovery operates from the effort's frozen baseline and publishes an immutable evidence bundle. Reconcile binds an explicit set of finalized Discovery artifacts; it has no repository access and adds no unselected investigation. A Reconciled Discovery separates exhaustive binding requirements from advisory technical suggestions. Rust validates structure and lineage, not the truth of findings.
+
+## Build state and routing
+
+Build schema versions are intentionally breaking: plan 3, config 4, state 4. There is no migration path for earlier Build state. Initialization requires a clean Git-visible checkout, verifies that the Discovery baseline is an ancestor of current `HEAD`, creates/reuses Adoption, and records `HEAD` as both the starting point and first checkpoint. A digest binds the exact `plan.json` bytes and referenced detailed-plan bytes; configuration is reread before each gate.
+
+The durable controller state contains the exact Reconciled and Adoption refs, starting commit, immutable plan digest, scope, gate, status, checkpoint commit, feedback refs, optional Unblock context, current action id, adapter-tagged Worker and Reviewer sessions, implementation ref, completion refs, and a transition-relevant stop. Action paths in state are relative to the Build directory. History is retained, but transitions use only state.
 
 ```text
-You must run `orchestrate <action> guide` for instructions.
+phase Work ──complete──→ phase Review ──pass──→ next phase Work
+     │                       │                         └─last phase→ final Audit
+     │                       └─changes_required→ same phase Work
+     ├─blocked→ Unblock ─retry→ same gate / checkpoint
+     │                       └─external_requirement→ stopped; explicit resume
+     └─malformed/provider/Git failure→ reset_required; explicit reset
+
+final Audit ──pass──→ complete
+          ├─changes_required──→ final Work → Audit
+          └─unknown/missing coverage──→ Unblock
 ```
 
-Those guides, and the Build `plan.json` / `config.toml` templates, are Markdown and text compiled into the binary. Host files (`AGENTS.md`, `CLAUDE.md`,
-and the Cursor orchestration rule) only explain how to install or update that CLI and those
-dispatchers.
+Review and Audit use detached disposable worktrees at the exact checkpoint. Work succeeds only when its reported commit exists, descends from the prior checkpoint, equals product `HEAD`, and leaves a clean tracked/untracked checkout. Review must return the inspected checkpoint and leave its worktree clean. Audit associates one exact submitted implementation artifact with its assessment; the existing Audit contract derives `PASS`, `CHANGES_REQUIRED`, or `BLOCKED`.
 
-Work, review, final Audit, and unblock are internal Build roles; a configured, off-by-default
-`once_over` role is advisory only and never gates the formal Audit. They are not installed skills.
-Whenever Build starts or resumes, the driver writes the role guides embedded in the running
-CLI into the Build directory, replacing any previously generated copies, and keeps the exact
-instruction bytes each invocation received beside its action.
+An explicit blocked result permits one Unblock detour. A Work block is reset automatically because the provider completed and rejected its partial work. `retry` restores the checkpoint and requeues the original gate with both original feedback and Unblock guidance. A second block stops; no recursive Unblock is available. `external_requirement` is a clean stop. `build resume` is the operator assertion that it is addressed and only requeues the gate. Provider failure, malformed output, Git invariant failure, or restart during `running` requires `build reset`, which removes the current disposable worktree, runs `git reset --hard <checkpoint>` and `git clean -fd`, preserves ignored files, clears sessions, and requeues the same gate.
 
-## Authority boundaries
+Every launch records the selected native adapter config and exact argv before atomically marking state `running`. The adapters handle executable selection, native argv ordering, cwd/prompt delivery, raw transport and stderr, final-response/session extraction, and process exit. Rust persists parsed `result.json`, `report.md`, and Audit `assessment.json`. There are no provider callbacks, heartbeat supervision, recovery ladders, or inferred continuation sessions. A persistent Git-metadata lock uses `File::try_lock`; closing the file releases it.
 
-Prepare is the last shared user interaction before independent Discovery runs. It may challenge
-missing or ambiguous user-owned intent when that could lead to materially different assumptions.
-It does not inspect the repository or investigate engineering facts. Ticket preparation receives
-the original ticket and preserves it verbatim. The user reviews the result before Discovery; only
-direct and unmistakable user constraints enter frozen `constraints`. Unknowns, hypotheses, and
-deliberate delegation retain their distinct meanings in the request body.
+## Artifacts and storage
 
-The model owns interaction: it investigates, asks the user material questions, reconciles meaning,
-and evaluates implementation. Rust is a referee: it freezes exact inputs, creates workspaces,
-validates structure and provenance, publishes immutable bundles, binds lineage, drives the fixed
-Build work/review loop, and derives Audit verdicts. Rust never votes, ranks models, assigns
-confidence, or determines engineering truth.
+Adoption binds one exact Reconciled artifact. Implementation records the Build start and target commits/trees and names Adoption and Reconciled ancestry. Audit publishes immutable assessment plus derived verdict. Bundle manifests hash payloads and record parent refs; the journal is diagnostic, while artifacts and Build state are authoritative. Store format and artifact schema version 6 remain independent of the breaking Build-local schemas.
 
-Authority is deliberately layered: the prepared request plus frozen explicit user constraints
-establish the effort and user intent; Discovery investigates and produces engineering evidence;
-Reconcile turns selected Discovery evidence into the binding contract; the detailed implementation
-plan describes implementation approach and ordering only; Work and Review act within that authority;
-and Final Audit checks exact implementation against binding Reconciled requirements.
-
-An effort freezes a reviewed request, explicit constraints, canonical target project, baseline
-commit, and baseline tree. It intentionally does not freeze Discovery count, provider identity,
-slots, or quorum. Provider/model metadata remains attached to each Discovery run as provenance.
-The canonical project plus human effort slug identifies one immutable unit. Concurrent identical
-initialization converges on it; changed request kind, body, or constraints under that slug hard-fail.
-
-## Discovery
-
-Each Discovery gets a stable human provenance label and a unique workspace with a clean detached `source/` checkout at the frozen
-baseline. Its public artifact contains run provenance, evidence graph, technical specification, and
-summary. Findings classify verification as inspection, corroborated, or experiment. The Reconcile
-guide forbids repository access, so the public result must stand alone. Rust mechanically restricts
-admissible Reconcile evidence to selected artifact lineage, but does not sandbox the host model's
-filesystem.
-
-## Reconcile
-
-Reconcile binds an explicit set of at least two unique finalized `IMPLEMENTATION_READY` Discovery
-artifacts. Rust rejects duplicates, blocked artifacts, and cross-effort/context/baseline inputs;
-the read-only binding publishes nothing. No later Discovery is inferred or added.
-
-Reconcile is closed-world. Its only engineering evidence is the exact public Discovery artifacts
-that were selected. Frozen explicit constraints remain direct pre-Discovery user authority, which
-Rust mechanically preserves as governing requirements; they are not engineering evidence discovered
-by Reconcile. The frozen request and context remain available for goal/context, effort identity,
-lineage, and validation that selected artifacts answer the same effort, but may not be reinterpreted
-as another source of technical investigation. Reconcile-time user clarification is likewise direct
-user authority, not engineering evidence. Exact model limits are supplied by `orchestrate reconcile
-guide`.
-
-One Reconciled Discovery bundle contains `reconciled-discovery.md`,
-`reconciled-discovery.json`, and `manifest.json`; its parents are exactly the selected Discovery
-artifacts. `reconciled-discovery.json` is the one authoritative contract and deterministically
-renders `reconciled-discovery.md`; the reviewed document cannot add obligations outside it. The
-contract separates exhaustive binding `requirements` from advisory `technical_suggestions`.
-Rust requires each ordinary requirement and suggestion to trace to a selected Discovery artifact.
-One source is provenance, not a vote. Rust adds frozen explicit user constraints as governing
-authority. An explicit Reconcile-time user clarification is recorded as direct user authority.
-
-An empty `blocking_issues` list produces an implementation-ready result. Non-empty issues produce
-`BLOCKED`. Reconcile then stops without Adoption or Build approval.
-
-## Adoption, Build, and Audit
-
-Explicit Build invocation is authorization and creates or reuses Adoption for one exact Reconciled
-Discovery. Reconciled Discovery is binding what; the detailed implementation plan is implementation
-guidance for how and ordering only. A material conflict stops Build before implementation rather than
-quietly changing either authority. A prepared Build stores its exact authority, phase/task grouping,
-host settings, controller state, and durable role reports in the external store. Rust moves one worker
-and independent reviewer through whole delivery phases; task IDs do not create extra stops.
-Registration records the adoption, reconciled artifact, Discovery baseline, actual Build starting
-commit/tree, exact target commit/tree, producer declaration, and status while retaining an immutable
-snapshot. Final Audit receives both that immutable evidence snapshot and a disposable contained
-checkout for verification that may write files.
-
-Audit evaluates the binding requirements from the exact Reconciled Discovery against that exact
-implementation. Rust requires one coverage row per binding requirement, rejects `not_applicable`
-for an unconditional requirement, requires evidence when a conditional requirement is marked
-`not_applicable`, and derives the verdict: any failure gives `CHANGES_REQUIRED`;
-otherwise unknown or missing coverage gives `BLOCKED`; otherwise a submitted implementation passes.
-Publication, replay and consumption bind to the exact final-Audit attempt identity, so a replay
-republishes one immutable bundle while a genuinely new attempt at the same implementation
-publishes separately, and no Audit is ever selected by implementation or recency.
-
-A stopped Build stays stopped until an operator resolves it. Resolution records the exact
-intervention, the stopped action, the frozen digests and the observed checkout, then authorizes
-one distinct continuation; it dispatches nothing itself, and a proposed change to the adopted
-contract is refused and directed to a linked successor Build. Role attributes live in Build
-`config.toml` and are forwarded to the provider exactly as configured, or refused with the role,
-attribute and adapter named; an operator-authorized overlay is immutable, versioned, and governs
-only the actions recorded after it. Cleanup and export are separate operator commands: cleanup
-removes only generated Cargo products from checkouts the controller recorded and owns, and export
-selects its members from durable state before traversal and verifies the archive before promoting
-it, reporting collection independently of the Build's semantic outcome.
-
-## Storage
-
-Stores use format and artifact schema version 6 and reject older stores rather than migrating them.
-Project and effort directories use safe human names; internal project, effort, context, artifact,
-commit, tree, and lineage identities remain in metadata. Project-name collisions across different
-canonical repositories fail clearly.
-Phase directories are `discovery`, `reconcile`, `adoption`, `build`, and `audit`. Immutable bundle
-manifests hash payloads and record exact parents. The journal is diagnostic; artifact manifests are
-the authority lineage.
+The CLI retains `build guide`, `prepare`, `scaffold`, and `status`; adds `reset` and `resume`; and removes preflight, cleanup, export, resolve, and authority-amendment machinery. Optional OnceOver and evidence-output protocols are removed.

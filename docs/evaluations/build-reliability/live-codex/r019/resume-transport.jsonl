@@ -1,7 +1,0 @@
-{"type":"thread.started","thread_id":"01a0d9e6-7f91-77e3-a5d3-df81ed501642"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll use only the shell to write the requested file, then run the two specified Git checks."}}
-{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"printf 'resume probe\\\\n' > resume-permission-probe.txt && git status --short --branch && git rev-parse HEAD\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"printf 'resume probe\\\\n' > resume-permission-probe.txt && git status --short --branch && git rev-parse HEAD\"","aggregated_output":"## main\n?? preflight-worker.txt\n?? resume-permission-probe.txt\nace2992da97ad98f351cce477084dd7e34cfdaea\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Created `resume-permission-probe.txt` successfully with exactly:\n\n```text\nresume probe\n```\n\nObserved:\n\n```text\n## main\n?? preflight-worker.txt\n?? resume-permission-probe.txt\nace2992da97ad98f351cce477084dd7e34cfdaea\n```"}}
-{"type":"turn.completed","usage":{"input_tokens":143029,"cached_input_tokens":119552,"cache_write_input_tokens":0,"output_tokens":2013,"reasoning_output_tokens":788}}

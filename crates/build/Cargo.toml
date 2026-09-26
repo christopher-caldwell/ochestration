@@ -10,15 +10,9 @@ orchestrate-audit = { path = "../audit" }
 orchestrate-contracts = { path = "../contracts" }
 orchestrate-core = { path = "../core" }
 orchestrate-guides = { path = "../guides" }
-hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 toml.workspace = true
-
-[dev-dependencies]
-orchestrate-discovery = { path = "../discovery" }
-symlink = "0.1.0"
 
 [lints]
 workspace = true

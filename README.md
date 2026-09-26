@@ -71,21 +71,16 @@ See the [installation guide](docs/guides/agent-installation.md) for the manual f
 - **Discovery** investigates the frozen repository and may ask you material questions.
 - **Reconcile** analyzes only the Discovery outputs you explicitly give it and produces the
   authoritative answer to "what are we actually going to do?"
-- **Build** is an unattended Rust-driven worker/reviewer loop for a prepared detailed implementation plan.
+- **Build** is a checkpointed Rust-driven Work → Review → Audit gate runner with one bounded Unblock detour.
 - **Audit** checks the exact registered implementation against the binding reconciled requirements;
   unattended Build invokes it automatically.
 
 ## How roles talk to providers
 
-A Build role declares provider-neutral settings (`adapter`, `model_strength`, `reasoning_effort`,
-`permission`) and the controller translates them into that provider's own CLI arguments at the
-adapter edge. It injects no environment variable, reads and writes no provider configuration or
-credential store, and touches no provider state: each role inherits the launching environment, so
-the backend, endpoint and credentials stay exactly as that host is set up.
-
-The complete per-setting translation table for Codex, Claude Code, and Cursor — plus what each
-dispatch records, the transport arguments, and the refused combinations — is the
-[provider translation reference](docs/guides/provider-mappings.md).
+Build config uses schema 4 and each role selects one native adapter (`codex`, `claude`, or `cursor`),
+with optional native `model` and opaque CLI `args`. The adapters preserve the launching environment
+and only own provider transport, working-directory, and session flags. Build state and plan are
+breaking schema versions; historical Build state is intentionally not migrated.
 
 For deeper details, see the [documentation index](docs/README.md) and
 [architecture](docs/architecture.md).

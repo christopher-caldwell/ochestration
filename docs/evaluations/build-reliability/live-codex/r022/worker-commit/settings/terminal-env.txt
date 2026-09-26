@@ -1,6 +1,0 @@
-captured_at_utc=2026-09-25T20:13:25Z
-shell=/bin/zsh
-resolved_codex=/Users/christophercaldwell/.nvm/versions/node/v22.13.1/bin/codex
-codex_version=codex-cli 0.156.1
-launcher_on_path=none
-/Users/christophercaldwell/.nvm/versions/node/v22.13.1/bin/codex

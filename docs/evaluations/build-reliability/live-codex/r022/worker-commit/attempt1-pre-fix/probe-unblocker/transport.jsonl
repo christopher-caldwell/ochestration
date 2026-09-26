@@ -1,7 +1,0 @@
-{"type":"thread.started","thread_id":"01a0da34-6f00-7193-ae0a-890a7d96362e"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll perform the two read-only checks and make no changes."}}
-{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,120p' README.md && git rev-parse HEAD\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,120p' README.md && git rev-parse HEAD\"","aggregated_output":"orchestrate preflight fixture\nprobe token: orchestrate-probe-0d01c74c300c3605\na6d292cac139347498447b2f488c54971fe5f424\n","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"orchestrate-probe-0d01c74c300c3605\na6d292cac139347498447b2f488c54971fe5f424"}}
-{"type":"turn.completed","usage":{"input_tokens":30425,"cached_input_tokens":27008,"cache_write_input_tokens":0,"output_tokens":160,"reasoning_output_tokens":0}}

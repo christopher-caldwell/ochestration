@@ -288,16 +288,12 @@ name = "orchestrate-build"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "hex",
  "orchestrate-audit",
  "orchestrate-contracts",
  "orchestrate-core",
- "orchestrate-discovery",
  "orchestrate-guides",
  "serde",
  "serde_json",
- "sha2",
- "symlink",
  "toml",
 ]
 

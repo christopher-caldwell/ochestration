@@ -1,3 +1,6 @@
+use orchestrate_build::state::{
+    BuildState, Gate, STATE_VERSION, Scope, Session, Status, Stop, StopKind, UnblockContext,
+};
 use orchestrate_contracts::{
     ArtifactKind, ArtifactRef, AuditAssessment, Coverage, CoverageState, DiscoverySourceRef,
     EvidenceKind, EvidenceNode, EvidenceStatus, EvidenceSynthesis, ReconcileProposal,
@@ -32,7 +35,7 @@ fn git(repo: &Path, args: &[&str]) {
             .success()
     );
 }
-fn git_output(repo: &Path, args: &[&str]) -> String {
+fn git_text(repo: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(args)
         .current_dir(repo)
@@ -40,30 +43,13 @@ fn git_output(repo: &Path, args: &[&str]) -> String {
         .unwrap();
     assert!(
         output.status.success(),
-        "git {args:?} failed: {}",
+        "git {args:?}: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 fn command(root: &Path, args: &[&str]) -> serde_json::Value {
     let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
-        .arg("--root")
-        .arg(root)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).unwrap()
-}
-/// Run one command from inside a fixture repository, which the Build driver
-/// requires: it selects the effort's project from the current directory.
-fn command_from(dir: &Path, root: &Path, args: &[&str]) -> serde_json::Value {
-    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
-        .current_dir(dir)
         .arg("--root")
         .arg(root)
         .args(args)
@@ -1776,154 +1762,6 @@ fn adoption_implementation_and_audit_follow_the_reconciled_binding_contract() {
     assert!(repo.join("source.txt").exists());
 }
 
-/// The operator commands exist end to end: status is read-only, static
-/// preflight writes nothing and runs no inference, a live probe is refused
-/// without its authorization, cleanup is dry-runnable, and export promotes only
-/// a verified archive.
-#[test]
-fn build_operator_commands_status_preflight_cleanup_and_export() {
-    let (root, repo, effort) = new_effort("build-operator");
-    let inputs = [
-        finalize_discovery(&root, &effort),
-        finalize_discovery(&root, &effort),
-    ];
-    let reconciled = reconcile(&root, &effort, &inputs);
-    command(
-        &root,
-        &[
-            "reconcile",
-            "adopt",
-            "--effort",
-            &effort,
-            "--reconciled",
-            &reconciled.artifact_id,
-            "--authorization-label",
-            "operator",
-        ],
-    );
-    let scaffold = command(&root, &["build", "scaffold", "--effort", &effort]);
-    let build_dir = PathBuf::from(scaffold["details"]["build_dir"].as_str().unwrap());
-    fs::write(
-        build_dir.join("implementation-plan.md"),
-        "## Delivery phase D1 — Only phase\n\n**Requirements:** R-1\n\n**Completion evidence:** D1 is complete.\n\n**Deliberate later-phase exclusions:** none.\n\nTasks:\n- T1 Implement the phase.\n",
-    )
-    .unwrap();
-    let plan = serde_json::json!({
-        "schema_version": 2,
-        "reconciled": reconciled,
-        "detailed_plan": "implementation-plan.md",
-        "delivery_phases": [{"id": "D1", "tasks": ["T1"]}],
-    });
-    fs::write(
-        build_dir.join("plan.json"),
-        serde_json::to_vec_pretty(&plan).unwrap(),
-    )
-    .unwrap();
-
-    // Status before anything is dispatched: prepared, nothing running, and no
-    // state changed.
-    let status = command(&root, &["build", "status", "--effort", &effort]);
-    assert_eq!(status["semantic_outcome"], "READ_ONLY");
-    assert_eq!(status["details"]["has_state"], false);
-    assert_eq!(status["details"]["prepared"], true);
-    assert!(
-        status["details"]["controller"]["detail"]
-            .as_str()
-            .unwrap()
-            .contains("not proof")
-    );
-
-    // Static preflight changes no Build state and invokes nothing.
-    let before = fs::read_dir(&build_dir).unwrap().count();
-    let preflight = command(&root, &["build", "preflight", "--effort", &effort]);
-    assert_eq!(preflight["details"]["preflight"]["mode"], "static");
-    assert!(preflight["details"]["preflight"]["live"].is_null());
-    let roles = preflight["details"]["preflight"]["roles"]
-        .as_array()
-        .unwrap();
-    assert!(
-        roles
-            .iter()
-            .any(|role| role["role"] == "worker" && role["attribute_arguments"].is_array())
-    );
-    let retained = preflight["details"]["retained"].as_str().unwrap();
-    assert!(PathBuf::from(retained).is_file());
-    assert!(fs::read_dir(&build_dir).unwrap().count() == before + 1);
-
-    // A live probe without its explicit authorization is refused, and the
-    // refusal discloses the cost before anything is spent.
-    let error = command_error(
-        &root,
-        &["build", "preflight", "--effort", &effort, "--live"],
-    );
-    assert!(error.contains("explicit operator authorization"), "{error}");
-    assert!(
-        error.contains("quota") || error.contains("tokens"),
-        "{error}"
-    );
-
-    // Cleanup with no owned checkouts is a harmless no-op, dry or real.
-    let cleanup = command(
-        &root,
-        &["build", "cleanup", "--effort", &effort, "--dry-run"],
-    );
-    assert_eq!(cleanup["details"]["dry_run"], true);
-    assert_eq!(cleanup["details"]["complete"], true);
-    assert_eq!(cleanup["details"]["removed"], serde_json::json!([]));
-
-    // Export selects from source state, verifies the archive and promotes it.
-    let archive = root.join("evidence.zip");
-    let export = command(
-        &root,
-        &[
-            "build",
-            "export",
-            "--effort",
-            &effort,
-            "--output",
-            archive.to_str().unwrap(),
-        ],
-    );
-    assert_eq!(export["semantic_outcome"], "complete");
-    assert!(archive.is_file());
-    let bytes = fs::read(&archive).unwrap();
-    assert_eq!(&bytes[..4], b"PK\x03\x04");
-    assert!(
-        export["details"]["verification"]["missing"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        export["details"]["excluded_classes"]
-            .as_array()
-            .unwrap()
-            .len()
-            >= 2
-    );
-    assert!(
-        repo.join("source.txt").exists(),
-        "the product checkout was touched"
-    );
-
-    // An export whose required evidence disappeared is incomplete, its exit is
-    // nonzero, and no final archive is produced.
-    fs::remove_file(build_dir.join("plan.json")).unwrap();
-    let failed = command_error(
-        &root,
-        &[
-            "build",
-            "export",
-            "--effort",
-            &effort,
-            "--output",
-            root.join("failed.zip").to_str().unwrap(),
-        ],
-    );
-    assert!(failed.contains("evidence export is failed"), "{failed}");
-    assert!(!root.join("failed.zip").exists());
-}
-
 #[test]
 fn build_prepare_is_a_non_executing_canonical_help_path() {
     let root = temporary("build-prepare-uninitialized-store");
@@ -1940,535 +1778,157 @@ fn build_prepare_is_a_non_executing_canonical_help_path() {
         String::from_utf8_lossy(&output.stderr)
     );
     let guide = String::from_utf8(output.stdout).unwrap();
-    assert!(guide.contains("does not authorize the chat to run any Orchestrate CLI command"));
-    assert!(guide.contains("own the complete Work/Review/Unblock/Audit loop"));
+    assert!(guide.contains("Preparation, `$build`, and readiness discussion do not authorize any Orchestrate CLI command"));
+    assert!(guide.contains(
+        "explicit Build launch authorizes the Rust controller to own the complete internal Work"
+    ));
     assert!(
         !root.exists(),
         "help must not initialize or mutate the orchestration store"
     );
 }
 
-/// The live preflight's own bookkeeping — creating and seeding its fixture Git
-/// repositories — must not write into the process stdout, which a scripted
-/// consumer reads as the command's single JSON result.
 #[test]
-fn live_preflight_keeps_stdout_a_single_json_value() {
-    let (root, _repo, effort) = new_effort("live-preflight-stdout");
+fn build_scaffold_status_and_removed_commands_match_the_small_surface() {
+    let (root, _repo, effort) = new_effort("build-small-surface");
     let scaffold = command(&root, &["build", "scaffold", "--effort", &effort]);
     let build_dir = PathBuf::from(scaffold["details"]["build_dir"].as_str().unwrap());
-    fs::write(
-        build_dir.join("config.toml"),
-        "schema_version = 2\n\n[worker]\nadapter = \"codex\"\nmodel = \"stub-model\"\npermission = \"full_access\"\n\n[reviewer]\nadapter = \"codex\"\n\n[unblocker]\nadapter = \"codex\"\n",
-    )
-    .unwrap();
-    // A stub provider that answers `--version` and completes every dispatch
-    // without writing anything, so the probes exercise the controller's own
-    // fixture, transport and retention handling without any real inference.
-    let bin = temporary("live-preflight-stub-bin");
-    let stub_source = bin.join("codex-stub.rs");
-    fs::write(
-        &stub_source,
-        "fn main() { if std::env::args().nth(1).as_deref() == Some(\"--version\") { println!(\"codex-cli stub\"); } }\n",
-    )
-    .unwrap();
-    let stub = bin.join(format!("codex{}", std::env::consts::EXE_SUFFIX));
-    let compiled = Command::new("rustc")
-        .arg("--edition=2024")
-        .arg(&stub_source)
-        .arg("-o")
-        .arg(&stub)
-        .output()
-        .unwrap();
-    assert!(
-        compiled.status.success(),
-        "could not build the provider stub: {}",
-        String::from_utf8_lossy(&compiled.stderr)
-    );
-    let mut search_path = vec![bin.clone()];
-    if let Some(path) = std::env::var_os("PATH") {
-        search_path.extend(std::env::split_paths(&path));
+    let plan: serde_json::Value =
+        serde_json::from_slice(&fs::read(build_dir.join("plan.json")).unwrap()).unwrap();
+    let config = fs::read_to_string(build_dir.join("config.toml")).unwrap();
+    assert_eq!(plan["schema_version"], 3);
+    assert!(plan["phases"][0]["requirement_ids"].is_array());
+    assert!(config.contains("schema_version = 4"));
+    let status = command(&root, &["build", "status", "--effort", &effort]);
+    assert_eq!(status["details"]["status"], "uninitialized");
+    for removed in [
+        "preflight",
+        "cleanup",
+        "export",
+        "resolve",
+        "amend-authority",
+    ] {
+        let error = command_error(&root, &["build", removed, "--effort", &effort]);
+        assert!(
+            error.contains("unrecognized subcommand") || error.contains("invalid value"),
+            "{removed}: {error}"
+        );
     }
-    let path = std::env::join_paths(search_path).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
-        .arg("--root")
-        .arg(&root)
-        .args([
-            "build",
-            "preflight",
-            "--effort",
-            &effort,
-            "--live",
-            "--authorize-live",
-        ])
-        .env("PATH", path)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "live preflight stdout was not one JSON value ({error}): {}",
-            String::from_utf8_lossy(&output.stdout)
-        )
-    });
-    let probes = value["details"]["preflight"]["live"]["probes"]
-        .as_array()
-        .unwrap();
-    assert_eq!(probes.len(), 3);
-    assert!(probes.iter().all(|probe| probe["outcome"].is_string()));
+    let error = command_error(&root, &["once-over", "guide"]);
+    assert!(error.contains("unrecognized subcommand"), "{error}");
 }
 
-/// This is deliberately opt-in: each run dispatches three real provider
-/// probes, spends the account's own quota, and writes only in disposable Git
-/// fixtures. A Codex worker is configured `full_access` because its own
-/// workspace-write sandbox protects Git metadata; the rejection of that narrow
-/// pairing has a separate focused test.
 #[test]
-#[ignore = "real provider calls; requires local authentication and explicit operator authorization"]
-fn opt_in_live_provider_preflight_checks_commit_resume_and_roles() {
-    let adapter = std::env::var("ORCHESTRATE_LIVE_ADAPTER")
-        .expect("set ORCHESTRATE_LIVE_ADAPTER to codex, claude, or cursor");
-    assert!(
-        ["codex", "claude", "cursor"].contains(&adapter.as_str()),
-        "unsupported live adapter {adapter}"
-    );
-
-    let (root, _repo, effort) = new_effort(&format!("live-{adapter}"));
-    let discovery = finalize_discovery(&root, &effort);
-    let second_discovery = finalize_discovery(&root, &effort);
-    reconcile(&root, &effort, &[discovery, second_discovery]);
-    let scaffold = command(&root, &["build", "scaffold", "--effort", &effort]);
-    let build_dir = PathBuf::from(scaffold["details"]["build_dir"].as_str().unwrap());
-    // A Codex Worker can only stage and commit under the explicit unrestricted
-    // permission: its own workspace-write sandbox protects Git metadata, and
-    // the controller refuses that pairing rather than widening it silently.
-    let worker_permission = if adapter == "codex" {
-        "full_access"
-    } else {
-        "workspace_write"
-    };
-    let config = format!(
-        "schema_version = 3\n\n[worker]\nadapter = \"{adapter}\"\nmodel_strength = \"standard\"\nreasoning_effort = \"medium\"\npermission = \"{worker_permission}\"\n\n[reviewer]\nadapter = \"{adapter}\"\nmodel_strength = \"standard\"\nreasoning_effort = \"medium\"\npermission = \"read_only\"\n\n[unblocker]\nadapter = \"{adapter}\"\nmodel_strength = \"standard\"\nreasoning_effort = \"medium\"\npermission = \"read_only\"\n"
-    );
-    fs::write(build_dir.join("config.toml"), config).unwrap();
-
-    // Production static preflight reports the executable, exact mapping and
-    // local version before any inference is dispatched.
-    let static_result = command(&root, &["build", "preflight", "--effort", &effort]);
-    let static_report = &static_result["details"]["preflight"];
-    assert_eq!(static_report["mode"], "static");
-    assert_eq!(static_report["roles"].as_array().unwrap().len(), 4);
-    for role in ["worker", "reviewer", "unblocker"] {
-        let report = static_report["roles"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|report| report["role"] == role)
-            .unwrap();
-        assert_eq!(report["adapter"], adapter);
-        assert!(report["executable_found"].as_bool().unwrap());
-        assert!(
-            report["version"]
-                .as_str()
-                .is_some_and(|value| !value.is_empty())
-        );
-        assert!(!report["attribute_arguments"].as_array().unwrap().is_empty());
-    }
-
-    // Both flags are required: this test's explicit operator authorization is
-    // scoped to a disposable repository and the bounded preflight probes.
-    let live_result = command(
-        &root,
-        &[
-            "build",
-            "preflight",
-            "--effort",
-            &effort,
-            "--live",
-            "--authorize-live",
-        ],
-    );
-    let probes = live_result["details"]["preflight"]["live"]["probes"]
-        .as_array()
-        .unwrap();
-    assert_eq!(probes.len(), 3);
-    for role in ["worker", "reviewer", "unblocker"] {
-        let probe = probes.iter().find(|probe| probe["role"] == role).unwrap();
-        assert_eq!(probe["adapter"], adapter);
-        let action_dir = PathBuf::from(probe["evidence"][2].as_str().unwrap());
-        let invocation: serde_json::Value =
-            serde_json::from_slice(&fs::read(action_dir.join("invocation.json")).unwrap()).unwrap();
-        let static_role = static_report["roles"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|report| report["role"] == role)
-            .unwrap();
-        assert_eq!(
-            invocation["mapped"]["arguments"], static_role["attribute_arguments"],
-            "dispatch and static preflight mappings differ for {role}"
-        );
-        assert_eq!(
-            invocation["requested"]["model_strength"]["configured"],
-            "standard"
-        );
-        assert_eq!(
-            invocation["requested"]["reasoning_effort"]["configured"],
-            "medium"
-        );
-        assert_eq!(
-            invocation["requested"]["permission"]["configured"],
-            if role == "worker" {
-                worker_permission
-            } else {
-                "read_only"
-            }
-        );
-        if adapter == "codex" {
-            assert!(invocation["observed"]["model"].is_null());
-        } else {
-            assert!(invocation["observed"]["model"].as_str().is_some());
-        }
-        // No adapter receives a controller-injected provider environment: a
-        // Claude role runs against the backend this host's own Claude Code
-        // configuration selects, exactly as the other adapters run against
-        // theirs.
-        assert!(
-            invocation["mapped"]["environment"]
-                .as_object()
-                .unwrap()
-                .is_empty(),
-            "{adapter} role recorded an injected provider environment"
-        );
-
-        if role == "worker" {
-            // Every configured worker is asked to make and commit a change, so
-            // an adapter that can edit but not commit fails this probe instead
-            // of being counted as capable.
-            assert_eq!(probe["outcome"], "fresh_and_resumed_commits_verified");
-            assert!(probe["resumed_session_verified"].as_bool().unwrap());
-            let fixture = PathBuf::from(probe["fixture"].as_str().unwrap());
-            let first = probe["fresh_commit"].as_str().unwrap();
-            let second = probe["resumed_commit"].as_str().unwrap();
-            assert_eq!(probe["resumed_parent"], first);
-            assert_eq!(git_output(&fixture, &["rev-parse", "HEAD"]), second);
-            assert_eq!(
-                git_output(&fixture, &["rev-parse", &format!("{second}^1")]),
-                first
-            );
-            assert_eq!(
-                git_output(
-                    &fixture,
-                    &["show", &format!("{first}:preflight-worker.txt")]
-                ),
-                "orchestrate preflight"
-            );
-            assert_eq!(
-                git_output(
-                    &fixture,
-                    &["show", &format!("{second}:preflight-worker-resumed.txt")]
-                ),
-                "orchestrate resumed preflight"
-            );
-            assert_eq!(
-                git_output(
-                    &fixture,
-                    &["diff-tree", "--no-commit-id", "--name-only", "-r", first]
-                ),
-                "preflight-worker.txt"
-            );
-            assert_eq!(
-                git_output(
-                    &fixture,
-                    &["diff-tree", "--no-commit-id", "--name-only", "-r", second]
-                ),
-                "preflight-worker-resumed.txt"
-            );
-            assert!(
-                git_output(
-                    &fixture,
-                    &["status", "--porcelain", "--untracked-files=all"]
-                )
-                .is_empty()
-            );
-
-            let resumed: serde_json::Value = serde_json::from_slice(
-                &fs::read(action_dir.join("resume").join("invocation.json")).unwrap(),
-            )
-            .unwrap();
-            assert_eq!(resumed["session"]["resumed"], true);
-            assert_eq!(
-                resumed["session"]["requested"],
-                invocation["session"]["observed"]
-            );
-            assert_eq!(
-                resumed["mapped"]["arguments"],
-                invocation["mapped"]["arguments"]
-            );
-            assert_eq!(
-                resumed["mapped"]["environment"],
-                invocation["mapped"]["environment"]
-            );
-        } else {
-            assert_eq!(probe["outcome"], "read_and_command_verified");
-            let fixture = PathBuf::from(probe["fixture"].as_str().unwrap());
-            assert!(
-                git_output(
-                    &fixture,
-                    &["status", "--porcelain", "--untracked-files=all"]
-                )
-                .is_empty()
-            );
-        }
-    }
-}
-
-/// The plan the live Build implements: one delivery phase, one requirement, one
-/// task, and completion evidence anyone can check at the submitted commit.
-const LIVE_PLAN: &str = "# Live validation plan\n\n## Delivery phase P1 — Greeting file\n\n**Requirements:** R-1\n\n**Completion evidence:** `hello.txt` exists at the submitted commit and its entire content is the line `hello`.\n\n**Deliberate later-phase exclusions:** none.\n\nTasks:\n- T1 Create `hello.txt` whose entire content is the single line `hello`.\n";
-
-fn live_proposal(source: &ArtifactRef) -> ReconcileProposal {
-    ReconcileProposal {
-        core_result: "The repository greets with a hello file.".into(),
-        problem: "The repository has no greeting file.".into(),
-        product_behavior_changed: vec!["Reading hello.txt yields hello.".into()],
-        product_behavior_unchanged: vec!["Every other file is unchanged.".into()],
-        technical_behavior_changed: vec!["One file is added.".into()],
-        technical_behavior_unchanged: vec!["No other path changes.".into()],
-        requirements: vec![ReconciledRequirement {
-            requirement: Requirement {
-                id: "R-1".into(),
-                text: "The repository contains a file named hello.txt whose entire content is the single line hello.".into(),
-                acceptance: "Reading hello.txt at the submitted commit shows exactly hello.".into(),
-                condition: None,
-                governing: false,
-            },
-            source_refs: vec![DiscoverySourceRef {
-                discovery_artifact_id: source.artifact_id.clone(),
-                node_id: Some("R-1".into()),
-            }],
-            user_clarification: None,
-            frozen_user_constraint: false,
-        }],
-        evidence_synthesis: vec![EvidenceSynthesis {
-            id: "E-1".into(),
-            conclusion: "The greeting file is not present.".into(),
-            source_refs: vec![DiscoverySourceRef {
-                discovery_artifact_id: source.artifact_id.clone(),
-                node_id: Some("F-1".into()),
-            }],
-            verification_methods: vec![Verification::Inspection],
-            evidence_summary: "The fixture repository was inspected.".into(),
-            limitations: "A disposable fixture, so no controlled reproduction was needed.".into(),
-        }],
-        disagreements: vec![],
-        rejected_alternatives: vec![],
-        implementation_risks: vec![],
-        compatibility_concerns: vec![],
-        caveats: vec![],
-        technical_suggestions: vec![],
-        blocking_issues: vec![],
-    }
-}
-
-/// A live Build whose Work, Review, advisory once-over and formal Audit all run
-/// through production adapters.  The read-only roles must complete real actions:
-/// their receipts, reports and assessment come from their own final response,
-/// which the controller validates and persists exactly as a written file.
-#[test]
-#[ignore = "real provider calls; requires local authentication and explicit operator authorization"]
-fn opt_in_live_build_completes_through_read_only_role_evidence() {
-    let worker =
-        std::env::var("ORCHESTRATE_LIVE_WORKER_ADAPTER").unwrap_or_else(|_| "claude".into());
-    let reviewer =
-        std::env::var("ORCHESTRATE_LIVE_REVIEWER_ADAPTER").unwrap_or_else(|_| "codex".into());
-    for adapter in [&worker, &reviewer] {
-        assert!(
-            ["codex", "claude", "cursor"].contains(&adapter.as_str()),
-            "unsupported live adapter {adapter}"
-        );
-    }
-    // A Codex worker can only commit under the explicit unrestricted
-    // permission; every other adapter writes inside its own sandbox.
-    let worker_permission = if worker == "codex" {
-        "full_access"
-    } else {
-        "workspace_write"
-    };
-    let (root, repo, effort) = new_effort("live-build");
-    let discovery = finalize_discovery(&root, &effort);
-    let second_discovery = finalize_discovery(&root, &effort);
-    let proposal_path = write_proposal(&root, &live_proposal(&discovery));
-    let reconciled = reference(
-        &command(
-            &root,
-            &[
-                "reconcile",
-                "finalize",
-                "--effort",
-                &effort,
-                "--discovery",
-                &discovery.artifact_id,
-                "--discovery",
-                &second_discovery.artifact_id,
-                "--bundle",
-                proposal_path.to_str().unwrap(),
-            ],
-        ),
-        "reconciled",
-    );
-    command(&root, &["build", "scaffold", "--effort", &effort]);
+fn build_reset_and_resume_return_durable_state_json_without_dispatch() {
+    let (root, repo, effort_id) = new_effort("build-reset-resume");
     let store = Store::open(&root).unwrap();
-    let loaded = store.load_effort(&effort).unwrap();
-    let build_dir = store.phase_dir(&loaded, "build").unwrap();
-    fs::write(build_dir.join("implementation-plan.md"), LIVE_PLAN).unwrap();
+    let effort = store.load_effort(&effort_id).unwrap();
+    let build_dir = store.phase_dir(&effort, "build").unwrap();
+    let checkpoint = git_text(&repo, &["rev-parse", "HEAD"]);
+    let mut state = BuildState {
+        schema_version: STATE_VERSION,
+        reconciled: ArtifactRef {
+            kind: ArtifactKind::ReconciledDiscovery,
+            artifact_id: "reconciled-fixture".into(),
+            digest: "reconciled-digest".into(),
+        },
+        adoption: ArtifactRef {
+            kind: ArtifactKind::Adoption,
+            artifact_id: "adoption-fixture".into(),
+            digest: "adoption-digest".into(),
+        },
+        build_start_commit: checkpoint.clone(),
+        plan_digest: "plan-digest".into(),
+        scope: Scope::Phase { index: 0 },
+        gate: Gate::Work,
+        status: Status::Stopped,
+        checkpoint_commit: checkpoint.clone(),
+        feedback: Vec::new(),
+        unblock: None,
+        current_action_id: Some("a-reset".into()),
+        worker_session: Some(Session {
+            adapter: "codex".into(),
+            id: "worker-session".into(),
+        }),
+        reviewer_session: Some(Session {
+            adapter: "claude".into(),
+            id: "reviewer-session".into(),
+        }),
+        implementation: None,
+        completion: None,
+        stop: Some(Stop {
+            kind: StopKind::ResetRequired,
+            detail: "fixture reset".into(),
+        }),
+    };
     fs::write(
-        build_dir.join("plan.json"),
-        orchestrate_contracts::encode(&serde_json::json!({
-            "schema_version": 2,
-            "reconciled": reconciled,
-            "detailed_plan": "implementation-plan.md",
-            "delivery_phases": [{"id": "P1", "tasks": ["T1"]}],
-        }))
-        .unwrap(),
+        build_dir.join("state.json"),
+        orchestrate_contracts::encode(&state).unwrap(),
+    )
+    .unwrap();
+    fs::write(repo.join("source.txt"), "dirty tracked data\n").unwrap();
+    fs::write(repo.join("ordinary.tmp"), "remove on reset\n").unwrap();
+    let reset = command(&root, &["build", "reset", "--effort", &effort_id]);
+    assert_eq!(reset["semantic_outcome"], "RESET");
+    assert_eq!(reset["details"]["status"], "ready");
+    assert_eq!(reset["details"]["checkpoint_commit"], checkpoint);
+    assert_eq!(
+        fs::read_to_string(repo.join("source.txt")).unwrap(),
+        "committed\n"
+    );
+    assert!(!repo.join("ordinary.tmp").exists());
+
+    state.status = Status::Stopped;
+    state.gate = Gate::Unblock;
+    state.unblock = Some(UnblockContext {
+        gate: Gate::Work,
+        scope: Scope::Phase { index: 0 },
+    });
+    state.current_action_id = Some("a-external".into());
+    state.worker_session = Some(Session {
+        adapter: "codex".into(),
+        id: "stale-worker".into(),
+    });
+    state.reviewer_session = Some(Session {
+        adapter: "codex".into(),
+        id: "stale-reviewer".into(),
+    });
+    state.stop = Some(Stop {
+        kind: StopKind::ExternalRequirement,
+        detail: "operator needed".into(),
+    });
+    let unblock_dir = build_dir.join("actions/a-external");
+    fs::create_dir_all(&unblock_dir).unwrap();
+    fs::write(
+        unblock_dir.join("report.md"),
+        "The operator resolved the prerequisite.\n",
     )
     .unwrap();
     fs::write(
-        build_dir.join("config.toml"),
-        format!(
-            "schema_version = 3\n\n[worker]\nadapter = \"{worker}\"\nmodel_strength = \"standard\"\npermission = \"{worker_permission}\"\n\n[reviewer]\nadapter = \"{reviewer}\"\nmodel_strength = \"standard\"\nreasoning_effort = \"low\"\npermission = \"read_only\"\n\n[unblocker]\nadapter = \"{reviewer}\"\nmodel_strength = \"standard\"\nreasoning_effort = \"low\"\npermission = \"read_only\"\n\n[once_over]\nadapter = \"{reviewer}\"\nmodel_strength = \"standard\"\nreasoning_effort = \"low\"\npermission = \"read_only\"\n"
-        ),
+        build_dir.join("state.json"),
+        orchestrate_contracts::encode(&state).unwrap(),
     )
     .unwrap();
-
-    // Static preflight reports the same mapping the dispatch will use.
-    let preflight = command(&root, &["build", "preflight", "--effort", &effort]);
-    let roles = preflight["details"]["preflight"]["roles"]
-        .as_array()
-        .unwrap();
-    for role in ["worker", "reviewer", "once_over"] {
-        let report = roles.iter().find(|report| report["role"] == role).unwrap();
-        assert!(report["executable_found"].as_bool().unwrap());
-        assert!(
-            !report["attribute_arguments"].as_array().unwrap().is_empty(),
-            "{role} mapped no provider arguments"
-        );
-        assert_eq!(
-            report["environment_overrides"],
-            serde_json::json!([]),
-            "{role} reported an injected provider environment"
-        );
-    }
-
-    let result = command_from(&repo, &root, &["build", "--effort", &effort]);
+    let resumed = command(&root, &["build", "resume", "--effort", &effort_id]);
+    assert_eq!(resumed["semantic_outcome"], "RESUMED");
+    assert_eq!(resumed["details"]["status"], "ready");
+    assert_eq!(resumed["details"]["gate"], "work");
     assert_eq!(
-        result["semantic_outcome"], "BUILD_COMPLETE",
-        "the live Build did not complete: {result:#}"
-    );
-    let audit = reference(&result, "audit");
-    let (_, report): (_, orchestrate_contracts::AuditReport) =
-        store.load_json(&loaded, &audit, "audit.json").unwrap();
-    assert_eq!(report.verdict, orchestrate_contracts::Verdict::Pass);
-    assert_eq!(
-        report.assessment.coverage[0].state,
-        CoverageState::Pass,
-        "the formal Audit did not assess the requirement it was given"
-    );
-    assert_eq!(git_output(&repo, &["show", "HEAD:hello.txt"]), "hello");
-
-    // Every read-only role ran a real action, and its durable evidence was
-    // persisted from its own response by the controller.
-    let mut evidenced = Vec::new();
-    for entry in fs::read_dir(build_dir.join("artifacts")).unwrap() {
-        let action_dir = entry.unwrap().path();
-        let packet: serde_json::Value =
-            serde_json::from_slice(&fs::read(action_dir.join("action.json")).unwrap()).unwrap();
-        let kind = packet["kind"].as_str().unwrap().to_owned();
-        if kind == "work" {
-            continue;
-        }
-        assert!(
-            action_dir.join("transport-evidence.json").is_file(),
-            "{kind} produced no transported evidence, so its role could write files"
-        );
-        assert!(
-            !fs::read_to_string(action_dir.join("report.md"))
-                .unwrap_or_default()
-                .trim()
-                .is_empty(),
-            "{kind} left no report"
-        );
-        let receipt: serde_json::Value =
-            serde_json::from_slice(&fs::read(action_dir.join("result.json")).unwrap()).unwrap();
-        assert_eq!(receipt["action_id"], packet["action_id"]);
-        assert_eq!(receipt["scope"], packet["scope"]);
-        if kind == "final_audit" {
-            assert!(action_dir.join("assessment.json").is_file());
-        }
-        let invocation: serde_json::Value =
-            serde_json::from_slice(&fs::read(action_dir.join("invocation.json")).unwrap()).unwrap();
-        assert_eq!(
-            invocation["requested"]["permission"]["configured"], "read_only",
-            "{kind} did not run under the configured read-only permission"
-        );
-        assert_eq!(invocation["mapped"]["environment"], serde_json::json!({}));
-        evidenced.push(kind);
-    }
-    evidenced.sort();
-    assert!(
-        evidenced.contains(&"review".to_owned()) && evidenced.contains(&"final_audit".to_owned()),
-        "the Build did not exercise a read-only review and Audit: {evidenced:?}"
+        resumed["details"]["current_action_id"],
+        serde_json::Value::Null
     );
     assert_eq!(
-        git_output(&repo, &["status", "--porcelain", "--untracked-files=all"]),
-        ""
+        resumed["details"]["worker_session"],
+        serde_json::Value::Null
     );
-}
-
-#[test]
-fn build_resolution_requires_a_stopped_build_and_a_known_kind() {
-    let (root, _repo, effort) = new_effort("build-resolve");
-    let error = command_error(
-        &root,
-        &[
-            "build",
-            "resolve",
-            "--effort",
-            &effort,
-            "--action",
-            "act-none",
-            "--kind",
-            "environment_repair",
-            "--note",
-            "repaired the environment",
-        ],
+    assert_eq!(
+        resumed["details"]["reviewer_session"],
+        serde_json::Value::Null
     );
-    assert!(error.contains("no Build state exists"), "{error}");
-    let error = command_error(
-        &root,
-        &[
-            "build", "resolve", "--effort", &effort, "--action", "act-none", "--kind", "guess",
-            "--note", "n",
-        ],
+    assert_eq!(
+        resumed["details"]["feedback"][0]["path"],
+        "actions/a-external/report.md"
     );
-    assert!(error.contains("unknown resolution kind"), "{error}");
-    let error = command_error(
-        &root,
-        &[
-            "build",
-            "resolve",
-            "--effort",
-            &effort,
-            "--action",
-            "act-none",
-            "--kind",
-            "environment_repair",
-        ],
-    );
-    assert!(error.contains("requires --note"), "{error}");
 }
 
 #[test]

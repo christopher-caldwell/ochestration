@@ -1,15 +1,16 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "reconciled": {
     "kind": "reconciled_discovery",
     "artifact_id": "replace-with-exact-reconciled-artifact-id",
     "digest": "replace-with-exact-reconciled-manifest-digest"
   },
   "detailed_plan": "implementation-plan.md",
-  "delivery_phases": [
+  "phases": [
     {
-      "id": "D1",
-      "tasks": ["T1"]
+      "id": "P1",
+      "tasks": ["T1"],
+      "requirement_ids": ["R-1"]
     }
   ]
 }

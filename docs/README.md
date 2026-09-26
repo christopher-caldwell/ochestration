@@ -13,14 +13,10 @@
 - [Build and Audit](guides/build-and-audit.md) — run the unattended Build loop through registration and final verification.
 - [Ticket workflow](guides/ticket-workflow.md) — compact ticket-specific checklist.
 
-## Examples
-
-- [Build run capture](examples/build-run-capture.md) — optional wrapper for preserving one Build invocation and its related evidence as a ZIP for later analysis.
-
 ## Reference
 
-- [Provider translation reference](guides/provider-mappings.md) — the complete per-setting translation from a role's provider-neutral configuration to Codex, Claude Code, and Cursor CLI arguments, including what each dispatch records, the transport arguments, and the refused combinations.
 - [Architecture](architecture.md) — authority boundaries, artifacts, and deterministic rules.
+- [Build reliability lessons](evaluations/build-reliability/lessons.md) — why the controller is checkpointed and historical state is not migrated.
 - [Discovery/Reconcile evaluation procedure](evaluations/discovery-reconcile/README.md) — repeatable, output-only evaluation using explicitly supplied attempts, with a separate operator rubric.
 
 ## Planned changes

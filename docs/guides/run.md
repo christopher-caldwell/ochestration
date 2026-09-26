@@ -165,30 +165,27 @@ For more detail, see [Reconcile](reconcile.md).
 ## 4. Build and final Audit
 
 Later, use `$build` to discuss and prepare the exact effort, Reconciled Discovery, and detailed
-implementation plan. Invoking `$build` does not run the CLI, write the Build files, start or resume
-the driver, or spend inference on preflight. Explicitly authorize the specific `scaffold`, preflight,
-or driver operation before chat runs its CLI command. The driver launch binds the exact Reconciled
-Discovery and creates or reuses Adoption.
+implementation plan. Invoking `$build` does not run a CLI command, write Build files, start or
+resume the driver, or dispatch provider work. Explicitly authorize each CLI operation. Scaffold the
+Build directory, bind the exact Reconciled artifact in plan schema 3, list each phase's task and
+requirement IDs, and configure the worker/reviewer (and optional unblocker) in config schema 4.
+The detailed-plan and `plan.json` bytes are frozen by digest at initialization; config is reread
+before every gate.
 
-The process runs every delivery phase, independent reviews, corrections, implementation
-registration, and fresh final Audits until it reaches a published Audit PASS or cannot safely
-continue automatically. An external user or infrastructure need is one common blocker. There are
-no normal `next`, `accept`, `continue`, or Audit-window steps. Technical suggestions remain advisory.
+An explicit `orchestrate build --effort "<effort>"` launch authorizes the complete internal
+Work → Review → Audit loop. Work commits at the product checkpoint. Review and Audit use disposable
+detached checkouts. A phase review passes to the next phase or final Audit, or sends one complete
+correction report back to Work. Audit derives its verdict from exact requirement coverage: pass
+completes, failure routes to final-scope Work, and unknown or missing coverage routes through one
+bounded Unblock detour. Technical suggestions remain advisory.
 
-Before product-changing work, `orchestrate build preflight --effort "<effort>"` reports each
-configured role's executable, exact provider arguments and unknown capabilities. The optional
-`--live --authorize-live` probe spends real provider inference in disposable fixtures and is
-refused without that explicit authorization.
-
-While it runs, progress goes to stderr and one JSON result is written to stdout;
-`orchestrate build status --effort "<effort>"` is a read-only view of the phase, action, configured
-role, accepted phase count, elapsed time, provider activity age, durable stop and the latest Audit
-with its unresolved requirement IDs. A stop is a recorded acceptance decision, not a crash: resolve
-it with `orchestrate build resolve`, which records your intervention and authorizes one
-continuation without discarding earlier work. Afterwards, `orchestrate build cleanup` releases
-generated Cargo products from checkouts the controller owns, and `orchestrate build export`
-produces a verified evidence archive whose completeness is reported separately from the Build's
-outcome.
+`orchestrate build status --effort "<effort>"` reports durable state only. Provider failure,
+malformed output, Git invariant failure, or interrupted execution stops for explicit reset.
+`orchestrate build reset` restores the saved commit, removes ordinary untracked files while
+preserving ignored files, clears sessions, and requeues the same gate. An external requirement
+stops cleanly; once addressed, explicitly run `orchestrate build resume`, then explicitly launch
+`orchestrate build` again. Resume requeues but does not dispatch. Stderr carries compact transitions;
+stdout carries one JSON result.
 
 For more detail, see [Build and Audit](build-and-audit.md).
 

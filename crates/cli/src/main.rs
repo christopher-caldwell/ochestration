@@ -78,11 +78,6 @@ enum Command {
         #[command(subcommand)]
         command: GuideOnly,
     },
-    /// Optional advisory whole-implementation once-over. Internal role guide.
-    OnceOver {
-        #[command(subcommand)]
-        command: GuideOnly,
-    },
     Journal(SelectEffort),
     Status(SelectEffort),
     Inspect(Inspect),
@@ -138,90 +133,15 @@ enum BuildCommand {
         #[arg(long)]
         effort: String,
     },
-    /// Bounded preflight of the configured execution path.  Static by default;
-    /// a live probe needs explicit authorization.
-    Preflight {
+    /// Restore the checkpoint and requeue the same gate after an explicit reset.
+    Reset {
         #[arg(long)]
         effort: String,
-        #[arg(
-            long,
-            help = "Run the optional live probe; refused without --authorize-live"
-        )]
-        live: bool,
-        #[arg(
-            long = "authorize-live",
-            help = "Recorded authorization to spend provider inference on the live probe"
-        )]
-        authorize_live: bool,
     },
-    /// Remove eligible generated Cargo products from inactive owned checkouts.
-    Cleanup {
+    /// Assert an external requirement was addressed and requeue its blocked gate.
+    Resume {
         #[arg(long)]
         effort: String,
-        #[arg(
-            long = "dry-run",
-            help = "Report what would be removed and remove nothing"
-        )]
-        dry_run: bool,
-    },
-    /// Export one effort's evidence, verifying membership and hashes before
-    /// promoting the archive.
-    Export {
-        #[arg(long)]
-        effort: String,
-        #[arg(long, help = "Final archive path; a .partial file is used first")]
-        output: PathBuf,
-    },
-    /// Record an operator intervention on a stopped Build and create the
-    /// continuation boundary it authorizes.  Dispatches no provider action.
-    Resolve {
-        #[arg(long)]
-        effort: String,
-        #[arg(long, help = "Exact stopped action id reported by the stopped Build")]
-        action: String,
-        #[arg(long, value_parser = parse_resolution_kind)]
-        kind: orchestrate_build::ResolutionKind,
-        #[arg(long, conflicts_with = "note_file")]
-        note: Option<String>,
-        #[arg(long = "note-file", conflicts_with = "note")]
-        note_file: Option<PathBuf>,
-        #[arg(
-            long = "evidence",
-            help = "Evidence file bound to this resolution; repeatable"
-        )]
-        evidence: Vec<PathBuf>,
-        #[arg(
-            long = "confirm-not-running",
-            help = "Recorded confirmation that an accepted-but-uncertain provider action is no longer running"
-        )]
-        confirm_not_running: bool,
-        #[arg(
-            long,
-            help = "New role configuration for future invocations; environment_repair only"
-        )]
-        config: Option<PathBuf>,
-    },
-    /// Record an additive authority refusal for a historical in-flight action
-    /// with no durable stop. This does not change state or resume provider work.
-    AmendAuthority {
-        #[arg(long)]
-        effort: String,
-        #[arg(long, help = "Exact current action id from the historical Build")]
-        action: String,
-        #[arg(long, conflicts_with = "note_file")]
-        note: Option<String>,
-        #[arg(long = "note-file", conflicts_with = "note")]
-        note_file: Option<PathBuf>,
-        #[arg(
-            long = "evidence",
-            help = "Evidence file bound to this authority amendment; repeatable"
-        )]
-        evidence: Vec<PathBuf>,
-        #[arg(
-            long = "confirm-not-running",
-            help = "Recorded confirmation that the historical provider action is no longer running"
-        )]
-        confirm_not_running: bool,
     },
 }
 #[derive(Subcommand)]
@@ -481,8 +401,7 @@ fn execute(store: Store, command: Command) -> Result<()> {
         | Command::Work { .. }
         | Command::Review { .. }
         | Command::FinalAudit { .. }
-        | Command::Unblock { .. }
-        | Command::OnceOver { .. } => unreachable!(),
+        | Command::Unblock { .. } => unreachable!(),
         Command::Discovery {
             command: Discovery::Prepare { effort, provenance },
         } => {
@@ -665,214 +584,38 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 "BUILD_COMPLETE",
                 serde_json::json!({"implementation": done.implementation, "audit": done.audit}),
             ),
-            orchestrate_build::BuildResult::Blocked {
-                detail,
-                state,
-                trigger,
-                stopped_action,
-                stop_record,
-            } => output(
+            orchestrate_build::BuildResult::Blocked { detail, state } => output(
                 "STOPPED",
                 "BLOCKED",
-                serde_json::json!({
-                    "detail": detail,
-                    "state": state,
-                    "trigger": trigger,
-                    "stopped_action": stopped_action,
-                    "stop_record": stop_record,
-                }),
+                serde_json::json!({"detail": detail, "state": state}),
             ),
         },
-        Command::Build {
-            command:
-                Some(BuildCommand::Resolve {
-                    effort,
-                    action,
-                    kind,
-                    note,
-                    note_file,
-                    evidence,
-                    confirm_not_running,
-                    config,
-                }),
-            ..
-        } => {
-            let note = match (note, note_file) {
-                (Some(note), None) => note,
-                (None, Some(path)) => fs::read_to_string(&path)
-                    .with_context(|| format!("cannot read {}", path.display()))?,
-                (None, None) => bail!("a resolution requires --note or --note-file"),
-                (Some(_), Some(_)) => unreachable!("clap rejects both note sources"),
-            };
-            let outcome = orchestrate_build::resolve(
-                &store,
-                orchestrate_build::ResolutionRequest {
-                    effort,
-                    action,
-                    kind,
-                    note,
-                    evidence,
-                    confirm_not_running,
-                    config,
-                },
-            )?;
-            match outcome {
-                orchestrate_build::ResolutionOutcome::Resolved {
-                    resolution,
-                    resolution_id,
-                    kind,
-                    stopped_action,
-                    continuation_action,
-                    continuation_kind,
-                    config_version,
-                } => output(
-                    "SUCCESS",
-                    "RESOLVED",
-                    serde_json::json!({
-                        "resolution": resolution,
-                        "resolution_id": resolution_id,
-                        "kind": kind,
-                        "stopped_action": stopped_action,
-                        "continuation_action": continuation_action,
-                        "continuation_kind": continuation_kind,
-                        "config_version": config_version,
-                        "next": "run `orchestrate build` to dispatch the authorized continuation",
-                    }),
-                ),
-                orchestrate_build::ResolutionOutcome::Refused {
-                    resolution,
-                    resolution_id,
-                    reason,
-                    successor_guidance,
-                } => output(
-                    "SUCCESS",
-                    "REFUSED",
-                    serde_json::json!({
-                        "resolution": resolution,
-                        "resolution_id": resolution_id,
-                        "reason": reason,
-                        "successor_guidance": successor_guidance,
-                    }),
-                ),
-            }
-        }
-        Command::Build {
-            command:
-                Some(BuildCommand::AmendAuthority {
-                    effort,
-                    action,
-                    note,
-                    note_file,
-                    evidence,
-                    confirm_not_running,
-                }),
-            ..
-        } => {
-            let note = match (note, note_file) {
-                (Some(note), None) => note,
-                (None, Some(path)) => fs::read_to_string(&path)
-                    .with_context(|| format!("cannot read {}", path.display()))?,
-                (None, None) => bail!("an authority amendment requires --note or --note-file"),
-                (Some(_), Some(_)) => unreachable!("clap rejects both note sources"),
-            };
-            let outcome = orchestrate_build::amend_authority(
-                &store,
-                orchestrate_build::AuthorityAmendmentRequest {
-                    effort,
-                    action,
-                    note,
-                    evidence,
-                    confirm_not_running,
-                },
-            )?;
-            output(
-                "SUCCESS",
-                "AUTHORITY_AMENDED_REFUSED",
-                serde_json::to_value(outcome)?,
-            );
-        }
         Command::Build {
             command: Some(BuildCommand::Status { effort }),
             ..
         } => {
-            let effort = store.load_effort(&effort)?;
-            let status = orchestrate_build::status::build_status(&store, &effort)?;
-            // The human summary goes to stderr; stdout stays one JSON value.
-            for line in orchestrate_build::status::status_lines(&store, &effort)? {
-                eprintln!("{line}");
-            }
+            let status = orchestrate_build::status(&store, &effort)?;
             output("SUCCESS", "READ_ONLY", status);
         }
         Command::Build {
-            command:
-                Some(BuildCommand::Preflight {
-                    effort,
-                    live,
-                    authorize_live,
-                }),
+            command: Some(BuildCommand::Reset { effort }),
             ..
         } => {
-            let effort = store.load_effort(&effort)?;
-            let mut report = orchestrate_build::preflight::static_preflight(&store, &effort)?;
-            if live {
-                // The live probe runs only with the explicit authorization the
-                // contract requires; without it the refusal and its disclosure
-                // are returned instead of inference.
-                let probe = orchestrate_build::preflight::live_preflight_with_local_adapters(
-                    &store,
-                    &effort,
-                    authorize_live,
-                )?;
-                report.live = Some(probe);
-                report.mode = "live";
-            }
-            let retained = orchestrate_build::preflight::retain_report(&store, &effort, &report)?;
             output(
                 "SUCCESS",
-                "READ_ONLY",
-                serde_json::json!({"preflight": report, "retained": retained}),
+                "RESET",
+                orchestrate_build::reset(&store, &effort)?,
             );
         }
         Command::Build {
-            command: Some(BuildCommand::Cleanup { effort, dry_run }),
+            command: Some(BuildCommand::Resume { effort }),
             ..
         } => {
-            let effort = store.load_effort(&effort)?;
-            let outcome = orchestrate_build::cleanup::cleanup(&store, &effort, dry_run)?;
-            let complete = outcome.complete;
             output(
                 "SUCCESS",
-                if complete {
-                    "CLEANUP_COMPLETE"
-                } else {
-                    "CLEANUP_INCOMPLETE"
-                },
-                serde_json::to_value(&outcome)?,
+                "RESUMED",
+                orchestrate_build::resume(&store, &effort)?,
             );
-        }
-        Command::Build {
-            command:
-                Some(BuildCommand::Export {
-                    effort,
-                    output: archive,
-                }),
-            ..
-        } => {
-            let effort = store.load_effort(&effort)?;
-            let outcome = orchestrate_build::export::export(&store, &effort, &archive)?;
-            let complete = outcome.complete;
-            let status = outcome.export_status;
-            // Collection outcome is reported independently of any Build
-            // semantic outcome; a failure here is this command's own failure.
-            output("SUCCESS", status, serde_json::to_value(&outcome)?);
-            if !complete {
-                bail!(
-                    "evidence export is {status}; no complete archive was promoted ({} failed, {} changed, {} omissions)",
-                    outcome.failed,
-                    outcome.changed,
-                    outcome.omissions.len()
-                );
-            }
         }
         Command::Build {
             command: Some(BuildCommand::Scaffold { effort }),
@@ -1000,9 +743,6 @@ impl Command {
             Command::Unblock {
                 command: GuideOnly::Guide,
             } => Some("unblock"),
-            Command::OnceOver {
-                command: GuideOnly::Guide,
-            } => Some("once-over"),
             _ => None,
         }
     }
@@ -1019,12 +759,6 @@ impl ProvenanceArgs {
         }
     }
 }
-fn parse_resolution_kind(
-    value: &str,
-) -> std::result::Result<orchestrate_build::ResolutionKind, String> {
-    orchestrate_build::ResolutionKind::parse(value).map_err(|error| error.to_string())
-}
-
 fn parse_request_kind(value: &str) -> std::result::Result<RequestKind, String> {
     match value {
         "ticket" => Ok(RequestKind::Ticket),

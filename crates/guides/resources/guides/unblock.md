@@ -1,15 +1,11 @@
 # Unblock
 
-Read the current `action.json`, then its exact `interrupted_action` and the paths in `interrupted_report`, `interrupted_result`, and `prior_feedback`. Any `predecessor` block names the exact action, report, result and transport this diagnosis is about, with its observed ending commit. It also supplies the controller's durable `trigger`, `process_completion`, `receipt_validation` and `recovery_remaining` facts plus any `current_audit`, `assessment`, and `unresolved_requirement_ids`; treat those as the recorded reason the role stopped. Read every referenced file that exists; the absence of a report or result is itself bounded evidence, not a reason to search elsewhere. Those fields are the evidence for the interrupted action; do not scan Build directories, guess which report is relevant, or choose a latest report. Inspect the accessible environment only as needed to diagnose whether that same action can resume. Record a bounded diagnosis in `report.md`; a remedy must name what changes on retry, and regenerating an unchanged completed assessment is not a remedy.
+Diagnose the exact blocked gate from the action packet and its referenced complete correction feedback. Do not search for another action or infer a different authority. Decide whether that same gate can retry with specific guidance, or whether an external requirement needs user/system intervention.
 
-Write `result.json` at the path in `action.json`:
+Return exactly one JSON object, with no prose or code fence:
 
 ```json
-{"action_id": "<action_id>", "scope": "<scope>", "outcome": "remedy_available"}
+{"action_id":"<exact action_id>","outcome":"retry","report":"non-empty, actionable guidance"}
 ```
 
-Use `remedy_available` only when the same interrupted action can be retried without new user authority. Use `external_requirement` only when progress requires information, authorization, credentials, or inaccessible infrastructure the current system cannot supply. If your permission does not let you create these files, state the same diagnosis and receipt in the marked blocks of your final response, as the `output_contract` guide named in `action.json` specifies.
-
-Unblock is diagnosis-only. Do not modify product source, run mutating commands against the product checkout, commit changes, edit Build/controller files, or perform the proposed remedy yourself. Describe an available remedy in `report.md`; the controller will resume the interrupted role to perform it. Do not approve work, change scope or requirements, select another phase or implementation direction, or choose the next role.
-
-Use `binding_requirements` in the interrupted action as current authority, together with its exact `reconciled` reference. Treat the original `goal` as historical context when it conflicts with selected current requirements. Diagnose the interrupted role against its exact `phase_authority`; distinguish a real missing decision/access/capability from a resolved prerequisite. Any reported conflict must name the requirement ID and the observed evidence establishing the conflict.
+Use `outcome: "retry"` only when the same gate can proceed with the report's guidance. Use `external_requirement` only when required information, permission, credentials, or infrastructure is unavailable to the current system. Unblock is sessionless and diagnosis-only: do not modify product files, reset the repository, commit, or choose a new scope. Rust records your response and either resets/requeues the original gate or stops for explicit `build resume` after the external condition is addressed. There is only one Unblock detour for a blocked gate.
