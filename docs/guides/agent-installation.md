@@ -3,9 +3,9 @@
 The easiest installation is agent-led. You should not need to manually decide which files belong
 where.
 
-Installed skills are dispatchers. They ask the current `orchestrate` binary for instructions.
-Updating the CLI updates all embedded Orchestrate guides and templates. Reinstall skills only when
-the dispatcher command itself changes.
+Installed skills load current instructions from the installed CLI. The Build dispatcher is
+deliberately non-executing: `$build` does not run even a guide command. Updating the CLI updates all
+embedded Orchestrate guides and templates. Reinstall skills when dispatcher behavior changes.
 
 ## Recommended: let the model install it
 
@@ -30,15 +30,16 @@ build
 audit
 ```
 
-That is all you need for normal use. Work, review, final Audit, and unblock instructions are not
-skills. The Build driver loads them from the installed CLI.
+That is all you need for normal use. The standalone `audit` skill is public and installed. Work,
+Review, Unblock, and the controller's internal Audit instruction are not user-installed skills; the
+Build controller uses these guides embedded in the CLI.
 
 ## Manual fallback
 
 Install the CLI from the checkout:
 
 ```sh
-cargo install --path "/absolute/path/to/ochestration/crates/cli" --locked
+cargo install --path "/absolute/path/to/orchestration/crates/cli" --locked
 ```
 
 Then run the checked-in installer with the current host's personal skill directory:
@@ -83,10 +84,12 @@ orchestrate prep-discovery-ticket guide
 orchestrate prep-discovery-freeform guide
 orchestrate discovery guide
 orchestrate reconcile guide
-orchestrate build guide
+orchestrate build --help
 orchestrate audit guide
 ```
 
-Do not start a workflow as part of installation.
+Do not start a workflow as part of installation. `orchestrate build prepare` prints the canonical
+Build guide and performs no operation, but reading that guide through the CLI still requires a
+separate human instruction.
 
 Next: [Run Orchestrate](run.md).

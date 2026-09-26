@@ -88,8 +88,38 @@ mod tests {
     }
 
     #[test]
+    fn build_roles_return_structured_results_without_writing_controller_evidence() {
+        for (name, guide) in [
+            ("work", WORK),
+            ("review", REVIEW),
+            ("unblock", UNBLOCK),
+            ("final-audit", FINAL_AUDIT),
+        ] {
+            assert!(guide.contains("action_id"), "{name} lacks action identity");
+            assert!(
+                guide.contains("exactly one JSON object"),
+                "{name} lacks the response contract"
+            );
+        }
+    }
+
+    #[test]
     fn templates_are_embedded() {
-        assert!(templates::PLAN_JSON.contains("\"schema_version\": 2"));
-        assert!(templates::CONFIG_TOML.contains("schema_version = 2"));
+        assert!(templates::PLAN_JSON.contains("\"schema_version\": 4"));
+        assert!(templates::PLAN_JSON.contains("phase_01_foundation"));
+        assert!(templates::CONFIG_TOML.contains("schema_version = 4"));
+        assert!(templates::CONFIG_TOML.contains("args"));
+    }
+
+    #[test]
+    fn build_instructions_keep_the_human_cli_boundary() {
+        assert!(BUILD.contains("Preparation, `$build`, and readiness discussion do not authorize any Orchestrate CLI command"));
+        assert!(BUILD.contains("explicit Build launch authorizes the Rust controller to run the Work ↔ Review phase loop through an exact Implementation candidate and then invoke the independent Audit stage automatically"));
+        assert!(!BUILD.contains("`$build` invokes the driver after preparation"));
+        let dispatcher = include_str!("../../../skills/build/SKILL.md");
+        assert!(dispatcher.contains("`$build` is not authorization"));
+        assert!(dispatcher.contains("Do not execute `orchestrate build guide`"));
+        assert!(dispatcher.contains("explicit authorization"));
+        assert!(!dispatcher.contains("You must run `orchestrate build guide`"));
     }
 }

@@ -1,3 +1,4 @@
+use orchestrate_build::state::{BuildState, Gate, STATE_VERSION, Scope, Status, Stop, StopKind};
 use orchestrate_contracts::{
     ArtifactKind, ArtifactRef, AuditAssessment, Coverage, CoverageState, DiscoverySourceRef,
     EvidenceKind, EvidenceNode, EvidenceStatus, EvidenceSynthesis, ReconcileProposal,
@@ -31,6 +32,19 @@ fn git(repo: &Path, args: &[&str]) {
             .unwrap()
             .success()
     );
+}
+fn git_text(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 fn command(root: &Path, args: &[&str]) -> serde_json::Value {
     let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
@@ -518,9 +532,9 @@ fn effort_slug_freezes_request_and_constraints_but_other_slugs_are_allowed() {
 #[test]
 fn storage_uses_human_names_while_preserving_internal_identity_and_file_provenance() {
     let root = temporary("human-storage-store");
-    let repo = create_repo("DB_Financial_Tracker");
+    let repo = create_repo("Example_Target_Project");
     let prepared = temporary("prepared-source").join("prepared.md");
-    fs::write(&prepared, format!("---\nroot: {}\nproject: {}\neffort: add_new_endpoint_for_sales\nrequest_kind: freeform\nconstraints: []\n---\nrequest\n", root.display(), repo.display())).unwrap();
+    fs::write(&prepared, format!("---\nroot: {}\nproject: {}\neffort: add_requested_behavior\nrequest_kind: freeform\nconstraints: []\n---\nrequest\n", root.display(), repo.display())).unwrap();
     let result = command(&root, &["init", "--from-file", prepared.to_str().unwrap()]);
     let effort_id = result["details"]["effort"].as_str().unwrap();
     let store = Store::open(&root).unwrap();
@@ -530,7 +544,7 @@ fn storage_uses_human_names_while_preserving_internal_identity_and_file_provenan
         .join("projects")
         .join(project_name)
         .join("efforts")
-        .join("add_new_endpoint_for_sales");
+        .join("add_requested_behavior");
     assert!(directory.join("effort.json").is_file());
     assert!(effort.id.starts_with("effort-") && effort.context.id.starts_with("ctx-"));
     let source = effort.prepared_source.unwrap();
@@ -1744,6 +1758,125 @@ fn adoption_implementation_and_audit_follow_the_reconciled_binding_contract() {
     );
     assert_eq!(audit["details"]["verdict"], "PASS");
     assert!(repo.join("source.txt").exists());
+}
+
+#[test]
+fn build_prepare_is_a_non_executing_canonical_help_path() {
+    let root = temporary("build-prepare-uninitialized-store");
+    fs::remove_dir(&root).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .args(["build", "prepare"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let guide = String::from_utf8(output.stdout).unwrap();
+    assert!(guide.contains("Preparation, `$build`, and readiness discussion do not authorize any Orchestrate CLI command"));
+    assert!(guide.contains(
+        "An explicit Build launch authorizes the Rust controller to run the Work ↔ Review phase loop"
+    ));
+    assert!(
+        !root.exists(),
+        "help must not initialize or mutate the orchestration store"
+    );
+}
+
+#[test]
+fn build_scaffold_status_and_removed_commands_match_the_small_surface() {
+    let (root, _repo, effort) = new_effort("build-small-surface");
+    let scaffold = command(&root, &["build", "scaffold", "--effort", &effort]);
+    let build_dir = PathBuf::from(scaffold["details"]["build_dir"].as_str().unwrap());
+    let plan: serde_json::Value =
+        serde_json::from_slice(&fs::read(build_dir.join("plan.json")).unwrap()).unwrap();
+    let config = fs::read_to_string(build_dir.join("config.toml")).unwrap();
+    assert_eq!(plan["schema_version"], 4);
+    assert_eq!(plan["phases"][0], "phase_01_foundation");
+    let phase_file = build_dir.join("phase_01_foundation/phase.md");
+    assert!(phase_file.is_file());
+    assert!(!build_dir.join("implementation-plan.md").exists());
+    fs::write(&phase_file, "Keep operator phase guidance").unwrap();
+    command(&root, &["build", "scaffold", "--effort", &effort]);
+    assert_eq!(
+        fs::read_to_string(phase_file).unwrap(),
+        "Keep operator phase guidance"
+    );
+    assert!(config.contains("schema_version = 4"));
+    let status = command(&root, &["build", "status", "--effort", &effort]);
+    assert_eq!(status["details"]["status"], "uninitialized");
+    for removed in [
+        "preflight",
+        "cleanup",
+        "export",
+        "resolve",
+        "amend-authority",
+        "resume",
+    ] {
+        let error = command_error(&root, &["build", removed, "--effort", &effort]);
+        assert!(
+            error.contains("unrecognized subcommand") || error.contains("invalid value"),
+            "{removed}: {error}"
+        );
+    }
+    let error = command_error(&root, &["once-over", "guide"]);
+    assert!(error.contains("unrecognized subcommand"), "{error}");
+}
+
+#[test]
+fn build_reset_returns_durable_state_json_without_dispatch() {
+    let (root, repo, effort_id) = new_effort("build-reset");
+    let store = Store::open(&root).unwrap();
+    let effort = store.load_effort(&effort_id).unwrap();
+    let build_dir = store.phase_dir(&effort, "build").unwrap();
+    let checkpoint = git_text(&repo, &["rev-parse", "HEAD"]);
+    let state = BuildState {
+        schema_version: STATE_VERSION,
+        reconciled: ArtifactRef {
+            kind: ArtifactKind::ReconciledDiscovery,
+            artifact_id: "reconciled-fixture".into(),
+            digest: "reconciled-digest".into(),
+        },
+        adoption: ArtifactRef {
+            kind: ArtifactKind::Adoption,
+            artifact_id: "adoption-fixture".into(),
+            digest: "adoption-digest".into(),
+        },
+        build_start_commit: checkpoint.clone(),
+        plan_digest: "plan-digest".into(),
+        scope: Scope::Phase { index: 0 },
+        gate: Gate::Work,
+        status: Status::Stopped,
+        checkpoint_commit: checkpoint.clone(),
+        feedback: Vec::new(),
+        unblock: None,
+        current_action_id: Some("a-reset".into()),
+        implementation: None,
+        completion: None,
+        stop: Some(Stop {
+            kind: StopKind::ResetRequired,
+            detail: "fixture reset".into(),
+        }),
+    };
+    fs::write(
+        build_dir.join("state.json"),
+        orchestrate_contracts::encode(&state).unwrap(),
+    )
+    .unwrap();
+    fs::write(repo.join("source.txt"), "dirty tracked data\n").unwrap();
+    fs::write(repo.join("ordinary.tmp"), "remove on reset\n").unwrap();
+    let reset = command(&root, &["build", "reset", "--effort", &effort_id]);
+    assert_eq!(reset["semantic_outcome"], "RESET");
+    assert_eq!(reset["details"]["status"], "ready");
+    assert_eq!(reset["details"]["checkpoint_commit"], checkpoint);
+    assert_eq!(
+        fs::read_to_string(repo.join("source.txt")).unwrap(),
+        "committed\n"
+    );
+    assert!(!repo.join("ordinary.tmp").exists());
 }
 
 #[test]

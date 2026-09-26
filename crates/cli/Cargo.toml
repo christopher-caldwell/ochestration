@@ -23,8 +23,8 @@ serde.workspace = true
 serde_yaml.workspace = true
 
 [dev-dependencies]
-
 orchestrate-core = { path = "../core" }
+symlink = "0.1.0"
 
 [lints]
 workspace = true

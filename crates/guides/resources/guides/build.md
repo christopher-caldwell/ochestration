@@ -1,41 +1,73 @@
 # Build
 
-An explicit Build invocation is authorization to build one exact implementation-ready Reconciled Discovery now. Do not ask for another approval or confirmation. Build creates or reuses the exact Adoption receipt at this boundary.
+## Human-controlled CLI boundary
 
-Build requires the exact effort, the exact implementation-ready Reconciled Discovery, a detailed implementation plan, and the target repository. When the user supplied a Reconciled Discovery explicitly, bind that artifact; do not infer a different one.
+Preparation, `$build`, and readiness discussion do not authorize any Orchestrate CLI command. Do not run `orchestrate build guide`, `prepare`, `scaffold`, `status`, `reset`, or the Build driver unless the human explicitly authorizes that exact operation. An explicit Build launch authorizes the Rust controller to run the Work ↔ Review phase loop through an exact Implementation candidate and then invoke the independent Audit stage automatically, with a single bounded Unblock detour; no per-transition or separate Audit approval is needed.
 
-Resolve the effort and Build directory:
+## Authority and preparation
 
-```sh
-orchestrate --root "<root>" status --effort "<effort>"
+Build runs Work ↔ Review across ordered phases and produces an exact Implementation candidate. Audit independently assesses that Implementation against the complete adopted Reconciled Discovery. These are distinct stages that the same unattended Rust driver coordinates; no separate process or orchestration command is required. Standalone Audit also accepts eligible registered Implementations from manual or external work without running Build.
+
+Build implements one exact, implementation-ready Reconciled Discovery. That artifact is binding WHAT; the phase Markdown documents are HOW and ordering. Do not let the phase Markdown documents add, remove, or weaken requirements. The Discovery baseline must be an ancestor of product `HEAD`. A new Build starts only from a clean Git-visible checkout; ignored files are allowed.
+
+The non-executing `orchestrate build prepare` command prints this guide. After separate authorization to scaffold, run `orchestrate build scaffold --effort <id>`. Fill the Build directory's `plan.json`, phase directories, and `config.toml`:
+
+- `plan.json` schema 4 binds the exact Reconciled artifact and an ordered list of phase directory names, such as `phases: ["phase_01_foundation", "phase_02_delivery"]`. A phase is the dispatch, review, and checkpoint unit. Tasks are model-facing documents, never controller state.
+- Each phase directory requires `phase.md`, describing its purpose, expected outcome, boundaries, implementation guidance, dependencies, and deliberate exclusions. Additional immediate `.md` files contain task/context guidance. Rust loads `phase.md` first, then the others in stable filename order, without recursion or prose parsing. The Planner chooses phases and task ordering/dependencies and makes each phase self-contained. Every role receives the complete binding Reconciled contract.
+- `config.toml` schema 4 names `worker` and `reviewer`, with optional `unblocker`. Each role has an `adapter` (`codex`, `claude`, or `cursor`) and optional native `model` and opaque `args`.
+- The controller hashes only the exact `plan.json` bytes at initialization. Each explicit Build launch validates the machine plan and phase documents and loads configuration. Do not edit plan files while Rust is running. After a semantic blocked stop, the operator may refine phase Markdown before launching again; those documents are not hashed into durable state. Each provider invocation records the exact settings and arguments it used.
+
+Example phase layout (task filenames are the Planner's choice):
+
+```text
+build/
+  plan.json
+  config.toml
+  phase_01_foundation/
+    phase.md
+    task_01.md
+    task_02.md
+  phase_02_delivery/
+    phase.md
+    notes.md
 ```
 
-Read the rich Reconciled Discovery artifact as Build's authoritative contract. **Reconciled Discovery is binding WHAT; the detailed implementation plan is HOW and ordering.** The plan may describe approach, task grouping, ordering, and delivery phases only. It must not add or remove product requirements, weaken acceptance criteria, or contradict the Reconciled Discovery. If the plan materially conflicts with binding authority, stop before implementation and surface the conflict. Do not silently rewrite the plan or improvise around it.
+Example config:
 
-The repository may have advanced since Discovery. Discovery remains frozen to its recorded baseline, while implementation must respect the current code and preserve the reconciled contract. Build is allowed when that Discovery baseline is an ancestor of current `HEAD`; it need not equal current `HEAD`.
+```toml
+schema_version = 4
 
-A new Build requires a clean Git-visible product checkout before the worker takes ownership. Commit, move, or remove staged changes, unstaged changes, and ordinary untracked files before starting. The recorded Build starting commit/tree is the worker's starting boundary. Git-ignored local environment files are allowed. This check applies when Build state is first created, not when an active Build resumes.
+[worker]
+adapter = "codex"
+model = "native-model-name" # optional
+args = ["--search"]         # optional native arguments
 
-## First preparation
+[reviewer]
+adapter = "claude"
 
-Copy the detailed implementation plan into the Build directory, then materialize templates:
-
-```sh
-orchestrate --root "<root>" build scaffold --effort "<effort>"
+# Optional; absent means Unblock uses reviewer settings, without a session.
+# [unblocker]
+# adapter = "cursor"
 ```
 
-This writes `plan.json` and `config.toml` and refuses to overwrite existing files. Fill `plan.json` with schema version 2, the exact Reconciled Discovery reference (`kind`, `artifact_id`, and `digest`), the relative detailed-plan path, and the ordered delivery-phase grouping. Each task belongs to one phase; task IDs do not create extra stops.
+## Launch and durable state
 
-Configure worker and independent reviewer adapters separately in `config.toml`. Supported adapters are `codex`, `claude`, and `cursor`. Host configuration must already allow intended edits and checks; do not put credentials, command strings, or provider homes in this file.
-
-## Existing prepared or active Build
-
-If Build files or state already exist for this exact effort, do not scaffold again and do not replace the detailed plan, `plan.json`, or `config.toml`. Verify the existing exact Build authority and invoke or resume the driver. If the current invocation supplies a Reconciled Discovery or detailed plan that differs from the existing Build's frozen inputs, stop and report the mismatch; do not resume under different authority and do not replace the frozen files. Never delete or recreate Build state merely to satisfy this guide.
-
-From the target repository, invoke the driver:
+Only an explicit launch starts provider work:
 
 ```sh
 orchestrate --root "<root>" build --effort "<effort>"
 ```
 
-The driver binds the exact Reconciled Discovery, creates or reuses Adoption, records current Build starting commit/tree separately from the Discovery baseline, verifies ancestry, and handles work, review, correction, implementation registration, and final Audit until completion or until it cannot safely continue automatically. An external user or infrastructure requirement is one common blocker. Do not perform those role turns yourself.
+The controller begins at the current `HEAD` checkpoint and routes fixed gates. Work completes the entire assigned phase and commits against the product repository. Review inspects the whole phase and Audit inspects the complete implementation at that exact commit in disposable detached worktrees. Review passes to the next phase; after the last phase passes, the controller registers the exact Implementation and invokes independent Audit. Review correction returns to Work with the complete report. Rust publishes the Audit against that Implementation and derives the verdict from its assessment. `PASS` permits reviewed completion. `CHANGES_REQUIRED` routes to final-scope Build Work, followed by registration of a new Implementation candidate and another Audit; unknown or missing coverage enters Unblock.
+
+A provider's explicit `blocked` result enters Unblock once in a disposable source checkout. `retry` restores the repository to its last checkpoint and retries the same gate with the originating context, original correction, and Unblock guidance. If the retry blocks again, or Unblock returns `blocked`, Build stops as `stopped / blocked`; it does not start another Unblock. Work partial changes are discarded back to the saved checkpoint. Blocker reports and guidance remain ordinary feedback. After addressing it, explicitly launch `build --effort <id>` to continue. Continuation never resets the product checkout: a clean unchanged checkout retries the gate, while a clean descendant commit becomes a candidate for Review or Audit. Dirty or unrelated repository state is rejected without deleting it. Explicit continuation starts a new attempt with one available Unblock detour.
+
+Provider failure, malformed output, an invariant failure, or a restart while an action was marked `running` requires explicit destructive reset. `build reset --effort <id>` removes the current disposable worktree, restores the recorded checkpoint with `git reset --hard` and `git clean -fd`, preserves ignored files, and requeues the same gate. Inspect the durable facts with `build status --effort <id>`. Status dispatches nothing.
+
+Worker and Reviewer sessions are optional conveniences held only in the running Rust process; Audit may share Reviewer and Unblock is always fresh. Sessions are absent from state.json and disappear when Rust exits. Every action packet is a complete handoff, including phase documents, binding authority, checkpoint, and feedback, so a new launch starts fresh conversations.
+
+The supported operating model is one person running one local Rust Build process against a project. No daemon or multi-controller coordination is required.
+
+The controller streams provider stdout and stderr into the action directory while the process runs, then writes parsed `result.json`, `report.md`, and Audit `assessment.json`; provider roles return a single JSON object and do not own controller evidence. Action history remains in the Build directory. Stderr carries compact gate/transition messages; stdout carries one JSON command result. A stopped result is not a completed Build.
+
+Build state schema 5 and the current plan/config versions are intentionally strict. Older versions are unsupported; start a new Build from current accepted artifacts.

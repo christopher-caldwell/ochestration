@@ -1,4 +1,4 @@
-//! Guards the instruction-ownership boundary: skills dispatch, the CLI instructs.
+//! Guards the instruction-ownership boundary: most skills dispatch, Build never launches the CLI.
 
 use std::{
     fs,
@@ -69,10 +69,17 @@ fn skills_are_dispatchers_only() {
         assert_eq!(entries[0].1, name);
         assert_dispatcher_description(&name, &entries[1].1);
         assert_eq!(entries[2].1, "true");
-        assert_eq!(
-            body,
-            format!("You must run `orchestrate {name} guide` for instructions.")
-        );
+        if name == "build" {
+            assert!(body.contains("`$build` is not authorization"));
+            assert!(body.contains("Do not execute `orchestrate build guide`"));
+            assert!(body.contains("Never infer launch authorization from"));
+            assert!(!body.contains("You must run `orchestrate"));
+        } else {
+            assert_eq!(
+                body,
+                format!("You must run `orchestrate {name} guide` for instructions.")
+            );
+        }
     }
 }
 
@@ -97,11 +104,13 @@ fn flat_frontmatter(frontmatter: &str, name: &str) -> Vec<(String, String)> {
 }
 
 fn assert_dispatcher_description(name: &str, description: &str) {
-    assert!(
+    let valid = if name == "build" {
+        description == "Prepare or explain an Orchestrate Build without starting its CLI driver."
+    } else {
         description.starts_with("Load the current Orchestrate ")
-            && description.ends_with(" instructions."),
-        "{name} description must stay a dispatcher label"
-    );
+            && description.ends_with(" instructions.")
+    };
+    assert!(valid, "{name} description must stay a dispatcher label");
     assert!(
         description.len() <= 72,
         "{name} description is long enough to carry procedure"
@@ -250,18 +259,20 @@ fn reconcile_guide_is_closed_world_convergent_and_stops_before_build() {
 
 #[test]
 fn embedded_guides_preserve_high_value_instruction_boundaries() {
-    assert!(orchestrate_guides::BUILD.contains("## First preparation"));
+    assert!(orchestrate_guides::BUILD.contains("## Human-controlled CLI boundary"));
+    assert!(orchestrate_guides::BUILD.contains("## Authority and preparation"));
+    assert!(orchestrate_guides::BUILD.contains("## Launch and durable state"));
+    assert!(orchestrate_guides::BUILD.contains("explicitly launch `build --effort <id>`"));
+    assert!(orchestrate_guides::BUILD.contains("Continuation never resets"));
     assert!(
-        orchestrate_guides::BUILD.contains("## Existing prepared or active Build")
-            && orchestrate_guides::BUILD.contains("do not scaffold again")
+        orchestrate_guides::WORK.contains("complete Reconciled Discovery is binding authority")
     );
-    assert!(orchestrate_guides::WORK.contains("detailed implementation plan"));
-    assert!(orchestrate_guides::REVIEW.contains("detailed implementation plan"));
+    assert!(orchestrate_guides::REVIEW.contains("entire phase"));
     assert!(
-        orchestrate_guides::FINAL_AUDIT.contains("must never mutate the stored immutable snapshot")
+        orchestrate_guides::FINAL_AUDIT.contains("Assess only the exact implementation artifact")
     );
-    assert!(orchestrate_guides::UNBLOCK.contains("Unblock is diagnosis-only"));
-    assert!(orchestrate_guides::UNBLOCK.contains("Do not modify product source"));
+    assert!(orchestrate_guides::UNBLOCK.contains("Unblock is sessionless and diagnosis-only"));
+    assert!(orchestrate_guides::UNBLOCK.contains("do not modify product files"));
     for guide in [
         orchestrate_guides::PREP_DISCOVERY_TICKET,
         orchestrate_guides::PREP_DISCOVERY_FREEFORM,

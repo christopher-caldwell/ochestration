@@ -43,7 +43,7 @@ enum Command {
         #[command(subcommand)]
         command: AuditCommand,
     },
-    /// Run a prepared Build, print the Build guide, or materialize Build templates.
+    /// Run an explicitly authorized Build, print help, or materialize templates.
     #[command(args_conflicts_with_subcommands = true)]
     Build {
         #[arg(
@@ -121,8 +121,20 @@ enum GuideOnly {
 enum BuildCommand {
     /// Print the current embedded Build guide and exit.
     Guide,
+    /// Non-executing preparation/help path; prints the canonical Build guide.
+    Prepare,
     /// Write plan.json and config.toml into the effort Build directory.
     Scaffold {
+        #[arg(long)]
+        effort: String,
+    },
+    /// Read-only status of a prepared, running or stopped Build.
+    Status {
+        #[arg(long)]
+        effort: String,
+    },
+    /// Restore the checkpoint and requeue the same gate after an explicit reset.
+    Reset {
         #[arg(long)]
         effort: String,
     },
@@ -375,6 +387,10 @@ fn execute(store: Store, command: Command) -> Result<()> {
             command: Some(BuildCommand::Guide),
             ..
         }
+        | Command::Build {
+            command: Some(BuildCommand::Prepare),
+            ..
+        }
         | Command::PrepDiscoveryTicket { .. }
         | Command::PrepDiscoveryFreeform { .. }
         | Command::Work { .. }
@@ -570,6 +586,23 @@ fn execute(store: Store, command: Command) -> Result<()> {
             ),
         },
         Command::Build {
+            command: Some(BuildCommand::Status { effort }),
+            ..
+        } => {
+            let status = orchestrate_build::status(&store, &effort)?;
+            output("SUCCESS", "READ_ONLY", status);
+        }
+        Command::Build {
+            command: Some(BuildCommand::Reset { effort }),
+            ..
+        } => {
+            output(
+                "SUCCESS",
+                "RESET",
+                orchestrate_build::reset(&store, &effort)?,
+            );
+        }
+        Command::Build {
             command: Some(BuildCommand::Scaffold { effort }),
             ..
         } => {
@@ -671,6 +704,10 @@ impl Command {
             } => Some("audit"),
             Command::Build {
                 command: Some(BuildCommand::Guide),
+                ..
+            } => Some("build"),
+            Command::Build {
+                command: Some(BuildCommand::Prepare),
                 ..
             } => Some("build"),
             Command::PrepDiscoveryTicket {

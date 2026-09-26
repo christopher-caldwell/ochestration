@@ -1,33 +1,13 @@
-# Final Audit
+# Audit
 
-Read the supplied `action.json`. It names the exact `reconciled`, `adoption`, and `implementation` references plus resolved paths for `reconciled_discovery`, `adoption_receipt`, `implementation_record`, `registered_snapshot`, `verification_checkout`, `assessment`, `report`, and `result`. Read those supplied files and the `feedback` path when present; do not inspect controller state or search the store. Inspect only that registered implementation.
+You are performing the independent Audit stage on the exact registered Implementation supplied by the controller, not another phase Review. This internal guide is the controller’s instruction surface for Audit; Audit also remains independently callable through its public workflow. The controller coordinates publication and subsequent routing.
 
-Read the immutable registered snapshot as evidence. Run executable verification only in the supplied disposable `verification_checkout`; commands that write files must never mutate the stored immutable snapshot. Do not invent product requirements, turn advisory technical suggestions into requirements, or fail implementation details the binding Reconciled Discovery did not require. Feedback, when present, is correction context for the unchanged authority and scope.
+Assess only the exact implementation artifact and checkpoint named in the action packet. The complete Reconciled Discovery is binding authority; planning guidance cannot override it. Assess every binding requirement exactly once, including its conditions and acceptance criteria; do not turn advisory implementation details into requirements. Use `pass`, `fail`, `unknown`, or justified `not_applicable` coverage. Pass and fail rows need evidence; fail rows also need a correction; not-applicable rows need evidence that the stated condition is false.
 
-The assessment names those exact references and contains exactly one coverage row for every binding requirement. There are no coverage rows for technical suggestions.
-
-```json
-{
-  "reconciled": {"kind": "reconciled_discovery", "artifact_id": "...", "digest": "..."},
-  "adoption": {"kind": "adoption", "artifact_id": "...", "digest": "..."},
-  "implementation": {"kind": "implementation", "artifact_id": "...", "digest": "..."},
-  "coverage": [{
-    "requirement_id": "R-1",
-    "state": "pass",
-    "rationale": "Why this row has this state.",
-    "evidence": ["Bounded evidence."],
-    "correction": ""
-  }],
-  "assessor_context": "What was inspected."
-}
-```
-
-`state` is `pass`, `fail`, `unknown`, or `not_applicable`. Pass and fail rows need evidence. Failures also need a correction. `not_applicable` also needs evidence establishing that the binding requirement's stated condition is false for this implementation/context. It never means that an unconditional requirement seems unimportant. For an unconditional binding requirement, use `pass`, `fail`, or `unknown`. Copy `reconciled`, `adoption`, and `implementation` from `action.json`; do not look them up from controller state.
-
-Write `assessment.json`, `report.md`, and `result.json` at the exact paths in `action.json`:
+Return exactly one JSON object, with no prose or code fence:
 
 ```json
-{"action_id": "<action_id>", "scope": "<scope>", "outcome": "complete"}
+{"action_id":"<exact action_id>","outcome":"complete","report":"non-empty assessment summary","assessment":{"reconciled":{"kind":"reconciled_discovery","artifact_id":"...","digest":"..."},"adoption":{"kind":"adoption","artifact_id":"...","digest":"..."},"implementation":{"kind":"implementation","artifact_id":"...","digest":"..."},"coverage":[{"requirement_id":"R-1","state":"pass","rationale":"...","evidence":["..."],"correction":""}],"assessor_context":"..."}}
 ```
 
-`outcome` is `complete` or `blocked`. Rust derives the verdict from the assessment. Do not run `orchestrate audit finalize`: unattended Build owns immutable Audit publication and verdict routing. Do not edit product source or controller state.
+Use `outcome: "blocked"` with a non-empty report only when assessment cannot continue without information, permission, or a capability you lack; do not include an assessment for that outcome. Rust checks exact artifact lineage and derives pass, correction, or unknown-coverage routing from the assessment. Do not publish an Audit artifact, edit product source, or start Work or Unblock yourself.

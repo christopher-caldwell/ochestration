@@ -1,15 +1,11 @@
 # Review
 
-Read, in order: the current `action.json`; the binding Reconciled Discovery at its `reconciled_discovery` path; the detailed implementation plan at its `detailed_plan` path; referenced feedback at its `feedback` path, when present; and the exact submitted `target_commit`. The working directory is a contained checkout of that commit. Independently inspect that commit and run relevant checks.
+Review the entire phase at the exact checkpoint commit in the supplied disposable detached checkout. Read all supplied phase Markdown documents and compare the whole resulting phase with the complete binding Reconciled Discovery and complete correction feedback, including the Work report. Do not limit review to the latest task, commit, or changed file. Binding requirements govern; phase planning guidance cannot override them. Run relevant checks. Do not edit product source or the controller's files. Use the action packet and repository as the complete handoff; conversation history is optional.
 
-Reconciled Discovery is binding authority. The detailed plan is implementation guidance, and feedback is correction context for the unchanged authorized action. Check correctness, regressions, whether the assigned delivery phase was implemented, whether the implementation violates binding authority, and relevant tests/checks. Do not turn subjective preferences into mandatory corrections.
-
-Do not invent product requirements, expand the delivery-phase scope, require architecture or style changes that are not necessary for correctness or the authorized plan, change Reconciled authority, repair product source, change adopted scope, or edit controller state. A concrete defect or regression remains a valid finding even when it was not literally listed as a task.
-
-Write a concrete report to the `report.md` path in `action.json`. When changes are required, the report is one complete actionable correction set for the unchanged scope. Then write the receipt at the `result.json` path:
+Return exactly one JSON object, with no prose or code fence:
 
 ```json
-{"action_id": "<action_id>", "scope": "<scope>", "outcome": "pass", "commit": "<target_commit>"}
+{"action_id":"<exact action_id>","outcome":"pass","report":"non-empty findings and verification summary","inspected_commit":"<exact checkpoint commit>"}
 ```
 
-`outcome` is `pass`, `changes_required`, or `blocked`. `commit` must be the action's `target_commit`, the commit you actually inspected.
+`outcome` is `pass`, `changes_required`, or `blocked`. Include a complete actionable correction set in the report for `changes_required`. Use `blocked` only when review cannot continue without information, permission, or a capability you lack. Always identify the exact inspected commit. Rust verifies that the detached checkout stayed at the checkpoint and remained clean, then routes the result. Do not make the acceptance decision for the final Audit or dispatch another role.

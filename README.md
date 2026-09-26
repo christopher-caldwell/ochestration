@@ -5,7 +5,8 @@ Orchestrate is deterministic machinery for an interactive model-window workflow:
 ```text
 Prepare → Discovery × N → Reconcile → STOP
 
-Later, explicitly: Build → done
+Later, explicitly authorized:
+Adoption → Build (Work ↔ Review phases) → Implementation → Audit → reviewed final product
 ```
 
 The model does the engineering work. Orchestrate keeps the request, Discovery runs, reconciled
@@ -31,14 +32,15 @@ The short version is:
 
 4. Review the Reconciled Discovery. Reconcile stops here.
 
-5. Later, when ready, run `$build` with the detailed implementation plan.
-   It prepares Build, drives work/review/correction, registers the implementation, and runs the
-   final Audit until completion or until it cannot safely continue automatically.
+5. Later, use `$build` to prepare the ordered phases and their implementation documents. Then
+   explicitly authorize the Build launch. Rust runs Work ↔ Review across the phases, registers the
+   exact Implementation, and invokes independent Audit automatically.
 ```
 
-You normally do **not** operate the Orchestrate CLI yourself. The installed skills only load the
-current instructions with `orchestrate <action> guide` and then follow them. Updating the CLI
-updates that behavior; reinstalling skills is not part of a normal methodology change.
+You normally interact through Orchestrate skills. A skill may load its current instructions from
+the CLI when that specific operation is authorized. `$build` is deliberately non-executing: it
+uses the checked-in Build guide and does not call even a guide command. Updating the CLI updates
+its embedded guidance; reinstall skills when dispatcher behavior changes.
 
 ## Easiest installation
 
@@ -61,7 +63,7 @@ build
 
 See the [installation guide](docs/guides/agent-installation.md) for the manual fallback.
 
-## What each phase does
+## What each stage does
 
 - **Prepare** reads the original ticket or freeform request and may ask focused questions about
   missing user intent before freezing the common input. It preserves the ticket verbatim and does
@@ -69,9 +71,20 @@ See the [installation guide](docs/guides/agent-installation.md) for the manual f
 - **Discovery** investigates the frozen repository and may ask you material questions.
 - **Reconcile** analyzes only the Discovery outputs you explicitly give it and produces the
   authoritative answer to "what are we actually going to do?"
-- **Build** is an unattended Rust-driven worker/reviewer loop for a prepared detailed implementation plan.
-- **Audit** checks the exact registered implementation against the binding reconciled requirements;
-  unattended Build invokes it automatically.
+- **Adoption** records the exact Reconciled Discovery that Build will follow and Audit will assess
+  against.
+- **Build** runs checkpointed Work ↔ Review across ordered phases and produces an exact Implementation candidate.
+- **Audit** independently checks that exact registered Implementation against the complete binding
+  Reconciled Discovery. The unattended Rust driver invokes it automatically under the Build launch
+  authorization, with one bounded Unblock detour available. Audit also supports eligible registered
+  Implementations from manual or external work through its public workflow, without running Build.
+
+## How roles talk to providers
+
+Build config uses schema 4 and each role selects one native adapter (`codex`, `claude`, or `cursor`),
+with optional native `model` and opaque CLI `args`. The adapters preserve the launching environment
+and only own provider transport, working-directory, and session flags. Build state and plan are
+breaking schema versions; historical Build state is intentionally not migrated.
 
 For deeper details, see the [documentation index](docs/README.md) and
 [architecture](docs/architecture.md).

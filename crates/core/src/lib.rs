@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -391,12 +391,10 @@ impl Store {
         };
         let mut bytes = serde_json::to_vec(&record)?;
         bytes.push(b'\n');
-        with_journal_lock(&path, || {
-            let mut file = OpenOptions::new().append(true).create(true).open(&path)?;
-            file.write_all(&bytes)?;
-            file.sync_data()?;
-            Ok(())
-        })
+        let mut file = OpenOptions::new().append(true).create(true).open(&path)?;
+        file.write_all(&bytes)?;
+        file.sync_data()?;
+        Ok(())
     }
     pub fn read_journal(&self, effort: &Effort) -> Result<Vec<JournalEvent>> {
         let path = self.effort_dir(effort).join("journal.jsonl");
@@ -1053,30 +1051,6 @@ fn validate_label(v: &str) -> Result<()> {
 fn validate_id(v: &str) -> Result<()> {
     validate_label(v)
 }
-fn with_journal_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let lock_path = path.with_extension("jsonl.lock");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(_lock) => {
-                let result = f();
-                let _ = fs::remove_file(&lock_path);
-                return result;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if Instant::now() >= deadline {
-                    bail!("timed out waiting for journal lock {}", lock_path.display());
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-}
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_bytes_sync(path, &encode(value)?)
 }
@@ -1157,44 +1131,6 @@ fn sync_dir(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
-    #[test]
-    fn concurrent_journal_appends_remain_line_framed() {
-        let dir = std::env::temp_dir().join(format!("journal-{}", unique_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("journal.jsonl");
-        let handles: Vec<_> = (0..16)
-            .map(|i| {
-                let path = path.clone();
-                std::thread::spawn(move || {
-                    for j in 0..16 {
-                        super::with_journal_lock(&path, || {
-                            let mut file = OpenOptions::new()
-                                .append(true)
-                                .create(true)
-                                .open(&path)
-                                .unwrap();
-                            let line = format!("{{\"i\":{i},\"j\":{j}}}\n");
-                            file.write_all(line.as_bytes()).unwrap();
-                            Ok(())
-                        })
-                        .unwrap();
-                    }
-                })
-            })
-            .collect();
-        for handle in handles {
-            handle.join().unwrap();
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(text.lines().count(), 16 * 16);
-        for line in text.lines() {
-            serde_json::from_str::<serde_json::Value>(line).unwrap();
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
     #[test]
     fn concurrent_store_creation_never_reports_a_legacy_store() {
