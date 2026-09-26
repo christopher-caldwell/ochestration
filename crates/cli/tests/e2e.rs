@@ -16,13 +16,20 @@ use std::{
 };
 
 fn chat_zip(path: &Path, discovery: &str, phase: Option<&str>) {
+    let phases = phase
+        .map(|text| vec![("phase_01_delivery", text)])
+        .unwrap_or_default();
+    chat_zip_phases(path, discovery, &phases);
+}
+
+fn chat_zip_phases(path: &Path, discovery: &str, phases: &[(&str, &str)]) {
     let file = fs::File::create(path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
     zip.start_file("discovery.json", options).unwrap();
     zip.write_all(discovery.as_bytes()).unwrap();
-    if let Some(phase) = phase {
-        zip.start_file("build/phase_01_delivery/phase.md", options)
+    for (name, phase) in phases {
+        zip.start_file(format!("build/{name}/phase.md"), options)
             .unwrap();
         zip.write_all(phase.as_bytes()).unwrap();
     }
@@ -40,7 +47,10 @@ fn chat_input() -> &'static str {
       "decisions": ["Keep the API stable"],
       "product_behavior_changed": ["Status becomes visible on one page"],
       "product_behavior_unchanged": ["Existing API behavior"],
-      "requirements": [{"id":"R-1","text":"Show status on one page","acceptance":"The page displays status"}],
+      "requirements": [
+        {"id":"R-1","text":"Show status on one page","acceptance":"The page displays status","authority":"chat_analysis"},
+        {"id":"R-2","text":"Keep the public command name","acceptance":"Existing callers use the same command","authority":"explicit_user","user_statement":"Do not rename the existing command."}
+      ],
       "advisory_technical_suggestions": ["Use existing UI components"]
     }"#
 }
@@ -95,7 +105,7 @@ fn chat_import_stops_at_exact_single_source_reconciled_boundary() {
         .unwrap();
     assert_eq!(envelope.parents, vec![discovery.clone()]);
     assert_eq!(authority.discovery_attribution.len(), 1);
-    assert_eq!(authority.requirements.len(), 2);
+    assert_eq!(authority.requirements.len(), 3);
     assert_eq!(
         authority.requirements[0].requirement.acceptance,
         "The page displays status"
@@ -104,12 +114,32 @@ fn chat_import_stops_at_exact_single_source_reconciled_boundary() {
         authority.requirements[0].source_refs[0].discovery_artifact_id,
         discovery.artifact_id
     );
-    assert!(authority.requirements[1].frozen_user_constraint);
+    assert!(!authority.requirements[0].requirement.governing);
+    assert_eq!(authority.requirements[0].user_clarification, None);
+    assert!(!authority.requirements[0].frozen_user_constraint);
+    assert!(authority.requirements[1].requirement.governing);
+    assert!(authority.requirements[1].source_refs.is_empty());
     assert_eq!(
-        authority.requirements[1].requirement.text,
+        authority.requirements[1].user_clarification.as_deref(),
+        Some("Do not rename the existing command.")
+    );
+    assert!(!authority.requirements[1].frozen_user_constraint);
+    assert!(authority.requirements[2].requirement.governing);
+    assert!(authority.requirements[2].source_refs.is_empty());
+    assert!(authority.requirements[2].frozen_user_constraint);
+    assert_eq!(
+        authority.requirements[2].requirement.text,
         "Keep the existing API"
     );
+    let reconciled_files = store.load_bundle(&effort, &reconciled).unwrap().1;
+    let rendered = String::from_utf8(reconciled_files["reconciled-discovery.md"].clone()).unwrap();
+    assert!(rendered.contains("**Authority:** Explicit user authority"));
+    assert!(!rendered.contains("Reconcile-time"));
     assert_eq!(authority.technical_suggestions.len(), 1);
+    assert_eq!(
+        authority.evidence_synthesis[0].conclusion,
+        "Add a compact status page"
+    );
     assert!(
         authority.evidence_synthesis[0]
             .evidence_summary
@@ -190,7 +220,7 @@ fn chat_import_rejects_incomplete_bundle_before_creating_effort() {
 }
 
 #[test]
-fn chat_import_without_phases_uses_normal_build_scaffold() {
+fn chat_import_without_phases_stops_before_build_planning() {
     let root = temporary("chat-import-no-phase-store");
     let repo = create_repo("chat-import-no-phase");
     let bundle = temporary("chat-import-no-phase-bundle").join("chat-discovery.zip");
@@ -208,13 +238,132 @@ fn chat_import_without_phases_uses_normal_build_scaffold() {
         String::from_utf8_lossy(&output.stderr)
     );
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let effort_id = result["details"]["effort"].as_str().unwrap();
     let build_dir = PathBuf::from(result["details"]["build_dir"].as_str().unwrap());
+    let discovery = reference(&result, "discovery");
     let reconciled = reference(&result, "reconciled");
-    let plan = orchestrate_build::state::load_plan(&build_dir.join("plan.json")).unwrap();
+    let plan: orchestrate_build::state::BuildPlan =
+        orchestrate_contracts::decode(&fs::read(build_dir.join("plan.json")).unwrap()).unwrap();
+    assert_eq!(plan.schema_version, orchestrate_build::BUILD_PLAN_VERSION);
     assert_eq!(plan.reconciled, reconciled);
-    assert_eq!(plan.phases, ["phase_01_foundation"]);
-    assert!(build_dir.join("phase_01_foundation/phase.md").is_file());
+    assert!(plan.phases.is_empty());
+    assert_eq!(fs::read_dir(&build_dir).unwrap().count(), 2);
+    assert!(build_dir.join("config.toml").is_file());
     assert!(!build_dir.join("state.json").exists());
+    let store = Store::open(&root).unwrap();
+    let effort = store.load_effort(effort_id).unwrap();
+    let artifacts = store.list_artifacts(&effort).unwrap();
+    assert_eq!(artifacts.len(), 2);
+    assert!(artifacts.contains(&discovery));
+    assert!(artifacts.contains(&reconciled));
+    let launch = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .args(["build", "--effort", effort_id])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(!launch.status.success());
+    assert!(String::from_utf8_lossy(&launch.stderr).contains("at least one phase"));
+    assert!(!build_dir.join("state.json").exists());
+    assert_eq!(store.list_artifacts(&effort).unwrap(), artifacts);
+}
+
+#[test]
+fn chat_import_rejects_invalid_requirement_authority_before_creating_effort() {
+    let repo = create_repo("chat-import-authority-invalid");
+    for (case, change) in [
+        ("missing-user-statement", 0),
+        ("empty-user-statement", 1),
+        ("analysis-user-statement", 2),
+        ("missing-authority", 3),
+        ("unknown-authority", 4),
+    ] {
+        let root = temporary(&format!("chat-import-{case}-store"));
+        let bundle = temporary(&format!("chat-import-{case}-bundle")).join("chat-discovery.zip");
+        let mut input: serde_json::Value = serde_json::from_str(chat_input()).unwrap();
+        let requirements = input["requirements"].as_array_mut().unwrap();
+        match change {
+            0 => {
+                requirements[1]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("user_statement");
+            }
+            1 => {
+                requirements[1]["user_statement"] = " ".into();
+            }
+            2 => {
+                requirements[0]["user_statement"] = "The user said so".into();
+            }
+            3 => {
+                requirements[0].as_object_mut().unwrap().remove("authority");
+            }
+            4 => {
+                requirements[0]["authority"] = "inferred".into();
+            }
+            _ => unreachable!(),
+        }
+        chat_zip(&bundle, &input.to_string(), None);
+        let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+            .arg("--root")
+            .arg(&root)
+            .args(["import", bundle.to_str().unwrap()])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "accepted {case}");
+        assert!(!root.join("projects").exists(), "created Effort for {case}");
+    }
+}
+
+#[test]
+fn chat_import_orders_two_digit_phase_names_and_rejects_short_numbers() {
+    let repo = create_repo("chat-import-phase-names");
+    let root = temporary("chat-import-ordered-phases-store");
+    let bundle = temporary("chat-import-ordered-phases-bundle").join("chat-discovery.zip");
+    chat_zip_phases(
+        &bundle,
+        chat_input(),
+        &[
+            ("phase_02_delivery", "# Delivery"),
+            ("phase_01_foundation", "# Foundation"),
+        ],
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .args(["import", bundle.to_str().unwrap()])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let build_dir = PathBuf::from(result["details"]["build_dir"].as_str().unwrap());
+    let plan = orchestrate_build::state::load_plan(&build_dir.join("plan.json")).unwrap();
+    assert_eq!(plan.phases, ["phase_01_foundation", "phase_02_delivery"]);
+
+    let invalid_root = temporary("chat-import-short-phase-store");
+    let invalid_bundle = temporary("chat-import-short-phase-bundle").join("chat-discovery.zip");
+    chat_zip_phases(
+        &invalid_bundle,
+        chat_input(),
+        &[("phase_2_delivery", "# Delivery")],
+    );
+    let rejected = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&invalid_root)
+        .args(["import", invalid_bundle.to_str().unwrap()])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("invalid Build phase name"));
+    assert!(!invalid_root.join("projects").exists());
 }
 
 fn temporary(name: &str) -> PathBuf {

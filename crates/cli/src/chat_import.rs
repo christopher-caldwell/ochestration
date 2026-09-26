@@ -61,8 +61,18 @@ struct ChatRequirement {
     id: String,
     text: String,
     acceptance: String,
+    authority: ChatAuthority,
+    #[serde(default)]
+    user_statement: Option<String>,
     #[serde(default)]
     condition: Option<String>,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ChatAuthority {
+    ExplicitUser,
+    ChatAnalysis,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -160,6 +170,21 @@ pub fn import(store: &Store, repo: &Path, bundle: &Path) -> Result<serde_json::V
             governing: false,
         };
         orchestrate_contracts::validate_requirement(&native)?;
+        match requirement.authority {
+            ChatAuthority::ExplicitUser => ensure!(
+                requirement
+                    .user_statement
+                    .as_ref()
+                    .is_some_and(|statement| !statement.trim().is_empty()),
+                "explicit_user requirement {} needs a non-empty user_statement",
+                native.id
+            ),
+            ChatAuthority::ChatAnalysis => ensure!(
+                requirement.user_statement.is_none(),
+                "chat_analysis requirement {} cannot claim a user_statement",
+                native.id
+            ),
+        }
         ensure!(
             !native.id.starts_with("GOV-") && ids.insert(native.id.clone()),
             "duplicate or reserved requirement ID {}",
@@ -225,9 +250,15 @@ pub fn import(store: &Store, repo: &Path, bundle: &Path) -> Result<serde_json::V
         chat.findings.join("; "),
         chat.decisions.join("; ")
     );
-    let requirements = chat.requirements.into_iter().map(|item| ReconciledRequirement {
-        requirement: Requirement { id: item.id, text: item.text, acceptance: item.acceptance, condition: item.condition, governing: false },
-        source_refs: vec![source_ref.clone()], user_clarification: None, frozen_user_constraint: false,
+    let requirements = chat.requirements.into_iter().map(|item| {
+        let (governing, source_refs, user_clarification) = match item.authority {
+            ChatAuthority::ExplicitUser => (true, vec![], item.user_statement),
+            ChatAuthority::ChatAnalysis => (false, vec![source_ref.clone()], None),
+        };
+        ReconciledRequirement {
+            requirement: Requirement { id: item.id, text: item.text, acceptance: item.acceptance, condition: item.condition, governing },
+            source_refs, user_clarification, frozen_user_constraint: false,
+        }
     }).chain(chat.constraints.iter().enumerate().map(|(index, text)| ReconciledRequirement {
         requirement: Requirement { id: format!("GOV-{}", index + 1), text: text.clone(), acceptance: "Preserve this explicit user constraint in the implementation and Audit.".into(), condition: None, governing: true },
         source_refs: vec![], user_clarification: None, frozen_user_constraint: true,
@@ -238,7 +269,7 @@ pub fn import(store: &Store, repo: &Path, bundle: &Path) -> Result<serde_json::V
         baseline_commit: effort.baseline_commit.clone(),
         baseline_tree: effort.baseline_tree.clone(),
         goal: effort.context.request.clone(),
-        core_result: chat.selected_direction,
+        core_result: chat.selected_direction.clone(),
         problem: chat.problem,
         product_behavior_changed: chat.product_behavior_changed,
         product_behavior_unchanged: chat.product_behavior_unchanged,
@@ -255,7 +286,7 @@ pub fn import(store: &Store, repo: &Path, bundle: &Path) -> Result<serde_json::V
         }],
         evidence_synthesis: vec![EvidenceSynthesis {
             id: "CHAT-1".into(),
-            conclusion: chat.evidence_summary,
+            conclusion: chat.selected_direction,
             source_refs: vec![source_ref.clone()],
             verification_methods: vec![],
             evidence_summary,
@@ -305,14 +336,7 @@ pub fn import(store: &Store, repo: &Path, bundle: &Path) -> Result<serde_json::V
     )?;
 
     let build_dir = store.phase_dir(&effort, "build")?;
-    let phase_names = if phases.is_empty() {
-        vec!["phase_01_foundation".to_owned()]
-    } else {
-        phases.keys().cloned().collect()
-    };
-    if phases.is_empty() {
-        orchestrate_build::scaffold(store, &effort.id)?;
-    }
+    let phase_names = phases.keys().cloned().collect();
     for (name, bytes) in phases {
         let dir = build_dir.join(name);
         std::fs::create_dir_all(&dir)?;
@@ -325,7 +349,9 @@ pub fn import(store: &Store, repo: &Path, bundle: &Path) -> Result<serde_json::V
     };
     write_bytes_sync(&build_dir.join("plan.json"), &encode(&plan)?)?;
     orchestrate_build::scaffold(store, &effort.id)?;
-    orchestrate_build::state::load_plan(&build_dir.join("plan.json"))?;
+    if !plan.phases.is_empty() {
+        orchestrate_build::state::load_plan(&build_dir.join("plan.json"))?;
+    }
     Ok(
         serde_json::json!({"effort": effort.id, "baseline": effort.baseline_commit,
         "discovery": source, "reconciled": reconciled_ref, "build_dir": build_dir}),
@@ -333,11 +359,18 @@ pub fn import(store: &Store, repo: &Path, bundle: &Path) -> Result<serde_json::V
 }
 
 fn valid_phase_name(name: &str) -> bool {
-    name.starts_with("phase_")
-        && name.len() > 6
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    let Some(suffix) = name.strip_prefix("phase_") else {
+        return false;
+    };
+    let bytes = suffix.as_bytes();
+    bytes.len() >= 4
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2] == b'_'
+        && bytes[3].is_ascii_alphanumeric()
+        && bytes[4..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
 }
 
 fn git_head(repo: &Path) -> Result<String> {

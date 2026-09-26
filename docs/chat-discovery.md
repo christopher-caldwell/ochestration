@@ -12,7 +12,7 @@ chat-discovery.zip
         └── phase.md
 ```
 
-`discovery.json` is UTF-8 JSON. Required fields are `effort` (a short human slug), `request` (the original request), `problem`, `selected_direction`, `evidence_summary`, and a nonempty `requirements` array. Each requirement has `id`, `text`, and `acceptance`, with optional `condition`. Preserve explicit user constraints in `constraints`. Optional arrays are `findings`, `decisions`, `disagreements`, `product_behavior_changed`, `product_behavior_unchanged`, `technical_behavior_changed`, `technical_behavior_unchanged`, `rejected_alternatives` (objects with `direction` and `reason`), `implementation_risks`, `compatibility_concerns`, `caveats`, `advisory_technical_suggestions`, and `blockers`. Use empty arrays or omit optional fields when there is nothing to record. Do not claim local repository inspection or experiments in `evidence_summary` unless they occurred. Resolve material blockers before import; a bundle with blockers cannot become implementation-ready.
+`discovery.json` is UTF-8 JSON. Required fields are `effort` (a short human slug), `request` (the original request), `problem`, `selected_direction`, `evidence_summary`, and a nonempty `requirements` array. Each requirement has `id`, `text`, `acceptance`, and `authority` (`explicit_user` or `chat_analysis`), with optional `condition`. An `explicit_user` requirement also needs a nonempty `user_statement` quoting or faithfully recording the supporting user instruction; a `chat_analysis` requirement must not include `user_statement`. Preserve additional explicit user constraints in `constraints`. Optional arrays are `findings`, `decisions`, `disagreements`, `product_behavior_changed`, `product_behavior_unchanged`, `technical_behavior_changed`, `technical_behavior_unchanged`, `rejected_alternatives` (objects with `direction` and `reason`), `implementation_risks`, `compatibility_concerns`, `caveats`, `advisory_technical_suggestions`, and `blockers`. Use empty arrays or omit optional fields when there is nothing to record. Do not claim local repository inspection or experiments in `evidence_summary` unless they occurred. Resolve material blockers before import; a bundle with blockers cannot become implementation-ready.
 
 For example:
 
@@ -25,11 +25,12 @@ For example:
   "selected_direction": "Add one compact status page",
   "evidence_summary": "The user chose this direction in conversation; current repository behavior was not inspected.",
   "requirements": [
-    {"id": "R-1", "text": "Show status on one page", "acceptance": "The page displays current status"}
+    {"id": "R-1", "text": "Show status on one page", "acceptance": "The page displays current status", "authority": "chat_analysis"},
+    {"id": "R-2", "text": "Keep the public command name", "acceptance": "Existing callers use the same command", "authority": "explicit_user", "user_statement": "Do not rename the existing command."}
   ]
 }
 ```
 
-Optional `build/phase_XX_name/phase.md` files use the normal Build phase Markdown format. They provide implementation guidance and ordering, not binding authority. The chat cannot know the local Reconciled artifact ID or choose local provider settings; do not include `plan.json` or `config.toml`.
+Optional `build/phase_XX_name/phase.md` files use two decimal digits and a nonempty name. They provide implementation guidance and ordering, not binding authority. The chat cannot know the local Reconciled artifact ID or choose local provider settings; do not include `plan.json` or `config.toml`.
 
-In the target Git repository, import with `orchestrate import ./chat-discovery.zip` (and `--root <store>` if needed). Import freezes the repository's current committed HEAD, publishes one Discovery and one Reconciled Discovery, and prepares the normal Build directory. Review the result and stop. Producing or importing the ZIP does **not** authorize Build. A later explicit `$build` launch is required for Adoption, Work, Review, and Audit.
+In the target Git repository, import with `orchestrate import ./chat-discovery.zip` (and `--root <store>` if needed). Import freezes the repository's current committed HEAD, publishes one Discovery and one Reconciled Discovery, and prepares the normal Build directory. Omitting phases is valid: import invents no phase, and the generated plan has an empty phase list until real phases are supplied. Build validation rejects that incomplete plan on launch. Review the result and stop. Producing or importing the ZIP does **not** authorize Build. A later explicit `$build` launch is required for Adoption, Work, Review, and Audit.
