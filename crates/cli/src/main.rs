@@ -138,11 +138,6 @@ enum BuildCommand {
         #[arg(long)]
         effort: String,
     },
-    /// Assert an external requirement was addressed and requeue its blocked gate.
-    Resume {
-        #[arg(long)]
-        effort: String,
-    },
 }
 #[derive(Subcommand)]
 enum Discovery {
@@ -605,16 +600,6 @@ fn execute(store: Store, command: Command) -> Result<()> {
                 "SUCCESS",
                 "RESET",
                 orchestrate_build::reset(&store, &effort)?,
-            );
-        }
-        Command::Build {
-            command: Some(BuildCommand::Resume { effort }),
-            ..
-        } => {
-            output(
-                "SUCCESS",
-                "RESUMED",
-                orchestrate_build::resume(&store, &effort)?,
             );
         }
         Command::Build {

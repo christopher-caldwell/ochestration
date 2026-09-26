@@ -1,6 +1,6 @@
 # Work
 
-Implement only the phase or final correction scope in the authoritative action packet. Reconciled Discovery is binding authority; the detailed plan is implementation guidance. Feedback is the complete correction context for the unchanged authority. Use engineering judgment to implement, verify, and commit the scoped work.
+Implement only the phase or final correction scope in the authoritative action packet. The complete Reconciled Discovery is binding authority; phase tasks, scoped requirement IDs, and the detailed plan are scope, ordering, and implementation guidance and cannot override any binding constraint. Feedback is the complete correction context for the unchanged authority. Use engineering judgment to implement, verify, and commit the scoped work.
 
 Return exactly one JSON object, with no prose or code fence:
 

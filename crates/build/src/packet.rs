@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use orchestrate_contracts::{Adoption, ReconciledDiscovery};
 use orchestrate_core::{Effort, Store, write_bytes_sync};
 use serde_json::json;
-use std::{fs, path::Path};
+use std::path::Path;
 
 use crate::state::{
     BuildPlan, BuildState, Gate, Scope, current_action_dir, read_build_file, validate_feedback_path,
@@ -23,7 +23,7 @@ pub fn create_action_packet(
     detailed_plan: &str,
 ) -> Result<ActionPacket> {
     let action_dir = current_action_dir(build_dir, action_id)?;
-    fs::create_dir_all(&action_dir)?;
+    let source_checkout = (state.gate != Gate::Work).then(|| action_dir.join("checkout"));
     let (_, reconciled): (_, ReconciledDiscovery) =
         store.load_json(effort, &state.reconciled, "reconciled-discovery.json")?;
     let (_, adoption): (_, Adoption) = store.load_json(effort, &state.adoption, "adoption.json")?;
@@ -31,33 +31,14 @@ pub fn create_action_packet(
         adoption.reconciled == state.reconciled,
         "Build Adoption does not match the state Reconciled Discovery"
     );
-    let (phase, requirement_ids) = match &state.scope {
-        Scope::Phase { index } => {
-            let phase = plan
-                .phases
+    let phase = match &state.scope {
+        Scope::Phase { index } => Some(
+            plan.phases
                 .get(*index)
-                .context("Build scope refers to a missing phase")?;
-            (Some(phase), phase.requirement_ids.clone())
-        }
-        Scope::Final => (
-            None,
-            reconciled
-                .requirements
-                .iter()
-                .map(|item| item.requirement.id.clone())
-                .collect(),
+                .context("Build scope refers to a missing phase")?,
         ),
+        Scope::Final => None,
     };
-    let requirements = reconciled
-        .requirements
-        .iter()
-        .filter(|item| requirement_ids.iter().any(|id| id == &item.requirement.id))
-        .cloned()
-        .collect::<Vec<_>>();
-    ensure!(
-        requirements.len() == requirement_ids.len(),
-        "phase refers to a requirement absent from its Reconciled Discovery"
-    );
     let mut feedback = Vec::new();
     for item in &state.feedback {
         validate_feedback_path(&item.path)?;
@@ -79,13 +60,15 @@ pub fn create_action_packet(
         "checkpoint_commit": state.checkpoint_commit,
         "build_start_commit": state.build_start_commit,
         "reconciled": state.reconciled,
+        "binding_reconciled": reconciled,
         "adoption": state.adoption,
         "phase": phase,
-        "requirements": requirements,
         "detailed_plan": detailed_plan,
         "feedback": feedback,
+        "unblock_context": state.unblock,
+        "source_checkout": source_checkout,
         "implementation": state.implementation,
-        "audit_contract": "Return an assessment object with exact reconciled, adoption, and implementation ArtifactRefs; coverage must address the listed requirement IDs."
+        "audit_contract": "Return an assessment object with exact reconciled, adoption, and implementation ArtifactRefs; coverage must address every binding requirement."
     });
     write_bytes_sync(
         &action_dir.join("action.json"),

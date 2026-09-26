@@ -2,7 +2,11 @@ use crate::state::{RoleConfig, Session};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{path::Path, process::Command};
+use std::{
+    fs::{self, File},
+    path::Path,
+    process::{Command, Stdio},
+};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct InvocationRecord {
@@ -35,15 +39,25 @@ pub struct InvocationPlan {
 /// provider-observed final-response facts. It makes deterministic controller
 /// tests possible without adding policy callbacks to the adapter boundary.
 pub trait InvocationApi: Sync {
-    fn invoke(&self, plan: &InvocationPlan, cwd: &Path) -> Result<InvocationOutcome>;
+    fn invoke(
+        &self,
+        plan: &InvocationPlan,
+        cwd: &Path,
+        action_dir: &Path,
+    ) -> Result<InvocationOutcome>;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProcessInvocationApi;
 
 impl InvocationApi for ProcessInvocationApi {
-    fn invoke(&self, plan: &InvocationPlan, cwd: &Path) -> Result<InvocationOutcome> {
-        invoke_process(plan, cwd)
+    fn invoke(
+        &self,
+        plan: &InvocationPlan,
+        cwd: &Path,
+        action_dir: &Path,
+    ) -> Result<InvocationOutcome> {
+        invoke_process(plan, cwd, action_dir)
     }
 }
 
@@ -127,18 +141,37 @@ pub fn prepare_invocation(
     })
 }
 
-fn invoke_process(plan: &InvocationPlan, cwd: &Path) -> Result<InvocationOutcome> {
-    let output = Command::new(plan.program)
+fn invoke_process(
+    plan: &InvocationPlan,
+    cwd: &Path,
+    action_dir: &Path,
+) -> Result<InvocationOutcome> {
+    let stdout_path = action_dir.join("transport.jsonl");
+    let stderr_path = action_dir.join("stderr.txt");
+    let stdout_file = File::create(&stdout_path)
+        .with_context(|| format!("cannot create {}", stdout_path.display()))?;
+    let stderr_file = File::create(&stderr_path)
+        .with_context(|| format!("cannot create {}", stderr_path.display()))?;
+    let mut child = Command::new(plan.program)
         .args(&plan.argv)
         .current_dir(cwd)
-        .output()
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
         .with_context(|| format!("could not start {}", plan.program))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let status = child
+        .wait()
+        .with_context(|| format!("could not wait for {}", plan.program))?;
+    let stdout_bytes =
+        fs::read(&stdout_path).with_context(|| format!("cannot read {}", stdout_path.display()))?;
+    let stderr_bytes =
+        fs::read(&stderr_path).with_context(|| format!("cannot read {}", stderr_path.display()))?;
+    let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
     let (final_response, observed_session) = extract_response(&stdout);
     Ok(InvocationOutcome {
-        success: output.status.success(),
-        exit_code: output.status.code(),
+        success: status.success(),
+        exit_code: status.code(),
         final_response,
         observed_session,
         stdout,
@@ -201,17 +234,17 @@ fn extract_response(stdout: &str) -> (Option<String>, Option<String>) {
             response = Some(text);
         }
     }
-    if response.is_none() {
-        if let Ok(value) = serde_json::from_str::<Value>(stdout) {
-            response = final_text(&value);
-            session = session.or_else(|| {
-                value
-                    .get("thread_id")
-                    .or_else(|| value.get("session_id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            });
-        }
+    if response.is_none()
+        && let Ok(value) = serde_json::from_str::<Value>(stdout)
+    {
+        response = final_text(&value);
+        session = session.or_else(|| {
+            value
+                .get("thread_id")
+                .or_else(|| value.get("session_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
     }
     (response, session)
 }
@@ -237,15 +270,15 @@ fn final_text(value: &Value) -> Option<String> {
             return content_text(item.get("content").or_else(|| item.get("text")));
         }
     }
-    if let Some(item) = value.get("item") {
-        if item.get("type").and_then(Value::as_str) == Some("agent_message") {
-            return content_text(item.get("content").or_else(|| item.get("text")));
-        }
+    if let Some(item) = value.get("item")
+        && item.get("type").and_then(Value::as_str) == Some("agent_message")
+    {
+        return content_text(item.get("content").or_else(|| item.get("text")));
     }
-    if let Some(message) = value.get("message") {
-        if message.get("role").and_then(Value::as_str) == Some("assistant") {
-            return content_text(message.get("content"));
-        }
+    if let Some(message) = value.get("message")
+        && message.get("role").and_then(Value::as_str) == Some("assistant")
+    {
+        return content_text(message.get("content"));
     }
     None
 }

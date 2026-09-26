@@ -1,5 +1,5 @@
 use orchestrate_build::state::{
-    BuildState, Gate, STATE_VERSION, Scope, Session, Status, Stop, StopKind, UnblockContext,
+    BuildState, Gate, STATE_VERSION, Scope, Session, Status, Stop, StopKind,
 };
 use orchestrate_contracts::{
     ArtifactKind, ArtifactRef, AuditAssessment, Coverage, CoverageState, DiscoverySourceRef,
@@ -1807,6 +1807,7 @@ fn build_scaffold_status_and_removed_commands_match_the_small_surface() {
         "export",
         "resolve",
         "amend-authority",
+        "resume",
     ] {
         let error = command_error(&root, &["build", removed, "--effort", &effort]);
         assert!(
@@ -1819,13 +1820,13 @@ fn build_scaffold_status_and_removed_commands_match_the_small_surface() {
 }
 
 #[test]
-fn build_reset_and_resume_return_durable_state_json_without_dispatch() {
-    let (root, repo, effort_id) = new_effort("build-reset-resume");
+fn build_reset_returns_durable_state_json_without_dispatch() {
+    let (root, repo, effort_id) = new_effort("build-reset");
     let store = Store::open(&root).unwrap();
     let effort = store.load_effort(&effort_id).unwrap();
     let build_dir = store.phase_dir(&effort, "build").unwrap();
     let checkpoint = git_text(&repo, &["rev-parse", "HEAD"]);
-    let mut state = BuildState {
+    let state = BuildState {
         schema_version: STATE_VERSION,
         reconciled: ArtifactRef {
             kind: ArtifactKind::ReconciledDiscovery,
@@ -1877,58 +1878,6 @@ fn build_reset_and_resume_return_durable_state_json_without_dispatch() {
         "committed\n"
     );
     assert!(!repo.join("ordinary.tmp").exists());
-
-    state.status = Status::Stopped;
-    state.gate = Gate::Unblock;
-    state.unblock = Some(UnblockContext {
-        gate: Gate::Work,
-        scope: Scope::Phase { index: 0 },
-    });
-    state.current_action_id = Some("a-external".into());
-    state.worker_session = Some(Session {
-        adapter: "codex".into(),
-        id: "stale-worker".into(),
-    });
-    state.reviewer_session = Some(Session {
-        adapter: "codex".into(),
-        id: "stale-reviewer".into(),
-    });
-    state.stop = Some(Stop {
-        kind: StopKind::ExternalRequirement,
-        detail: "operator needed".into(),
-    });
-    let unblock_dir = build_dir.join("actions/a-external");
-    fs::create_dir_all(&unblock_dir).unwrap();
-    fs::write(
-        unblock_dir.join("report.md"),
-        "The operator resolved the prerequisite.\n",
-    )
-    .unwrap();
-    fs::write(
-        build_dir.join("state.json"),
-        orchestrate_contracts::encode(&state).unwrap(),
-    )
-    .unwrap();
-    let resumed = command(&root, &["build", "resume", "--effort", &effort_id]);
-    assert_eq!(resumed["semantic_outcome"], "RESUMED");
-    assert_eq!(resumed["details"]["status"], "ready");
-    assert_eq!(resumed["details"]["gate"], "work");
-    assert_eq!(
-        resumed["details"]["current_action_id"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        resumed["details"]["worker_session"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        resumed["details"]["reviewer_session"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        resumed["details"]["feedback"][0]["path"],
-        "actions/a-external/report.md"
-    );
 }
 
 #[test]

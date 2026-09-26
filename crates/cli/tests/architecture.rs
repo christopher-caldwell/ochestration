@@ -262,8 +262,11 @@ fn embedded_guides_preserve_high_value_instruction_boundaries() {
     assert!(orchestrate_guides::BUILD.contains("## Human-controlled CLI boundary"));
     assert!(orchestrate_guides::BUILD.contains("## Authority and preparation"));
     assert!(orchestrate_guides::BUILD.contains("## Launch and durable state"));
-    assert!(orchestrate_guides::BUILD.contains("Resume itself dispatches no provider."));
-    assert!(orchestrate_guides::WORK.contains("detailed plan is implementation guidance"));
+    assert!(orchestrate_guides::BUILD.contains("explicitly launch `build --effort <id>`"));
+    assert!(orchestrate_guides::BUILD.contains("Continuation never resets"));
+    assert!(
+        orchestrate_guides::WORK.contains("complete Reconciled Discovery is binding authority")
+    );
     assert!(orchestrate_guides::REVIEW.contains("detailed plan"));
     assert!(
         orchestrate_guides::FINAL_AUDIT.contains("Assess only the exact implementation artifact")

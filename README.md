@@ -32,7 +32,7 @@ The short version is:
 4. Review the Reconciled Discovery. Reconcile stops here.
 
 5. Later, use `$build` to discuss and prepare the effort and detailed implementation plan. It does
-   not run the CLI or start/resume the driver. Separately authorize the exact Build CLI operation
+   not run the CLI or start/continue the driver. Separately authorize the exact Build CLI operation
    when ready; the Rust driver then owns work/review/correction, implementation registration, and
    final Audit until completion or a safe stop.
 ```

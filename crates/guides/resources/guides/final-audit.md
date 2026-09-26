@@ -1,6 +1,6 @@
 # Audit
 
-Assess only the exact implementation artifact and checkpoint named in the action packet. Reconciled Discovery is binding authority. Assess every listed requirement exactly once, including its conditions and acceptance criteria; do not turn advisory implementation details into requirements. Use `pass`, `fail`, `unknown`, or justified `not_applicable` coverage. Pass and fail rows need evidence; fail rows also need a correction; not-applicable rows need evidence that the stated condition is false.
+Assess only the exact implementation artifact and checkpoint named in the action packet. The complete Reconciled Discovery is binding authority; planning guidance cannot override it. Assess every binding requirement exactly once, including its conditions and acceptance criteria; do not turn advisory implementation details into requirements. Use `pass`, `fail`, `unknown`, or justified `not_applicable` coverage. Pass and fail rows need evidence; fail rows also need a correction; not-applicable rows need evidence that the stated condition is false.
 
 Return exactly one JSON object, with no prose or code fence:
 

@@ -166,11 +166,11 @@ For more detail, see [Reconcile](reconcile.md).
 
 Later, use `$build` to discuss and prepare the exact effort, Reconciled Discovery, and detailed
 implementation plan. Invoking `$build` does not run a CLI command, write Build files, start or
-resume the driver, or dispatch provider work. Explicitly authorize each CLI operation. Scaffold the
+continue the driver, or dispatch provider work. Explicitly authorize each CLI operation. Scaffold the
 Build directory, bind the exact Reconciled artifact in plan schema 3, list each phase's task and
 requirement IDs, and configure the worker/reviewer (and optional unblocker) in config schema 4.
-The detailed-plan and `plan.json` bytes are frozen by digest at initialization; config is reread
-before every gate.
+The detailed-plan and `plan.json` bytes are frozen by digest at initialization. Each explicit
+Build launch validates those files and loads config once.
 
 An explicit `orchestrate build --effort "<effort>"` launch authorizes the complete internal
 Work → Review → Audit loop. Work commits at the product checkpoint. Review and Audit use disposable
@@ -183,9 +183,9 @@ bounded Unblock detour. Technical suggestions remain advisory.
 malformed output, Git invariant failure, or interrupted execution stops for explicit reset.
 `orchestrate build reset` restores the saved commit, removes ordinary untracked files while
 preserving ignored files, clears sessions, and requeues the same gate. An external requirement
-stops cleanly; once addressed, explicitly run `orchestrate build resume`, then explicitly launch
-`orchestrate build` again. Resume requeues but does not dispatch. Stderr carries compact transitions;
-stdout carries one JSON result.
+stops cleanly; once addressed, explicitly launch `orchestrate build` again. That launch preserves a
+clean operator repair and continues the loop. Stderr carries compact transitions; stdout carries one
+JSON result.
 
 For more detail, see [Build and Audit](build-and-audit.md).
 

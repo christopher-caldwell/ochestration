@@ -11,14 +11,14 @@ use orchestrate_core::{Effort, Store, now_ms, write_bytes_sync};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    fs::{self, File, OpenOptions, TryLockError},
+    fs,
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::{
-    adapter::{self, InvocationOutcome},
+    adapter,
     packet::create_action_packet,
     state::{
         BuildCompletion, BuildConfig, BuildPlan, BuildState, FeedbackRef, Gate, RoleConfig,
@@ -80,7 +80,6 @@ pub fn reset(store: &Store, effort_id: &str) -> Result<serde_json::Value> {
     let effort = store.load_effort(effort_id)?;
     let project = store.project_for(&effort)?;
     let build_dir = store.phase_dir(&effort, "build")?;
-    let _lock = RepositoryLock::acquire(&project.canonical_locator)?;
     let state_path = build_dir.join(STATE_FILE);
     let mut state = load_state(&state_path)?;
     ensure!(
@@ -90,7 +89,7 @@ pub fn reset(store: &Store, effort_id: &str) -> Result<serde_json::Value> {
                     .stop
                     .as_ref()
                     .is_some_and(|stop| stop.kind == StopKind::ResetRequired)),
-        "build reset requires a running or reset_required state; use build resume for an external_requirement stop"
+        "build reset requires a running or reset_required state; relaunch Build for an external_requirement stop"
     );
     validate_commit(&project.canonical_locator, &state.checkpoint_commit)?;
     remove_current_worktree(
@@ -112,51 +111,62 @@ pub fn reset(store: &Store, effort_id: &str) -> Result<serde_json::Value> {
     Ok(serde_json::to_value(state)?)
 }
 
-pub fn resume(store: &Store, effort_id: &str) -> Result<serde_json::Value> {
-    let effort = store.load_effort(effort_id)?;
-    let project = store.project_for(&effort)?;
-    let build_dir = store.phase_dir(&effort, "build")?;
-    let _lock = RepositoryLock::acquire(&project.canonical_locator)?;
-    let state_path = build_dir.join(STATE_FILE);
-    let mut state = load_state(&state_path)?;
+fn prepare_continuation(
+    repo: &Path,
+    build_dir: &Path,
+    state_path: &Path,
+    state: &mut BuildState,
+) -> Result<()> {
     ensure!(
         state.status == Status::Stopped
             && state
                 .stop
                 .as_ref()
                 .is_some_and(|stop| stop.kind == StopKind::ExternalRequirement),
-        "build resume requires a stopped external_requirement state"
+        "Build continuation requires a stopped external_requirement state"
     );
     let context = state
         .unblock
         .as_ref()
-        .context("external stop lacks its Unblock context")?;
+        .context("external stop lacks its Unblock context")?
+        .clone();
     let unblock_action = state
         .current_action_id
         .as_deref()
         .context("external stop lacks the Unblock action id")?;
     let report_path = format!("actions/{unblock_action}/report.md");
-    read_build_file(&build_dir, &report_path).context("external stop lacks its Unblock report")?;
-    validate_commit(&project.canonical_locator, &state.checkpoint_commit)?;
-    remove_current_worktree(&project.canonical_locator, &build_dir, Some(unblock_action))?;
-    reset_checkout(&project.canonical_locator, &state.checkpoint_commit)?;
-    state.gate = context.gate.clone();
+    read_build_file(build_dir, &report_path).context("external stop lacks its Unblock report")?;
+    ensure_clean(repo).context(
+        "operator repair is not a clean reviewable candidate; commit the intended repository changes or remove unintended files (nothing was discarded)",
+    )?;
+    let head = git_text(repo, &["rev-parse", "HEAD"])?;
+    if head == state.checkpoint_commit {
+        state.gate = context.gate.clone();
+    } else {
+        ensure!(
+            git_is_ancestor(repo, &state.checkpoint_commit, &head)?,
+            "operator repair HEAD is not descended from the saved checkpoint; nothing was discarded"
+        );
+        state.checkpoint_commit = head;
+        state.implementation = None;
+        state.gate = match context.scope {
+            Scope::Phase { .. } => Gate::Review,
+            Scope::Final => Gate::Audit,
+        };
+    }
     state.scope = context.scope.clone();
     state.feedback.push(FeedbackRef {
         path: report_path,
         purpose: "operator confirmed external condition resolved; Unblock guidance".into(),
     });
+    state.unblock = None;
     state.worker_session = None;
     state.reviewer_session = None;
     state.current_action_id = None;
     state.stop = None;
     state.status = Status::Ready;
-    save_state(&state_path, &state)?;
-    eprintln!(
-        "RESUME gate={:?} checkpoint={}",
-        state.gate, state.checkpoint_commit
-    );
-    Ok(serde_json::to_value(state)?)
+    save_state(state_path, state)?;
+    Ok(())
 }
 
 pub fn run(store: &Store, request: BuildRequest) -> Result<BuildResult> {
@@ -175,7 +185,6 @@ fn run_with_invoker(
         "current repository does not match selected effort"
     );
     let build_dir = store.phase_dir(&effort, "build")?;
-    let _lock = RepositoryLock::acquire(&project.canonical_locator)?;
     let state_path = build_dir.join(STATE_FILE);
     if !state_path.exists() {
         initialize(store, &effort, &project.canonical_locator, &build_dir)?;
@@ -190,13 +199,26 @@ fn run_with_invoker(
             ));
         }
         Status::Stopped => {
-            return Ok(BuildResult::Blocked {
-                detail: state
-                    .stop
-                    .as_ref()
-                    .map_or_else(|| "Build is stopped".into(), |stop| stop.detail.clone()),
-                state: state_path,
-            });
+            if state
+                .stop
+                .as_ref()
+                .is_some_and(|stop| stop.kind == StopKind::ExternalRequirement)
+            {
+                prepare_continuation(
+                    &project.canonical_locator,
+                    &build_dir,
+                    &state_path,
+                    &mut state,
+                )?;
+            } else {
+                return Ok(BuildResult::Blocked {
+                    detail: state
+                        .stop
+                        .as_ref()
+                        .map_or_else(|| "Build is stopped".into(), |stop| stop.detail.clone()),
+                    state: state_path,
+                });
+            }
         }
         Status::Running => {
             state.status = Status::Stopped;
@@ -209,6 +231,8 @@ fn run_with_invoker(
         }
         Status::Ready => {}
     }
+
+    let inputs = load_execution_inputs(&build_dir, &state)?;
 
     loop {
         if state.status == Status::Complete {
@@ -233,8 +257,8 @@ fn run_with_invoker(
             &effort,
             &project.canonical_locator,
             &build_dir,
-            &state_path,
             &mut state,
+            &inputs,
             invoker,
         );
         if let Err(error) = operation {
@@ -253,6 +277,31 @@ fn run_with_invoker(
             });
         }
     }
+}
+
+struct ExecutionInputs {
+    plan: BuildPlan,
+    detailed: String,
+    config: BuildConfig,
+}
+
+fn load_execution_inputs(build_dir: &Path, state: &BuildState) -> Result<ExecutionInputs> {
+    let plan_path = build_dir.join(PLAN_FILE);
+    let plan = load_plan(&plan_path)?;
+    let detailed = read_build_file(build_dir, &plan.detailed_plan)
+        .context("cannot read referenced detailed plan")?;
+    let plan_digest = combined_digest(&fs::read(&plan_path)?, &detailed);
+    ensure!(
+        plan_digest == state.plan_digest && plan.reconciled == state.reconciled,
+        "Build plan or detailed plan changed after initialization; restore the accepted files or start a new Build according to current authority"
+    );
+    let detailed = String::from_utf8(detailed).context("detailed plan must be UTF-8")?;
+    let config = load_config(&build_dir.join(CONFIG_FILE))?;
+    Ok(ExecutionInputs {
+        plan,
+        detailed,
+        config,
+    })
 }
 
 fn select_effort(store: &Store, request: &BuildRequest) -> Result<Effort> {
@@ -385,21 +434,10 @@ fn execute_gate(
     effort: &Effort,
     repo: &Path,
     build_dir: &Path,
-    state_path: &Path,
     state: &mut BuildState,
+    inputs: &ExecutionInputs,
     invoker: &dyn adapter::InvocationApi,
 ) -> Result<()> {
-    let plan_path = build_dir.join(PLAN_FILE);
-    let config_path = build_dir.join(CONFIG_FILE);
-    let plan = load_plan(&plan_path)?;
-    let detailed = read_build_file(build_dir, &plan.detailed_plan)
-        .context("cannot read referenced detailed plan")?;
-    let plan_digest = combined_digest(&fs::read(&plan_path)?, &detailed);
-    ensure!(
-        plan_digest == state.plan_digest && plan.reconciled == state.reconciled,
-        "Build plan or detailed plan changed after initialization; reset or start a new Build according to current authority"
-    );
-    let config = load_config(&config_path)?;
     if state.gate == Gate::Audit {
         ensure_audit_implementation(store, effort, repo, state)?;
     }
@@ -410,7 +448,7 @@ fn execute_gate(
     ensure_action_root(build_dir)?;
     fs::create_dir(&action_dir)?;
     let mut checkout = None;
-    let cwd = if matches!(gate, Gate::Review | Gate::Audit) {
+    let cwd = if matches!(gate, Gate::Review | Gate::Audit | Gate::Unblock) {
         let path = action_dir.join("checkout");
         git(
             repo,
@@ -424,10 +462,6 @@ fn execute_gate(
         )?;
         checkout = Some(path.clone());
         path
-    } else if gate == Gate::Unblock {
-        let path = action_dir.join("diagnosis");
-        fs::create_dir(&path)?;
-        path
     } else {
         repo.to_path_buf()
     };
@@ -435,12 +469,12 @@ fn execute_gate(
         store,
         effort,
         build_dir,
-        &plan,
+        &inputs.plan,
         state,
         &action_id,
-        std::str::from_utf8(&detailed).context("detailed plan must be UTF-8")?,
+        &inputs.detailed,
     )?;
-    let role = role_for_gate(&config, &gate);
+    let role = role_for_gate(&inputs.config, &gate);
     let session = match gate {
         Gate::Work => state.worker_session.as_ref(),
         Gate::Review | Gate::Audit => state.reviewer_session.as_ref(),
@@ -454,13 +488,13 @@ fn execute_gate(
     state.status = Status::Running;
     state.current_action_id = Some(action_id.clone());
     state.stop = None;
-    save_state(state_path, state)?;
+    save_state(&build_dir.join(STATE_FILE), state)?;
     eprintln!(
         "RUNNING gate={gate:?} action={action_id} checkpoint={}",
         state.checkpoint_commit
     );
 
-    let process = match invoker.invoke(&invocation, &cwd) {
+    let process = match invoker.invoke(&invocation, &cwd, &packet.action_dir) {
         Ok(outcome) => outcome,
         Err(error) => {
             if let Some(path) = &checkout {
@@ -469,7 +503,6 @@ fn execute_gate(
             return Err(error);
         }
     };
-    persist_transport(&packet.action_dir, &process)?;
     ensure!(
         process.success,
         "provider exited unsuccessfully (status {:?}); stderr is recorded at actions/{action_id}/stderr.txt",
@@ -519,7 +552,7 @@ fn execute_gate(
                 validate_work_commit(repo, &state.checkpoint_commit, &commit)?;
                 state.checkpoint_commit = commit;
                 state.implementation = None;
-                state.feedback = vec![feedback_ref];
+                state.feedback.push(feedback_ref);
                 if matches!(state.scope, Scope::Final) {
                     state.gate = Gate::Audit;
                 } else {
@@ -555,10 +588,10 @@ fn execute_gate(
             );
             match result.outcome.as_str() {
                 "pass" => {
-                    state.feedback = vec![feedback_ref];
+                    state.feedback.clear();
                     state.unblock = None;
                     match state.scope {
-                        Scope::Phase { index } if index + 1 < plan.phases.len() => {
+                        Scope::Phase { index } if index + 1 < inputs.plan.phases.len() => {
                             state.scope = Scope::Phase { index: index + 1 };
                             state.gate = Gate::Work;
                         }
@@ -697,6 +730,14 @@ fn execute_gate(
                 result.outcome
             );
             persist_result(&packet.action_dir, response, &result.report, None)?;
+            verify_disposable_review(
+                checkout.as_deref().context("Unblock worktree missing")?,
+                &state.checkpoint_commit,
+            )?;
+            remove_worktree(
+                repo,
+                checkout.as_deref().context("Unblock worktree missing")?,
+            )?;
             ensure!(
                 state.unblock.is_some(),
                 "Unblock has no originating gate context"
@@ -724,7 +765,7 @@ fn execute_gate(
     if state.status != Status::Stopped {
         state.current_action_id = None;
     }
-    save_state(state_path, state)?;
+    save_state(&build_dir.join(STATE_FILE), state)?;
     eprintln!(
         "ROUTED gate={:?} scope={:?} status={:?} checkpoint={}",
         state.gate, state.scope, state.status, state.checkpoint_commit
@@ -866,15 +907,6 @@ fn persist_result(
     Ok(())
 }
 
-fn persist_transport(action_dir: &Path, process: &InvocationOutcome) -> Result<()> {
-    write_bytes_sync(
-        &action_dir.join("transport.jsonl"),
-        process.stdout.as_bytes(),
-    )?;
-    write_bytes_sync(&action_dir.join("stderr.txt"), process.stderr.as_bytes())?;
-    Ok(())
-}
-
 fn ensure_audit_implementation(
     store: &Store,
     effort: &Effort,
@@ -922,12 +954,8 @@ fn provenance(provider: &str, model: Option<&str>) -> Provenance {
 
 fn validate_work_commit(repo: &Path, checkpoint: &str, commit: &str) -> Result<()> {
     validate_commit(repo, commit)?;
-    let descendant = Command::new("git")
-        .args(["merge-base", "--is-ancestor", checkpoint, commit])
-        .current_dir(repo)
-        .status()?;
     ensure!(
-        descendant.success(),
+        git_is_ancestor(repo, checkpoint, commit)?,
         "submitted Work commit is not descendant-or-equal to prior checkpoint"
     );
     let head = git_text(repo, &["rev-parse", "HEAD"])?;
@@ -937,6 +965,14 @@ fn validate_work_commit(repo: &Path, checkpoint: &str, commit: &str) -> Result<(
     );
     ensure_clean(repo)?;
     Ok(())
+}
+
+fn git_is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+    let status = Command::new("git")
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .current_dir(repo)
+        .status()?;
+    Ok(status.success())
 }
 
 fn verify_disposable_review(worktree: &Path, checkpoint: &str) -> Result<()> {
@@ -1111,42 +1147,10 @@ fn gate_label(gate: &Gate) -> &'static str {
     }
 }
 
-struct RepositoryLock {
-    _file: File,
-}
-impl RepositoryLock {
-    fn acquire(repo: &Path) -> Result<Self> {
-        let git_common = PathBuf::from(git_text(repo, &["rev-parse", "--git-common-dir"])?);
-        let git_common = if git_common.is_absolute() {
-            git_common
-        } else {
-            repo.join(git_common)
-        };
-        let git_common = fs::canonicalize(git_common)
-            .context("cannot locate repository Git metadata for Build lock")?;
-        let path = git_common.join("orchestrate-build.lock");
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&path)
-            .with_context(|| format!("cannot open persistent Build lock {}", path.display()))?;
-        match file.try_lock() {
-            Ok(()) => Ok(Self { _file: file }),
-            Err(TryLockError::WouldBlock) => {
-                bail!("another Build controller holds the repository lock")
-            }
-            Err(TryLockError::Error(error)) => {
-                Err(error).context("cannot acquire Build repository lock")
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::InvocationOutcome;
     use orchestrate_contracts::{
         ArtifactKind, ArtifactRef, DiscoverySourceRef, ReconciledRequirement, RequestKind,
         Requirement,
@@ -1347,6 +1351,12 @@ mod tests {
             .to_owned()
     }
 
+    fn packet_from_record(record: &adapter::InvocationRecord) -> serde_json::Value {
+        let prompt = record.argv.last().unwrap();
+        let packet = prompt.split_once("ACTION PACKET:\n").unwrap().1.trim();
+        serde_json::from_str(packet).unwrap()
+    }
+
     #[derive(Clone, Copy, Debug)]
     enum Step {
         WorkComplete,
@@ -1375,7 +1385,6 @@ mod tests {
         steps: Mutex<VecDeque<Step>>,
         records: Mutex<Vec<adapter::InvocationRecord>>,
         repo: Mutex<Option<PathBuf>>,
-        config_edit: Mutex<Option<(usize, PathBuf, String)>>,
     }
 
     impl FakeInvoker {
@@ -1384,11 +1393,7 @@ mod tests {
                 steps: Mutex::new(steps.into_iter().collect()),
                 records: Mutex::new(Vec::new()),
                 repo: Mutex::new(Some(repo.to_path_buf())),
-                config_edit: Mutex::new(None),
             }
-        }
-        fn edit_config_after(&self, call: usize, path: &Path, text: String) {
-            *self.config_edit.lock().unwrap() = Some((call, path.to_path_buf(), text));
         }
         fn records(&self) -> Vec<adapter::InvocationRecord> {
             self.records.lock().unwrap().clone()
@@ -1399,8 +1404,12 @@ mod tests {
     }
 
     impl adapter::InvocationApi for FakeInvoker {
-        fn invoke(&self, plan: &adapter::InvocationPlan, cwd: &Path) -> Result<InvocationOutcome> {
-            let call_number = self.records.lock().unwrap().len();
+        fn invoke(
+            &self,
+            plan: &adapter::InvocationPlan,
+            cwd: &Path,
+            _action_dir: &Path,
+        ) -> Result<InvocationOutcome> {
             self.records.lock().unwrap().push(plan.record.clone());
             let step = self
                 .steps
@@ -1422,7 +1431,7 @@ mod tests {
             } else {
                 "Unblock"
             };
-            if matches!(gate, "Review" | "Audit") {
+            if matches!(gate, "Review" | "Audit" | "Unblock") {
                 let packet: serde_json::Value =
                     serde_json::from_slice(&fs::read(cwd.parent().unwrap().join("action.json"))?)?;
                 assert_eq!(
@@ -1461,7 +1470,7 @@ mod tests {
                 Step::AuditPass | Step::AuditFail | Step::AuditUnknown => {
                     let packet: serde_json::Value = serde_json::from_slice(&fs::read(cwd.parent().unwrap().join("action.json"))?)?;
                     let refs = [&packet["reconciled"], &packet["adoption"], &packet["implementation"]];
-                    let ids = packet["requirements"].as_array().unwrap();
+                    let ids = packet["binding_reconciled"]["requirements"].as_array().unwrap();
                     let mut coverage = ids.iter().enumerate().map(|(index, item)| {
                         let state = match step { Step::AuditFail if index == 0 => "fail", Step::AuditUnknown => "unknown", _ => "pass" };
                         json!({"requirement_id": item["requirement"]["id"], "state": state, "rationale": "Assessment from exact checkpoint", "evidence": ["inspection: exact checkpoint"], "correction": if state == "fail" { "Fix the failed requirement." } else { "" }})
@@ -1477,14 +1486,6 @@ mod tests {
                 Step::StaleAction => json!({"action_id": "stale-action", "outcome": "blocked", "report": "Stale response."}).to_string(),
                 Step::ProviderFailure | Step::InvocationError | Step::MissingResponse => String::new(),
             };
-            let config_edit = self.config_edit.lock().unwrap().take();
-            if let Some((trigger, path, text)) = config_edit {
-                if call_number == trigger {
-                    fs::write(path, text)?;
-                } else {
-                    *self.config_edit.lock().unwrap() = Some((trigger, path, text));
-                }
-            }
             let failure = matches!(step, Step::ProviderFailure);
             let missing = matches!(step, Step::MissingResponse);
             let response = if matches!(step, Step::StaleAction) {
@@ -1548,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn initialization_requires_a_clean_checkout_and_plan_digest_stays_frozen() {
+    fn initialization_requires_a_clean_checkout() {
         let fixture = make_fixture(one_phase());
         fs::write(fixture.repo.join("untracked.txt"), "dirty\n").unwrap();
         let fake = FakeInvoker::new([], &fixture.repo);
@@ -1556,29 +1557,6 @@ mod tests {
         assert!(error.to_string().contains("checkout is not clean"));
         assert!(fake.records().is_empty());
         assert!(!fixture.build_dir.join(STATE_FILE).exists());
-        fs::remove_file(fixture.repo.join("untracked.txt")).unwrap();
-
-        initialize(
-            &fixture.store,
-            &fixture.effort,
-            &fixture.repo,
-            &fixture.build_dir,
-        )
-        .unwrap();
-        fs::write(
-            fixture.build_dir.join("implementation-plan.md"),
-            "# Changed after initialization\n",
-        )
-        .unwrap();
-        let fake = FakeInvoker::new([], &fixture.repo);
-        assert!(matches!(
-            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
-            BuildResult::Blocked { .. }
-        ));
-        assert!(fake.records().is_empty());
-        let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
-        assert_eq!(state.status, Status::Stopped);
-        assert_eq!(state.stop.unwrap().kind, StopKind::ResetRequired);
     }
 
     #[test]
@@ -1627,6 +1605,17 @@ mod tests {
             vec!["Work", "Review", "Work", "Review", "Audit"]
         );
         assert_eq!(records[4].session_in.as_deref(), Some("session-Review"));
+        for (record, scoped) in [(&records[0], "R-1"), (&records[2], "R-2")] {
+            let packet = packet_from_record(record);
+            assert_eq!(
+                packet["binding_reconciled"]["requirements"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+            assert_eq!(packet["phase"]["requirement_ids"][0], scoped);
+        }
         let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
         assert_eq!(state.status, Status::Complete);
         assert_eq!(
@@ -1680,6 +1669,14 @@ mod tests {
             gates,
             ["Work", "Review", "Work", "Review", "Audit", "Work", "Audit"]
         );
+        let corrected_review = packet_from_record(&records[3]);
+        assert_eq!(corrected_review["feedback"].as_array().unwrap().len(), 2);
+        assert_eq!(corrected_review["feedback"][0]["purpose"], "Review report");
+        assert_eq!(corrected_review["feedback"][1]["purpose"], "Worker report");
+        let corrected_audit = packet_from_record(&records[6]);
+        assert_eq!(corrected_audit["feedback"].as_array().unwrap().len(), 3);
+        assert_eq!(corrected_audit["feedback"][0]["purpose"], "Audit report");
+        assert_eq!(corrected_audit["feedback"][2]["purpose"], "Worker report");
         let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
         assert_eq!(state.scope, Scope::Final);
         assert_eq!(state.status, Status::Complete);
@@ -1702,6 +1699,15 @@ mod tests {
         assert!(matches!(result, BuildResult::Completed(_)));
         assert!(!fixture.repo.join("partial-untracked.txt").exists());
         assert_eq!(fake.remaining(), 0);
+        let unblock = packet_from_record(&fake.records()[1]);
+        assert_eq!(unblock["unblock_context"]["gate"], "work");
+        assert_eq!(unblock["unblock_context"]["scope"]["kind"], "phase");
+        assert!(
+            unblock["source_checkout"]
+                .as_str()
+                .unwrap()
+                .ends_with("/checkout")
+        );
 
         let fixture = make_fixture(one_phase());
         let fake = FakeInvoker::new(
@@ -1793,37 +1799,101 @@ mod tests {
     }
 
     #[test]
-    fn external_requirement_resume_requeues_without_dispatch_then_runs() {
+    fn next_explicit_launch_continues_an_external_stop_in_one_action() {
         let fixture = make_fixture(one_phase());
         let fake = FakeInvoker::new(
             [
                 Step::WorkBlocked,
                 Step::UnblockExternal,
+                Step::WorkBlocked,
+                Step::UnblockRetry,
                 Step::WorkComplete,
                 Step::ReviewPass,
                 Step::AuditPass,
             ],
             &fixture.repo,
         );
-        let first = run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap();
-        assert!(matches!(first, BuildResult::Blocked { .. }));
-        let stopped = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
-        assert_eq!(
-            stopped.stop.as_ref().unwrap().kind,
-            StopKind::ExternalRequirement
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        assert_eq!(fake.remaining(), 0);
+    }
+
+    #[test]
+    fn continuation_preserves_operator_commit_and_routes_it_to_review() {
+        let fixture = make_fixture(one_phase());
+        let fake = FakeInvoker::new(
+            [
+                Step::WorkBlocked,
+                Step::UnblockExternal,
+                Step::ReviewPass,
+                Step::AuditPass,
+            ],
+            &fixture.repo,
         );
-        assert!(stopped.current_action_id.is_some());
-        assert!(reset(&fixture.store, &fixture.effort.id).is_err());
-        let calls = fake.records().len();
-        let resumed = resume(&fixture.store, &fixture.effort.id).unwrap();
-        assert_eq!(resumed["status"], "ready");
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        fs::write(
+            fixture.repo.join("operator-fix.txt"),
+            "preserve this repair\n",
+        )
+        .unwrap();
+        git_ok(&fixture.repo, &["add", "operator-fix.txt"]);
+        git_ok(&fixture.repo, &["commit", "-m", "operator repair"]);
+        let operator_commit = git_text(&fixture.repo, &["rev-parse", "HEAD"]).unwrap();
+
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
+        assert_eq!(state.checkpoint_commit, operator_commit);
+        assert_eq!(state.unblock, None);
         assert_eq!(
-            fake.records().len(),
-            calls,
-            "resume must not launch a provider"
+            fs::read_to_string(fixture.repo.join("operator-fix.txt")).unwrap(),
+            "preserve this repair\n"
         );
-        let finished = run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap();
-        assert!(matches!(finished, BuildResult::Completed(_)));
+        assert!(
+            fake.records()[2]
+                .argv
+                .last()
+                .unwrap()
+                .contains("Gate: Review;")
+        );
+    }
+
+    #[test]
+    fn continuation_rejects_dirty_operator_state_without_discarding_it() {
+        let fixture = make_fixture(one_phase());
+        let fake = FakeInvoker::new([Step::WorkBlocked, Step::UnblockExternal], &fixture.repo);
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        fs::write(
+            fixture.repo.join("operator-fix.txt"),
+            "uncommitted repair\n",
+        )
+        .unwrap();
+        let error = run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap_err();
+        assert!(error.to_string().contains("nothing was discarded"));
+        assert_eq!(
+            fs::read_to_string(fixture.repo.join("operator-fix.txt")).unwrap(),
+            "uncommitted repair\n"
+        );
+        assert_eq!(
+            load_state(&fixture.build_dir.join(STATE_FILE))
+                .unwrap()
+                .status,
+            Status::Stopped
+        );
     }
 
     #[test]
@@ -1892,43 +1962,6 @@ mod tests {
     }
 
     #[test]
-    fn changing_reviewer_adapter_is_reread_and_starts_a_fresh_cross_adapter_session() {
-        let fixture = make_fixture(one_phase());
-        let fake = FakeInvoker::new(
-            [Step::WorkComplete, Step::ReviewPass, Step::AuditPass],
-            &fixture.repo,
-        );
-        let config_path = fixture.build_dir.join(CONFIG_FILE);
-        fake.edit_config_after(
-            1,
-            &config_path,
-            toml::to_string(&BuildConfig {
-                schema_version: crate::state::CONFIG_VERSION,
-                worker: RoleConfig {
-                    adapter: "codex".into(),
-                    model: Some("native-model".into()),
-                    args: Some(vec!["--search".into()]),
-                },
-                reviewer: RoleConfig {
-                    adapter: "claude".into(),
-                    model: None,
-                    args: None,
-                },
-                unblocker: None,
-            })
-            .unwrap(),
-        );
-        assert!(matches!(
-            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
-            BuildResult::Completed(_)
-        ));
-        let records = fake.records();
-        assert_eq!(records[1].adapter, "codex");
-        assert_eq!(records[2].adapter, "claude");
-        assert_eq!(records[2].session_in, None);
-    }
-
-    #[test]
     fn failures_malformed_and_stale_results_stop_without_automatic_dispatch() {
         for step in [
             Step::InvocationError,
@@ -1952,7 +1985,36 @@ mod tests {
     }
 
     #[test]
-    fn restart_from_running_dispatches_zero_actions_and_lock_contention_is_os_owned() {
+    fn invalid_launch_inputs_leave_ready_state_without_dispatch() {
+        for invalid_config in [true, false] {
+            let fixture = make_fixture(one_phase());
+            initialize(
+                &fixture.store,
+                &fixture.effort,
+                &fixture.repo,
+                &fixture.build_dir,
+            )
+            .unwrap();
+            if invalid_config {
+                fs::write(fixture.build_dir.join(CONFIG_FILE), "not valid toml = [").unwrap();
+            } else {
+                fs::write(
+                    fixture.build_dir.join("implementation-plan.md"),
+                    "changed after initialization\n",
+                )
+                .unwrap();
+            }
+            let fake = FakeInvoker::new([], &fixture.repo);
+            assert!(run_with_invoker(&fixture.store, request(&fixture), &fake).is_err());
+            assert!(fake.records().is_empty());
+            let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
+            assert_eq!(state.status, Status::Ready);
+            assert_eq!(state.stop, None);
+        }
+    }
+
+    #[test]
+    fn restart_from_running_dispatches_zero_actions_until_reset() {
         let fixture = make_fixture(one_phase());
         initialize(
             &fixture.store,
@@ -1976,10 +2038,7 @@ mod tests {
             load_state(&state_path).unwrap().stop.unwrap().kind,
             StopKind::ResetRequired
         );
-        let lock = RepositoryLock::acquire(&fixture.repo).unwrap();
-        assert!(RepositoryLock::acquire(&fixture.repo).is_err());
-        drop(lock);
-        assert!(RepositoryLock::acquire(&fixture.repo).is_ok());
+        assert!(reset(&fixture.store, &fixture.effort.id).is_ok());
     }
 
     fn request(fixture: &Fixture) -> BuildRequest {

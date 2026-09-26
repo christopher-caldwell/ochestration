@@ -8,7 +8,7 @@ pub mod controller;
 pub mod packet;
 pub mod state;
 
-pub use controller::{BuildRequest, BuildResult, reset, resume, run, scaffold, status};
+pub use controller::{BuildRequest, BuildResult, reset, run, scaffold, status};
 pub use state::{
     BuildCompletion, BuildConfig, BuildPlan, BuildState, Gate, PlanPhase, RoleConfig, Scope,
     Session, Status, Stop, StopKind, UnblockContext,
