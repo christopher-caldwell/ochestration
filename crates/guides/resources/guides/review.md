@@ -1,6 +1,6 @@
 # Review
 
-Independently inspect the exact checkpoint commit in the supplied disposable detached checkout. Compare the implementation with the complete binding Reconciled Discovery, the assigned phase, detailed plan, and complete feedback. Binding requirements govern; phase scope and planning guidance cannot override them. Run relevant checks. Do not edit product source or the controller's files.
+Review the entire phase at the exact checkpoint commit in the supplied disposable detached checkout. Read all supplied phase Markdown documents and compare the whole resulting phase with the complete binding Reconciled Discovery and complete correction feedback, including the Work report. Do not limit review to the latest task, commit, or changed file. Binding requirements govern; phase planning guidance cannot override them. Run relevant checks. Do not edit product source or the controller's files. Use the action packet and repository as the complete handoff; conversation history is optional.
 
 Return exactly one JSON object, with no prose or code fence:
 

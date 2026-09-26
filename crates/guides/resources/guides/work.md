@@ -1,6 +1,6 @@
 # Work
 
-Implement only the phase or final correction scope in the authoritative action packet. The complete Reconciled Discovery is binding authority; phase tasks, scoped requirement IDs, and the detailed plan are scope, ordering, and implementation guidance and cannot override any binding constraint. Feedback is the complete correction context for the unchanged authority. Use engineering judgment to implement, verify, and commit the scoped work.
+Complete the entire assigned phase. Read all phase Markdown documents supplied in the authoritative action packet. The complete Reconciled Discovery is binding authority; phase documents provide purpose, boundaries, task/context guidance, and ordering, and cannot override any binding constraint. Choose task ordering using engineering judgment. Feedback contains the complete correction context for the unchanged authority. Implement, verify, and commit the whole phase; you may make multiple local commits, but only the final candidate HEAD is reported to Rust. For final Audit correction scope, complete the corrections defined by the supplied feedback and binding authority. A fresh conversation must use the packet and repository without depending on conversation history.
 
 Return exactly one JSON object, with no prose or code fence:
 

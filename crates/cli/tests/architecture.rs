@@ -267,7 +267,7 @@ fn embedded_guides_preserve_high_value_instruction_boundaries() {
     assert!(
         orchestrate_guides::WORK.contains("complete Reconciled Discovery is binding authority")
     );
-    assert!(orchestrate_guides::REVIEW.contains("detailed plan"));
+    assert!(orchestrate_guides::REVIEW.contains("entire phase"));
     assert!(
         orchestrate_guides::FINAL_AUDIT.contains("Assess only the exact implementation artifact")
     );

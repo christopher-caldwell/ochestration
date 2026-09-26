@@ -5,7 +5,8 @@ use serde_json::json;
 use std::path::Path;
 
 use crate::state::{
-    BuildPlan, BuildState, Gate, Scope, current_action_dir, read_build_file, validate_feedback_path,
+    BuildPlan, BuildState, Gate, Scope, current_action_dir, load_phase_documents, read_build_file,
+    validate_feedback_path,
 };
 
 pub struct ActionPacket {
@@ -20,7 +21,6 @@ pub fn create_action_packet(
     plan: &BuildPlan,
     state: &BuildState,
     action_id: &str,
-    detailed_plan: &str,
 ) -> Result<ActionPacket> {
     let action_dir = current_action_dir(build_dir, action_id)?;
     let source_checkout = (state.gate != Gate::Work).then(|| action_dir.join("checkout"));
@@ -32,11 +32,15 @@ pub fn create_action_packet(
         "Build Adoption does not match the state Reconciled Discovery"
     );
     let phase = match &state.scope {
-        Scope::Phase { index } => Some(
-            plan.phases
+        Scope::Phase { index } => {
+            let id = plan
+                .phases
                 .get(*index)
-                .context("Build scope refers to a missing phase")?,
-        ),
+                .context("Build scope refers to a missing phase")?;
+            Some(
+                json!({"index": index, "id": id, "documents": load_phase_documents(build_dir, id)?}),
+            )
+        }
         Scope::Final => None,
     };
     let mut feedback = Vec::new();
@@ -53,7 +57,7 @@ pub fn create_action_packet(
         Gate::Unblock => orchestrate_guides::UNBLOCK,
     };
     let packet = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "action_id": action_id,
         "gate": state.gate,
         "scope": state.scope,
@@ -63,7 +67,6 @@ pub fn create_action_packet(
         "binding_reconciled": reconciled,
         "adoption": state.adoption,
         "phase": phase,
-        "detailed_plan": detailed_plan,
         "feedback": feedback,
         "unblock_context": state.unblock,
         "source_checkout": source_checkout,
@@ -86,7 +89,7 @@ pub fn create_action_packet(
             r#"{{"action_id":"{action_id}","outcome":"complete|blocked","report":"non-empty","assessment":"required only when complete"}}"#
         ),
         Gate::Unblock => format!(
-            r#"{{"action_id":"{action_id}","outcome":"retry|external_requirement","report":"non-empty"}}"#
+            r#"{{"action_id":"{action_id}","outcome":"retry|blocked","report":"non-empty"}}"#
         ),
     };
     let prompt = format!(

@@ -1,4 +1,4 @@
-use crate::state::{RoleConfig, Session};
+use crate::state::RoleConfig;
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -7,6 +7,18 @@ use std::{
     path::Path,
     process::{Command, Stdio},
 };
+
+#[derive(Clone, Debug)]
+pub struct Session {
+    pub adapter: String,
+    pub id: String,
+}
+
+#[derive(Default)]
+pub struct RuntimeSessions {
+    pub worker: Option<Session>,
+    pub reviewer: Option<Session>,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct InvocationRecord {

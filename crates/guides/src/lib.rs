@@ -105,8 +105,8 @@ mod tests {
 
     #[test]
     fn templates_are_embedded() {
-        assert!(templates::PLAN_JSON.contains("\"schema_version\": 3"));
-        assert!(templates::PLAN_JSON.contains("requirement_ids"));
+        assert!(templates::PLAN_JSON.contains("\"schema_version\": 4"));
+        assert!(templates::PLAN_JSON.contains("phase_01_foundation"));
         assert!(templates::CONFIG_TOML.contains("schema_version = 4"));
         assert!(templates::CONFIG_TOML.contains("args"));
     }

@@ -4,8 +4,8 @@ use orchestrate_core::write_bytes_sync;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
-pub const STATE_VERSION: u32 = 4;
-pub const PLAN_VERSION: u32 = 3;
+pub const STATE_VERSION: u32 = 5;
+pub const PLAN_VERSION: u32 = 4;
 pub const CONFIG_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -13,16 +13,7 @@ pub const CONFIG_VERSION: u32 = 4;
 pub struct BuildPlan {
     pub schema_version: u32,
     pub reconciled: ArtifactRef,
-    pub detailed_plan: String,
-    pub phases: Vec<PlanPhase>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PlanPhase {
-    pub id: String,
-    pub tasks: Vec<String>,
-    pub requirement_ids: Vec<String>,
+    pub phases: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -71,12 +62,6 @@ pub enum Status {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Session {
-    pub adapter: String,
-    pub id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct FeedbackRef {
     pub path: String,
     pub purpose: String,
@@ -92,7 +77,7 @@ pub struct UnblockContext {
 #[serde(rename_all = "snake_case")]
 pub enum StopKind {
     ResetRequired,
-    ExternalRequirement,
+    Blocked,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -122,8 +107,6 @@ pub struct BuildState {
     pub feedback: Vec<FeedbackRef>,
     pub unblock: Option<UnblockContext>,
     pub current_action_id: Option<String>,
-    pub worker_session: Option<Session>,
-    pub reviewer_session: Option<Session>,
     pub implementation: Option<ArtifactRef>,
     pub completion: Option<BuildCompletion>,
     pub stop: Option<Stop>,
@@ -180,7 +163,59 @@ pub fn load_plan(path: &Path) -> Result<BuildPlan> {
         !plan.phases.is_empty(),
         "Build plan must contain at least one phase"
     );
+    let mut ids = std::collections::HashSet::new();
+    for id in &plan.phases {
+        ensure!(
+            !id.trim().is_empty()
+                && id != "."
+                && id != ".."
+                && !id.contains(['/', '\\', ':', '\0'])
+                && ids.insert(id),
+            "phase identifiers must be nonempty, unique, safe single directory names: {id:?}"
+        );
+        load_phase_documents(
+            path.parent()
+                .context("Build plan has no parent directory")?,
+            id,
+        )?;
+    }
     Ok(plan)
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PhaseDocument {
+    pub path: String,
+    pub content: String,
+}
+
+pub fn load_phase_documents(build_dir: &Path, id: &str) -> Result<Vec<PhaseDocument>> {
+    let read = |name: &str| -> Result<PhaseDocument> {
+        let path = format!("{id}/{name}");
+        let content = String::from_utf8(read_build_file(build_dir, &path)?)
+            .with_context(|| format!("phase document {path} must be UTF-8"))?;
+        Ok(PhaseDocument { path, content })
+    };
+    // Read the required document first, also validating the directory path.
+    let mut documents = vec![read("phase.md")?];
+    let mut names = Vec::new();
+    for entry in fs::read_dir(build_dir.join(id))? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() || entry.path().extension().is_none_or(|ext| ext != "md") {
+            continue;
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("phase document filename must be UTF-8"))?;
+        if name != "phase.md" {
+            names.push(name);
+        }
+    }
+    names.sort();
+    for name in names {
+        documents.push(read(&name)?);
+    }
+    Ok(documents)
 }
 
 pub fn load_config(path: &Path) -> Result<BuildConfig> {

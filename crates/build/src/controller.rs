@@ -5,7 +5,7 @@ use orchestrate_audit::{
 };
 use orchestrate_contracts::{
     ArtifactKind, AuditAssessment, AuditReport, ImplementationStatus, Independence, Provenance,
-    ReconciledDiscovery, Verdict, digest_bytes, encode, safe_relative_path,
+    ReconciledDiscovery, Verdict, digest_bytes, encode,
 };
 use orchestrate_core::{Effort, Store, now_ms, write_bytes_sync};
 use serde::{Deserialize, Serialize};
@@ -18,12 +18,12 @@ use std::{
 };
 
 use crate::{
-    adapter,
+    adapter::{self, RuntimeSessions, Session},
     packet::create_action_packet,
     state::{
         BuildCompletion, BuildConfig, BuildPlan, BuildState, FeedbackRef, Gate, RoleConfig,
-        STATE_VERSION, Scope, Session, Status, Stop, StopKind, UnblockContext, current_action_dir,
-        load_config, load_plan, load_state, read_build_file, save_state,
+        STATE_VERSION, Scope, Status, Stop, StopKind, UnblockContext, current_action_dir,
+        load_config, load_plan, load_state, read_build_file, save_state, validate_feedback_path,
     },
 };
 
@@ -50,6 +50,11 @@ pub fn scaffold(store: &Store, effort_id: &str) -> Result<PathBuf> {
     let build_dir = store.phase_dir(&effort, "build")?;
     let plan = build_dir.join(PLAN_FILE);
     if !plan.exists() {
+        let phase = build_dir.join("phase_01_foundation");
+        fs::create_dir_all(&phase)?;
+        if !phase.join("phase.md").exists() {
+            write_bytes_sync(&phase.join("phase.md"), b"# Foundation\n\nDescribe the whole phase: purpose, expected outcome, boundaries, dependencies, implementation guidance, and deliberate exclusions. Add immediate Markdown task/context files as useful.\n")?;
+        }
         write_bytes_sync(&plan, orchestrate_guides::templates::PLAN_JSON.as_bytes())?;
     }
     let config = build_dir.join(CONFIG_FILE);
@@ -59,10 +64,7 @@ pub fn scaffold(store: &Store, effort_id: &str) -> Result<PathBuf> {
             orchestrate_guides::templates::CONFIG_TOML.as_bytes(),
         )?;
     }
-    let details = build_dir.join("implementation-plan.md");
-    if !details.exists() {
-        write_bytes_sync(&details, b"# Implementation plan\n\nReplace this scaffold with the approved, detailed implementation plan.\n")?;
-    }
+
     Ok(build_dir)
 }
 
@@ -89,7 +91,7 @@ pub fn reset(store: &Store, effort_id: &str) -> Result<serde_json::Value> {
                     .stop
                     .as_ref()
                     .is_some_and(|stop| stop.kind == StopKind::ResetRequired)),
-        "build reset requires a running or reset_required state; relaunch Build for an external_requirement stop"
+        "build reset requires a running or reset_required state; relaunch Build for a blocked stop"
     );
     validate_commit(&project.canonical_locator, &state.checkpoint_commit)?;
     remove_current_worktree(
@@ -98,8 +100,6 @@ pub fn reset(store: &Store, effort_id: &str) -> Result<serde_json::Value> {
         state.current_action_id.as_deref(),
     )?;
     reset_checkout(&project.canonical_locator, &state.checkpoint_commit)?;
-    state.worker_session = None;
-    state.reviewer_session = None;
     state.current_action_id = None;
     state.stop = None;
     state.status = Status::Ready;
@@ -122,20 +122,18 @@ fn prepare_continuation(
             && state
                 .stop
                 .as_ref()
-                .is_some_and(|stop| stop.kind == StopKind::ExternalRequirement),
-        "Build continuation requires a stopped external_requirement state"
+                .is_some_and(|stop| stop.kind == StopKind::Blocked),
+        "Build continuation requires a stopped blocked state"
     );
     let context = state
         .unblock
         .as_ref()
-        .context("external stop lacks its Unblock context")?
+        .context("blocked stop lacks its originating gate context")?
         .clone();
-    let unblock_action = state
-        .current_action_id
-        .as_deref()
-        .context("external stop lacks the Unblock action id")?;
-    let report_path = format!("actions/{unblock_action}/report.md");
-    read_build_file(build_dir, &report_path).context("external stop lacks its Unblock report")?;
+    for feedback in &state.feedback {
+        validate_feedback_path(&feedback.path)?;
+        read_build_file(build_dir, &feedback.path).context("blocked stop lacks its feedback")?;
+    }
     ensure_clean(repo).context(
         "operator repair is not a clean reviewable candidate; commit the intended repository changes or remove unintended files (nothing was discarded)",
     )?;
@@ -155,13 +153,7 @@ fn prepare_continuation(
         };
     }
     state.scope = context.scope.clone();
-    state.feedback.push(FeedbackRef {
-        path: report_path,
-        purpose: "operator confirmed external condition resolved; Unblock guidance".into(),
-    });
     state.unblock = None;
-    state.worker_session = None;
-    state.reviewer_session = None;
     state.current_action_id = None;
     state.stop = None;
     state.status = Status::Ready;
@@ -190,6 +182,8 @@ fn run_with_invoker(
         initialize(store, &effort, &project.canonical_locator, &build_dir)?;
     }
     let mut state = load_state(&state_path)?;
+    let mut sessions = RuntimeSessions::default();
+    let mut inputs = None;
     match state.status {
         Status::Complete => {
             return Ok(BuildResult::Completed(
@@ -202,8 +196,9 @@ fn run_with_invoker(
             if state
                 .stop
                 .as_ref()
-                .is_some_and(|stop| stop.kind == StopKind::ExternalRequirement)
+                .is_some_and(|stop| stop.kind == StopKind::Blocked)
             {
+                inputs = Some(load_execution_inputs(&build_dir, &state)?);
                 prepare_continuation(
                     &project.canonical_locator,
                     &build_dir,
@@ -232,7 +227,10 @@ fn run_with_invoker(
         Status::Ready => {}
     }
 
-    let inputs = load_execution_inputs(&build_dir, &state)?;
+    let inputs = match inputs {
+        Some(inputs) => inputs,
+        None => load_execution_inputs(&build_dir, &state)?,
+    };
 
     loop {
         if state.status == Status::Complete {
@@ -258,6 +256,7 @@ fn run_with_invoker(
             &project.canonical_locator,
             &build_dir,
             &mut state,
+            &mut sessions,
             &inputs,
             invoker,
         );
@@ -281,27 +280,19 @@ fn run_with_invoker(
 
 struct ExecutionInputs {
     plan: BuildPlan,
-    detailed: String,
     config: BuildConfig,
 }
 
 fn load_execution_inputs(build_dir: &Path, state: &BuildState) -> Result<ExecutionInputs> {
     let plan_path = build_dir.join(PLAN_FILE);
     let plan = load_plan(&plan_path)?;
-    let detailed = read_build_file(build_dir, &plan.detailed_plan)
-        .context("cannot read referenced detailed plan")?;
-    let plan_digest = combined_digest(&fs::read(&plan_path)?, &detailed);
     ensure!(
-        plan_digest == state.plan_digest && plan.reconciled == state.reconciled,
-        "Build plan or detailed plan changed after initialization; restore the accepted files or start a new Build according to current authority"
+        digest_bytes(&fs::read(&plan_path)?) == state.plan_digest
+            && plan.reconciled == state.reconciled,
+        "Build machine plan changed after initialization; restore the accepted plan.json or start a new Build according to current authority"
     );
-    let detailed = String::from_utf8(detailed).context("detailed plan must be UTF-8")?;
     let config = load_config(&build_dir.join(CONFIG_FILE))?;
-    Ok(ExecutionInputs {
-        plan,
-        detailed,
-        config,
-    })
+    Ok(ExecutionInputs { plan, config })
 }
 
 fn select_effort(store: &Store, request: &BuildRequest) -> Result<Effort> {
@@ -327,14 +318,7 @@ fn initialize(store: &Store, effort: &Effort, repo: &Path, build_dir: &Path) -> 
     let head = git_text(repo, &["rev-parse", "HEAD"])?;
     let plan_path = build_dir.join(PLAN_FILE);
     let plan = load_plan(&plan_path)?;
-    ensure!(
-        safe_relative_path(&plan.detailed_plan),
-        "detailed plan path must be relative and safe"
-    );
-    let detailed = read_build_file(build_dir, &plan.detailed_plan)
-        .context("cannot read referenced detailed plan")?;
-    let plan_bytes = fs::read(&plan_path)?;
-    let plan_digest = combined_digest(&plan_bytes, &detailed);
+    let plan_digest = digest_bytes(&fs::read(&plan_path)?);
     let (reconciled_envelope, reconciled): (_, ReconciledDiscovery) =
         store.load_json(effort, &plan.reconciled, "reconciled-discovery.json")?;
     ensure!(
@@ -356,7 +340,6 @@ fn initialize(store: &Store, effort: &Effort, repo: &Path, build_dir: &Path) -> 
         "Discovery baseline {} is not an ancestor of HEAD",
         reconciled.baseline_commit
     );
-    validate_plan_requirements(&plan, &reconciled)?;
     let adoption = adopt_for_build(
         store,
         effort,
@@ -376,8 +359,6 @@ fn initialize(store: &Store, effort: &Effort, repo: &Path, build_dir: &Path) -> 
         feedback: Vec::new(),
         unblock: None,
         current_action_id: None,
-        worker_session: None,
-        reviewer_session: None,
         implementation: None,
         completion: None,
         stop: None,
@@ -390,51 +371,13 @@ fn initialize(store: &Store, effort: &Effort, repo: &Path, build_dir: &Path) -> 
     Ok(())
 }
 
-fn validate_plan_requirements(plan: &BuildPlan, reconciled: &ReconciledDiscovery) -> Result<()> {
-    let known = reconciled
-        .requirements
-        .iter()
-        .map(|item| item.requirement.id.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    let mut phase_ids = std::collections::HashSet::new();
-    for phase in &plan.phases {
-        ensure!(
-            !phase.id.trim().is_empty() && phase_ids.insert(phase.id.as_str()),
-            "phase IDs must be nonempty and unique"
-        );
-        ensure!(
-            !phase.tasks.is_empty() && phase.tasks.iter().all(|task| !task.trim().is_empty()),
-            "phase {} must have nonempty tasks",
-            phase.id
-        );
-        ensure!(
-            !phase.requirement_ids.is_empty(),
-            "phase {} must reference at least one requirement",
-            phase.id
-        );
-        let mut local = std::collections::HashSet::new();
-        for id in &phase.requirement_ids {
-            ensure!(
-                known.contains(id.as_str()),
-                "phase {} references unknown requirement {id}",
-                phase.id
-            );
-            ensure!(
-                local.insert(id.as_str()),
-                "phase {} repeats requirement {id}",
-                phase.id
-            );
-        }
-    }
-    Ok(())
-}
-
 fn execute_gate(
     store: &Store,
     effort: &Effort,
     repo: &Path,
     build_dir: &Path,
     state: &mut BuildState,
+    sessions: &mut RuntimeSessions,
     inputs: &ExecutionInputs,
     invoker: &dyn adapter::InvocationApi,
 ) -> Result<()> {
@@ -465,19 +408,11 @@ fn execute_gate(
     } else {
         repo.to_path_buf()
     };
-    let packet = create_action_packet(
-        store,
-        effort,
-        build_dir,
-        &inputs.plan,
-        state,
-        &action_id,
-        &inputs.detailed,
-    )?;
+    let packet = create_action_packet(store, effort, build_dir, &inputs.plan, state, &action_id)?;
     let role = role_for_gate(&inputs.config, &gate);
     let session = match gate {
-        Gate::Work => state.worker_session.as_ref(),
-        Gate::Review | Gate::Audit => state.reviewer_session.as_ref(),
+        Gate::Work => sessions.worker.as_ref(),
+        Gate::Review | Gate::Audit => sessions.reviewer.as_ref(),
         Gate::Unblock => None,
     };
     let invocation = adapter::prepare_invocation(role, &packet.prompt, &cwd, session)?;
@@ -532,21 +467,11 @@ fn execute_gate(
                 "Work blocked result must not include a commit"
             );
             persist_result(&packet.action_dir, response, &result.report, None)?;
-            update_session(state, &gate, role, process.observed_session);
+            update_session(sessions, &gate, role, process.observed_session);
             if result.outcome == "blocked" {
-                if state.unblock.is_some() {
-                    bail!(
-                        "retried gate blocked after Unblock; automatic second Unblock is forbidden"
-                    );
-                }
                 reset_checkout(repo, &state.checkpoint_commit)?;
                 state.feedback.push(feedback_ref);
-                state.unblock = Some(UnblockContext {
-                    gate: Gate::Work,
-                    scope: state.scope.clone(),
-                });
-                state.gate = Gate::Unblock;
-                state.status = Status::Ready;
+                route_blocked(state, Gate::Work, &result.report);
             } else {
                 let commit = result.commit.context("Work complete result lacks commit")?;
                 validate_work_commit(repo, &state.checkpoint_commit, &commit)?;
@@ -581,7 +506,7 @@ fn execute_gate(
                 repo,
                 checkout.as_deref().context("Review worktree missing")?,
             )?;
-            update_session(state, &gate, role, process.observed_session);
+            update_session(sessions, &gate, role, process.observed_session);
             ensure!(
                 result.inspected_commit == state.checkpoint_commit,
                 "Review inspected commit does not match the exact checkpoint"
@@ -609,7 +534,10 @@ fn execute_gate(
                     state.unblock = None;
                     state.status = Status::Ready;
                 }
-                "blocked" => enter_unblock(state, Gate::Review, feedback_ref)?,
+                "blocked" => {
+                    state.feedback.push(feedback_ref);
+                    route_blocked(state, Gate::Review, &result.report);
+                }
                 _ => unreachable!(),
             }
         }
@@ -635,15 +563,11 @@ fn execute_gate(
                 &state.checkpoint_commit,
             )?;
             remove_worktree(repo, checkout.as_deref().context("Audit worktree missing")?)?;
-            update_session(state, &gate, role, process.observed_session);
+            update_session(sessions, &gate, role, process.observed_session);
             match result.outcome.as_str() {
                 "blocked" => {
-                    if state.unblock.is_some() {
-                        bail!(
-                            "retried Audit blocked after Unblock; automatic second Unblock is forbidden"
-                        );
-                    }
-                    enter_unblock(state, Gate::Audit, feedback_ref)?;
+                    state.feedback.push(feedback_ref);
+                    route_blocked(state, Gate::Audit, &result.report);
                 }
                 "complete" => {
                     let assessment = result
@@ -697,25 +621,16 @@ fn execute_gate(
                             state.status = Status::Ready;
                         }
                         Verdict::Blocked => {
-                            if state.unblock.is_some() {
-                                bail!(
-                                    "retried Audit has unknown or missing coverage after Unblock; automatic second Unblock is forbidden"
-                                );
-                            }
-                            state.feedback = vec![
-                                feedback_ref,
-                                FeedbackRef {
-                                    path: format!("actions/{action_id}/assessment.json"),
-                                    purpose: "Audit unknown or incomplete requirement coverage"
-                                        .into(),
-                                },
-                            ];
-                            state.unblock = Some(UnblockContext {
-                                gate: Gate::Audit,
-                                scope: state.scope.clone(),
+                            state.feedback.push(feedback_ref);
+                            state.feedback.push(FeedbackRef {
+                                path: format!("actions/{action_id}/assessment.json"),
+                                purpose: "Audit unknown or incomplete requirement coverage".into(),
                             });
-                            state.gate = Gate::Unblock;
-                            state.status = Status::Ready;
+                            route_blocked(
+                                state,
+                                Gate::Audit,
+                                "Audit has unknown or incomplete requirement coverage",
+                            );
                         }
                     }
                 }
@@ -725,7 +640,7 @@ fn execute_gate(
         Gate::Unblock => {
             let result: UnblockResult = parse_result(response, &action_id)?;
             ensure!(
-                matches!(result.outcome.as_str(), "retry" | "external_requirement"),
+                matches!(result.outcome.as_str(), "retry" | "blocked"),
                 "invalid Unblock outcome {:?}",
                 result.outcome
             );
@@ -742,19 +657,19 @@ fn execute_gate(
                 state.unblock.is_some(),
                 "Unblock has no originating gate context"
             );
+            state.feedback.push(feedback_ref);
             match result.outcome.as_str() {
                 "retry" => {
                     let context = state.unblock.as_ref().unwrap().clone();
                     reset_checkout(repo, &state.checkpoint_commit)?;
-                    state.feedback.push(feedback_ref);
                     state.scope = context.scope;
                     state.gate = context.gate;
                     state.status = Status::Ready;
                 }
-                "external_requirement" => {
+                "blocked" => {
                     state.status = Status::Stopped;
                     state.stop = Some(Stop {
-                        kind: StopKind::ExternalRequirement,
+                        kind: StopKind::Blocked,
                         detail: result.report.clone(),
                     });
                 }
@@ -782,42 +697,39 @@ fn role_for_gate<'a>(config: &'a BuildConfig, gate: &Gate) -> &'a RoleConfig {
 }
 
 fn update_session(
-    state: &mut BuildState,
+    sessions: &mut RuntimeSessions,
     gate: &Gate,
     role: &RoleConfig,
     observed: Option<String>,
 ) {
     let target = match gate {
-        Gate::Work => &mut state.worker_session,
-        Gate::Review | Gate::Audit => &mut state.reviewer_session,
+        Gate::Work => &mut sessions.worker,
+        Gate::Review | Gate::Audit => &mut sessions.reviewer,
         Gate::Unblock => return,
     };
-    if let Some(id) = observed.filter(|id| !id.trim().is_empty()) {
-        *target = Some(Session {
+    *target = observed
+        .filter(|id| !id.trim().is_empty())
+        .map(|id| Session {
             adapter: role.adapter.clone(),
             id,
         });
-    } else if target
-        .as_ref()
-        .is_some_and(|session| session.adapter != role.adapter)
-    {
-        *target = None;
-    }
 }
 
-fn enter_unblock(state: &mut BuildState, gate: Gate, feedback: FeedbackRef) -> Result<()> {
-    ensure!(
-        state.unblock.is_none(),
-        "automatic second Unblock is forbidden"
-    );
-    state.feedback.push(feedback);
-    state.unblock = Some(UnblockContext {
-        gate,
-        scope: state.scope.clone(),
-    });
-    state.gate = Gate::Unblock;
-    state.status = Status::Ready;
-    Ok(())
+fn route_blocked(state: &mut BuildState, gate: Gate, report: &str) {
+    if state.unblock.is_some() {
+        state.status = Status::Stopped;
+        state.stop = Some(Stop {
+            kind: StopKind::Blocked,
+            detail: report.to_owned(),
+        });
+    } else {
+        state.unblock = Some(UnblockContext {
+            gate,
+            scope: state.scope.clone(),
+        });
+        state.gate = Gate::Unblock;
+        state.status = Status::Ready;
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -885,7 +797,7 @@ fn parse_result<T: for<'de> Deserialize<'de> + Serialize>(
     ensure!(
         matches!(
             outcome,
-            "complete" | "blocked" | "pass" | "changes_required" | "retry" | "external_requirement"
+            "complete" | "blocked" | "pass" | "changes_required" | "retry"
         ),
         "invalid gate outcome {outcome:?}"
     );
@@ -1121,15 +1033,6 @@ fn git_text(repo: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn combined_digest(plan: &[u8], detailed: &[u8]) -> String {
-    let mut bytes = Vec::with_capacity(16 + plan.len() + detailed.len());
-    bytes.extend_from_slice(&(plan.len() as u64).to_be_bytes());
-    bytes.extend_from_slice(plan);
-    bytes.extend_from_slice(&(detailed.len() as u64).to_be_bytes());
-    bytes.extend_from_slice(detailed);
-    digest_bytes(&bytes)
-}
-
 fn action_id() -> String {
     format!(
         "a-{}-{}-{}",
@@ -1181,7 +1084,7 @@ mod tests {
         }
     }
 
-    fn make_fixture(phases: Vec<crate::state::PlanPhase>) -> Fixture {
+    fn make_fixture(phases: Vec<String>) -> Fixture {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1215,10 +1118,7 @@ mod tests {
                 Vec::new(),
             )
             .unwrap();
-        let requirement_ids = phases
-            .iter()
-            .flat_map(|phase| phase.requirement_ids.iter().cloned())
-            .collect::<std::collections::BTreeSet<_>>();
+        let requirement_ids = ["R-1".to_owned(), "R-2".to_owned()];
         let reconciled = ReconciledDiscovery {
             reconciled_id: "test-reconciled".into(),
             context_id: effort.context.id.clone(),
@@ -1277,15 +1177,30 @@ mod tests {
             )
             .unwrap();
         let build_dir = store.phase_dir(&effort, "build").unwrap();
-        fs::write(
-            build_dir.join("implementation-plan.md"),
-            "# Detailed plan\n\nImplement the listed requirements.\n",
-        )
-        .unwrap();
+        for phase in &phases {
+            let dir = build_dir.join(phase);
+            fs::create_dir_all(dir.join("nested")).unwrap();
+            fs::write(
+                dir.join("phase.md"),
+                format!("# {phase}\nComplete this entire phase."),
+            )
+            .unwrap();
+            fs::write(
+                dir.join("z-context.md"),
+                "Second context: arbitrary prose, no task schema.",
+            )
+            .unwrap();
+            fs::write(
+                dir.join("a-notes.md"),
+                "First context: decide task ordering yourself.",
+            )
+            .unwrap();
+            fs::write(dir.join("ignored.txt"), "Do not include").unwrap();
+            fs::write(dir.join("nested/task.md"), "Do not recurse").unwrap();
+        }
         let plan = BuildPlan {
             schema_version: crate::state::PLAN_VERSION,
             reconciled: reconciled_ref.clone(),
-            detailed_plan: "implementation-plan.md".into(),
             phases,
         };
         fs::write(build_dir.join(PLAN_FILE), encode(&plan).unwrap()).unwrap();
@@ -1300,12 +1215,8 @@ mod tests {
         }
     }
 
-    fn one_phase() -> Vec<crate::state::PlanPhase> {
-        vec![crate::state::PlanPhase {
-            id: "P1".into(),
-            tasks: vec!["T1".into()],
-            requirement_ids: vec!["R-1".into()],
-        }]
+    fn one_phase() -> Vec<String> {
+        vec!["phase_01".into()]
     }
 
     fn write_config(path: &Path, worker: &str, reviewer: &str) {
@@ -1372,7 +1283,7 @@ mod tests {
         AuditUnknown,
         AuditBlocked,
         UnblockRetry,
-        UnblockExternal,
+        UnblockBlocked,
         Malformed,
         StaleAction,
         ProviderFailure,
@@ -1385,6 +1296,7 @@ mod tests {
         steps: Mutex<VecDeque<Step>>,
         records: Mutex<Vec<adapter::InvocationRecord>>,
         repo: Mutex<Option<PathBuf>>,
+        no_sessions: bool,
     }
 
     impl FakeInvoker {
@@ -1393,6 +1305,7 @@ mod tests {
                 steps: Mutex::new(steps.into_iter().collect()),
                 records: Mutex::new(Vec::new()),
                 repo: Mutex::new(Some(repo.to_path_buf())),
+                no_sessions: false,
             }
         }
         fn records(&self) -> Vec<adapter::InvocationRecord> {
@@ -1420,6 +1333,14 @@ mod tests {
             if matches!(step, Step::InvocationError) {
                 bail!("fake provider could not be spawned");
             }
+            let packet = packet_from_record(&plan.record);
+            assert_eq!(
+                packet["binding_reconciled"]["requirements"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
             let prompt = plan.record.argv.last().unwrap();
             let action_id = id_from_prompt(plan);
             let gate = if prompt.contains("Gate: Work;") {
@@ -1445,12 +1366,16 @@ mod tests {
                 Step::WorkComplete => {
                     let count = self.records.lock().unwrap().iter().filter(|record| record.argv.last().is_some_and(|prompt| prompt.contains("Gate: Work;"))).count();
                     let filename = format!("work-step-{count}.txt");
-                    fs::write(cwd.join(filename), format!("step {count}\n"))?;
+                    fs::write(cwd.join(filename), format!("step {count}: {action_id}\n"))?;
                     git_ok(cwd, &["add", "-A"]);
                     git_ok(cwd, &["commit", "-m", &format!("work step {count}")]);
                     json!({"action_id": action_id, "outcome": "complete", "report": "Scoped work is committed and verified.", "commit": git_text(cwd, &["rev-parse", "HEAD"])?}).to_string()
                 }
                 Step::WorkBlocked => {
+                    fs::write(cwd.join("product.txt"), "partial committed work\n")?;
+                    git_ok(cwd, &["add", "product.txt"]);
+                    git_ok(cwd, &["commit", "-m", "partial phase"]);
+                    fs::write(cwd.join("product.txt"), "partial uncommitted work\n")?;
                     fs::write(cwd.join("partial-untracked.txt"), "discard this partial work\n")?;
                     json!({"action_id": action_id, "outcome": "blocked", "report": "Work needs a missing external requirement."}).to_string()
                 }
@@ -1481,7 +1406,7 @@ mod tests {
                 }
                 Step::AuditBlocked => json!({"action_id": action_id, "outcome": "blocked", "report": "Audit cannot assess without an external requirement."}).to_string(),
                 Step::UnblockRetry => json!({"action_id": action_id, "outcome": "retry", "report": "Retry the same gate after the checkpoint reset."}).to_string(),
-                Step::UnblockExternal => json!({"action_id": action_id, "outcome": "external_requirement", "report": "An operator must supply the missing prerequisite."}).to_string(),
+                Step::UnblockBlocked => json!({"action_id": action_id, "outcome": "blocked", "report": "An operator must supply the missing prerequisite."}).to_string(),
                 Step::Malformed => "this is not JSON".into(),
                 Step::StaleAction => json!({"action_id": "stale-action", "outcome": "blocked", "report": "Stale response."}).to_string(),
                 Step::ProviderFailure | Step::InvocationError | Step::MissingResponse => String::new(),
@@ -1506,7 +1431,7 @@ mod tests {
                 } else {
                     Some(response.clone())
                 },
-                observed_session: Some(format!("session-{gate}")),
+                observed_session: (!self.no_sessions).then(|| format!("session-{gate}")),
                 stdout: response,
                 stderr: if failure {
                     "provider failed".into()
@@ -1540,15 +1465,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_digest_binds_both_exact_byte_sequences() {
-        assert_ne!(combined_digest(b"ab", b"c"), combined_digest(b"a", b"bc"));
-        assert_ne!(
-            combined_digest(b"plan", b"detail"),
-            combined_digest(b"PLAN", b"detail")
-        );
-    }
-
-    #[test]
     fn initialization_requires_a_clean_checkout() {
         let fixture = make_fixture(one_phase());
         fs::write(fixture.repo.join("untracked.txt"), "dirty\n").unwrap();
@@ -1561,18 +1477,7 @@ mod tests {
 
     #[test]
     fn initialization_routes_two_phases_then_final_audit_and_reuses_reviewer_session() {
-        let phases = vec![
-            crate::state::PlanPhase {
-                id: "P1".into(),
-                tasks: vec!["T1".into()],
-                requirement_ids: vec!["R-1".into()],
-            },
-            crate::state::PlanPhase {
-                id: "P2".into(),
-                tasks: vec!["T2".into()],
-                requirement_ids: vec!["R-2".into()],
-            },
-        ];
+        let phases = vec!["phase_01".into(), "phase_02".into()];
         let fixture = make_fixture(phases);
         let fake = FakeInvoker::new(
             [
@@ -1605,8 +1510,22 @@ mod tests {
             vec!["Work", "Review", "Work", "Review", "Audit"]
         );
         assert_eq!(records[4].session_in.as_deref(), Some("session-Review"));
-        for (record, scoped) in [(&records[0], "R-1"), (&records[2], "R-2")] {
+        assert_eq!(records[2].session_in.as_deref(), Some("session-Work"));
+        let (_, authority): (_, ReconciledDiscovery) = fixture
+            .store
+            .load_json(
+                &fixture.effort,
+                &fixture.reconciled,
+                "reconciled-discovery.json",
+            )
+            .unwrap();
+        for (index, record) in records.iter().enumerate() {
             let packet = packet_from_record(record);
+            assert_eq!(packet["schema_version"], 2);
+            assert_eq!(
+                packet["binding_reconciled"],
+                serde_json::to_value(&authority).unwrap()
+            );
             assert_eq!(
                 packet["binding_reconciled"]["requirements"]
                     .as_array()
@@ -1614,8 +1533,36 @@ mod tests {
                     .len(),
                 2
             );
-            assert_eq!(packet["phase"]["requirement_ids"][0], scoped);
+            assert!(packet.get("detailed_plan").is_none());
+            if index < 4 {
+                let phase = if index < 2 { "phase_01" } else { "phase_02" };
+                assert_eq!(packet["phase"]["id"], phase);
+                assert_eq!(packet["phase"]["index"], index / 2);
+                let documents = packet["phase"]["documents"].as_array().unwrap();
+                assert_eq!(documents.len(), 3);
+                for (document, name) in
+                    documents
+                        .iter()
+                        .zip(["phase.md", "a-notes.md", "z-context.md"])
+                {
+                    assert_eq!(document["path"], format!("{phase}/{name}"));
+                    assert_eq!(
+                        document["content"],
+                        fs::read_to_string(fixture.build_dir.join(phase).join(name)).unwrap()
+                    );
+                }
+                assert!(packet["phase"].get("tasks").is_none());
+                assert!(packet["phase"].get("requirement_ids").is_none());
+            } else {
+                assert!(packet["phase"].is_null());
+            }
         }
+        assert!(
+            packet_from_record(&records[2])["feedback"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
         assert_eq!(state.status, Status::Complete);
         assert_eq!(
@@ -1729,7 +1676,11 @@ mod tests {
         );
         let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
         assert_eq!(state.status, Status::Stopped);
-        assert_eq!(state.stop.unwrap().kind, StopKind::ResetRequired);
+        assert_eq!(state.stop.as_ref().unwrap().kind, StopKind::Blocked);
+        assert_eq!(state.feedback.len(), 3);
+        assert_eq!(state.unblock.as_ref().unwrap().gate, Gate::Work);
+        ensure_repo_at_checkpoint(&fixture.repo, &state.checkpoint_commit).unwrap();
+        assert!(!fixture.repo.join("partial-untracked.txt").exists());
     }
 
     #[test]
@@ -1799,12 +1750,12 @@ mod tests {
     }
 
     #[test]
-    fn next_explicit_launch_continues_an_external_stop_in_one_action() {
+    fn next_explicit_launch_continues_a_blocked_stop_in_one_action() {
         let fixture = make_fixture(one_phase());
         let fake = FakeInvoker::new(
             [
                 Step::WorkBlocked,
-                Step::UnblockExternal,
+                Step::UnblockBlocked,
                 Step::WorkBlocked,
                 Step::UnblockRetry,
                 Step::WorkComplete,
@@ -1830,7 +1781,7 @@ mod tests {
         let fake = FakeInvoker::new(
             [
                 Step::WorkBlocked,
-                Step::UnblockExternal,
+                Step::UnblockBlocked,
                 Step::ReviewPass,
                 Step::AuditPass,
             ],
@@ -1872,7 +1823,7 @@ mod tests {
     #[test]
     fn continuation_rejects_dirty_operator_state_without_discarding_it() {
         let fixture = make_fixture(one_phase());
-        let fake = FakeInvoker::new([Step::WorkBlocked, Step::UnblockExternal], &fixture.repo);
+        let fake = FakeInvoker::new([Step::WorkBlocked, Step::UnblockBlocked], &fixture.repo);
         assert!(matches!(
             run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
             BuildResult::Blocked { .. }
@@ -1897,7 +1848,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_restores_tracked_state_deletes_untracked_preserves_ignored_and_clears_sessions() {
+    fn reset_restores_tracked_state_deletes_untracked_preserves_ignored() {
         let fixture = make_fixture(one_phase());
         let state_path = fixture.build_dir.join(STATE_FILE);
         initialize(
@@ -1912,14 +1863,6 @@ mod tests {
         state.stop = Some(Stop {
             kind: StopKind::ResetRequired,
             detail: "test".into(),
-        });
-        state.worker_session = Some(Session {
-            adapter: "codex".into(),
-            id: "w".into(),
-        });
-        state.reviewer_session = Some(Session {
-            adapter: "codex".into(),
-            id: "r".into(),
         });
         state.current_action_id = Some("a-reset-test".into());
         let action = current_action_dir(&fixture.build_dir, "a-reset-test").unwrap();
@@ -1957,7 +1900,6 @@ mod tests {
         let reset_state = load_state(&state_path).unwrap();
         assert_eq!(reset_state.status, Status::Ready);
         assert_eq!(reset_state.gate, Gate::Work);
-        assert!(reset_state.worker_session.is_none() && reset_state.reviewer_session.is_none());
         assert!(reset_state.current_action_id.is_none() && reset_state.stop.is_none());
     }
 
@@ -1999,8 +1941,8 @@ mod tests {
                 fs::write(fixture.build_dir.join(CONFIG_FILE), "not valid toml = [").unwrap();
             } else {
                 fs::write(
-                    fixture.build_dir.join("implementation-plan.md"),
-                    "changed after initialization\n",
+                    fixture.build_dir.join(PLAN_FILE),
+                    fs::read_to_string(fixture.build_dir.join(PLAN_FILE)).unwrap() + "\n",
                 )
                 .unwrap();
             }
@@ -2039,6 +1981,464 @@ mod tests {
             StopKind::ResetRequired
         );
         assert!(reset(&fixture.store, &fixture.effort.id).is_ok());
+    }
+
+    #[test]
+    fn plan_validation_checks_directories_and_documents_without_task_semantics() {
+        let fixture = make_fixture(one_phase());
+        let path = fixture.build_dir.join(PLAN_FILE);
+        let mut plan = load_plan(&path).unwrap();
+        for phases in [
+            vec![],
+            vec![""],
+            vec!["  "],
+            vec!["."],
+            vec![".."],
+            vec!["../outside"],
+            vec!["nested/phase"],
+            vec!["/absolute"],
+            vec!["a\\b"],
+            vec!["C:phase"],
+            vec!["bad\0name"],
+            vec!["phase_01", "phase_01"],
+            vec!["missing"],
+        ] {
+            plan.phases = phases.into_iter().map(str::to_owned).collect();
+            fs::write(&path, encode(&plan).unwrap()).unwrap();
+            assert!(load_plan(&path).is_err(), "accepted {:?}", plan.phases);
+        }
+        plan.phases = one_phase();
+        fs::write(&path, encode(&plan).unwrap()).unwrap();
+        fs::remove_file(fixture.build_dir.join("phase_01/phase.md")).unwrap();
+        assert!(load_plan(&path).is_err());
+        fs::write(
+            fixture.build_dir.join("phase_01/phase.md"),
+            "Anything the Planner writes.",
+        )
+        .unwrap();
+        fs::write(fixture.build_dir.join("phase_01/a-notes.md"), [0xff]).unwrap();
+        assert!(load_plan(&path).unwrap_err().to_string().contains("UTF-8"));
+        fs::write(
+            fixture.build_dir.join("phase_01/a-notes.md"),
+            "No task or requirement mapping.",
+        )
+        .unwrap();
+        fs::create_dir(fixture.build_dir.join("phase_01/nested.md")).unwrap();
+        assert!(load_plan(&path).is_ok());
+        let mut value = serde_json::to_value(&plan).unwrap();
+        value["detailed_plan"] = json!("obsolete.md");
+        fs::write(&path, encode(&value).unwrap()).unwrap();
+        assert!(load_plan(&path).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn phase_document_loading_rejects_symlink_escapes() {
+        use std::os::unix::fs::symlink;
+        for name in ["phase.md", "a-notes.md", "directory"] {
+            let fixture = make_fixture(one_phase());
+            let phase = fixture.build_dir.join("phase_01");
+            if name == "directory" {
+                let outside = fixture.root.join("outside-phase");
+                fs::rename(&phase, &outside).unwrap();
+                symlink(outside, phase).unwrap();
+            } else {
+                let outside = fixture.root.join("outside.md");
+                fs::write(&outside, "Outside Build").unwrap();
+                fs::remove_file(phase.join(name)).unwrap();
+                symlink(outside, phase.join(name)).unwrap();
+            }
+            assert!(load_plan(&fixture.build_dir.join(PLAN_FILE)).is_err());
+        }
+    }
+
+    #[test]
+    fn review_corrections_survive_blocked_continuation_and_clear_on_phase_pass() {
+        let fixture = make_fixture(vec!["phase_01".into(), "phase_02".into()]);
+        let first = FakeInvoker::new(
+            [
+                Step::WorkComplete,
+                Step::ReviewChanges,
+                Step::WorkBlocked,
+                Step::UnblockRetry,
+                Step::WorkBlocked,
+            ],
+            &fixture.repo,
+        );
+        run_with_invoker(&fixture.store, request(&fixture), &first).unwrap();
+        let blocked_packet = packet_from_record(&first.records()[4]);
+        assert_eq!(blocked_packet["feedback"][0]["purpose"], "Review report");
+        let next = FakeInvoker::new(
+            [
+                Step::WorkComplete,
+                Step::ReviewPass,
+                Step::WorkComplete,
+                Step::ReviewPass,
+                Step::AuditPass,
+            ],
+            &fixture.repo,
+        );
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &next).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let records = next.records();
+        let correction_work = packet_from_record(&records[0]);
+        let correction_review = packet_from_record(&records[1]);
+        assert_eq!(correction_work["phase"]["id"], "phase_01");
+        assert_eq!(correction_review["phase"], correction_work["phase"]);
+        assert_eq!(correction_work["feedback"].as_array().unwrap().len(), 4);
+        assert_eq!(correction_review["feedback"].as_array().unwrap().len(), 5);
+        assert_eq!(
+            correction_review["feedback"][0]["report"],
+            "Correct the reported issue, then repeat review."
+        );
+        assert_eq!(correction_review["feedback"][4]["purpose"], "Worker report");
+        let next_phase = packet_from_record(&records[2]);
+        assert_eq!(next_phase["phase"]["id"], "phase_02");
+        assert!(next_phase["feedback"].as_array().unwrap().is_empty());
+    }
+
+    fn steps_to_block(step: Step) -> Vec<Step> {
+        match step {
+            Step::WorkBlocked => vec![step],
+            Step::ReviewBlocked => vec![Step::WorkComplete, step],
+            Step::AuditBlocked | Step::AuditUnknown => {
+                vec![Step::WorkComplete, Step::ReviewPass, step]
+            }
+            _ => panic!("not a blocking gate"),
+        }
+    }
+
+    #[test]
+    fn all_semantic_stops_preserve_context_and_allow_a_fresh_bounded_attempt() {
+        for blocked in [
+            Step::WorkBlocked,
+            Step::ReviewBlocked,
+            Step::AuditBlocked,
+            Step::AuditUnknown,
+        ] {
+            for repeated in [false, true] {
+                let fixture = make_fixture(one_phase());
+                let mut steps = steps_to_block(blocked);
+                if repeated {
+                    steps.extend([Step::UnblockRetry, blocked]);
+                } else {
+                    steps.push(Step::UnblockBlocked);
+                }
+                let stop_count = steps.len();
+                let first = FakeInvoker::new(steps, &fixture.repo);
+                assert!(matches!(
+                    run_with_invoker(&fixture.store, request(&fixture), &first).unwrap(),
+                    BuildResult::Blocked { .. }
+                ));
+                assert_eq!(first.records().len(), stop_count);
+                assert_eq!(first.remaining(), 0);
+                let state_path = fixture.build_dir.join(STATE_FILE);
+                let state = load_state(&state_path).unwrap();
+                assert_eq!(state.status, Status::Stopped);
+                assert_eq!(state.stop.as_ref().unwrap().kind, StopKind::Blocked);
+                let origin = state.unblock.as_ref().unwrap();
+                assert_eq!(origin.scope, state.scope);
+                ensure_repo_at_checkpoint(&fixture.repo, &state.checkpoint_commit).unwrap();
+                assert!(!fixture.repo.join("partial-untracked.txt").exists());
+                for record in first.records() {
+                    let packet = packet_from_record(&record);
+                    if let Some(checkout) = packet["source_checkout"].as_str() {
+                        assert!(!Path::new(checkout).exists());
+                    }
+                }
+                let last_report = format!(
+                    "actions/{}/report.md",
+                    state.current_action_id.as_ref().unwrap()
+                );
+                assert!(state.feedback.iter().any(|item| item.path == last_report));
+                for feedback in &state.feedback {
+                    assert!(
+                        !read_build_file(&fixture.build_dir, &feedback.path)
+                            .unwrap()
+                            .is_empty()
+                    );
+                }
+                if repeated && matches!(blocked, Step::AuditUnknown) {
+                    assert_eq!(
+                        state
+                            .feedback
+                            .iter()
+                            .filter(|item| item.path.ends_with("assessment.json"))
+                            .count(),
+                        2
+                    );
+                }
+                let mut next_steps = vec![blocked, Step::UnblockRetry];
+                next_steps.extend(match blocked {
+                    Step::WorkBlocked => {
+                        vec![Step::WorkComplete, Step::ReviewPass, Step::AuditPass]
+                    }
+                    Step::ReviewBlocked => vec![Step::ReviewPass, Step::AuditPass],
+                    _ => vec![Step::AuditPass],
+                });
+                let next = FakeInvoker::new(next_steps, &fixture.repo);
+                assert!(matches!(
+                    run_with_invoker(&fixture.store, request(&fixture), &next).unwrap(),
+                    BuildResult::Completed(_)
+                ));
+                assert_eq!(next.remaining(), 0);
+                let resumed = packet_from_record(&next.records()[0]);
+                assert_eq!(resumed["gate"], serde_json::to_value(&origin.gate).unwrap());
+                assert!(resumed["unblock_context"].is_null());
+                assert_eq!(
+                    resumed["feedback"].as_array().unwrap().len(),
+                    state.feedback.len()
+                );
+                for (actual, saved) in resumed["feedback"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .zip(&state.feedback)
+                {
+                    assert_eq!(actual["path"], saved.path);
+                    assert_eq!(
+                        actual["report"],
+                        String::from_utf8(
+                            read_build_file(&fixture.build_dir, &saved.path).unwrap()
+                        )
+                        .unwrap()
+                    );
+                }
+                assert!(next.records()[0].session_in.is_none());
+                assert!(next.records()[1].session_in.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn continuation_accepts_markdown_refinement_but_does_not_consume_invalid_launches() {
+        let fixture = make_fixture(one_phase());
+        let fake = FakeInvoker::new(
+            [Step::WorkBlocked, Step::UnblockRetry, Step::WorkBlocked],
+            &fixture.repo,
+        );
+        run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap();
+        let state_path = fixture.build_dir.join(STATE_FILE);
+        let stopped_bytes = fs::read(&state_path).unwrap();
+        let plan_path = fixture.build_dir.join(PLAN_FILE);
+        let plan_bytes = fs::read(&plan_path).unwrap();
+        fs::write(&plan_path, [plan_bytes.as_slice(), b"\n"].concat()).unwrap();
+        let empty = FakeInvoker::new([], &fixture.repo);
+        assert!(run_with_invoker(&fixture.store, request(&fixture), &empty).is_err());
+        assert_eq!(fs::read(&state_path).unwrap(), stopped_bytes);
+        fs::write(&plan_path, &plan_bytes).unwrap();
+        let config_path = fixture.build_dir.join(CONFIG_FILE);
+        let config_bytes = fs::read(&config_path).unwrap();
+        fs::write(&config_path, "invalid = [").unwrap();
+        assert!(run_with_invoker(&fixture.store, request(&fixture), &empty).is_err());
+        assert_eq!(fs::read(&state_path).unwrap(), stopped_bytes);
+        assert!(empty.records().is_empty());
+        fs::write(&config_path, config_bytes).unwrap();
+        fs::write(
+            fixture.build_dir.join("phase_01/phase.md"),
+            "Refined phase guidance after the blocker.",
+        )
+        .unwrap();
+        fs::write(
+            fixture.build_dir.join("phase_01/fix-context.md"),
+            "New operator guidance.",
+        )
+        .unwrap();
+        let next = FakeInvoker::new(
+            [Step::WorkComplete, Step::ReviewPass, Step::AuditPass],
+            &fixture.repo,
+        );
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &next).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let packet = packet_from_record(&next.records()[0]);
+        assert_eq!(
+            packet["phase"]["documents"][0]["content"],
+            "Refined phase guidance after the blocker."
+        );
+        assert_eq!(
+            packet["phase"]["documents"][2]["content"],
+            "New operator guidance."
+        );
+        assert_eq!(
+            load_state(&state_path).unwrap().plan_digest,
+            digest_bytes(&plan_bytes)
+        );
+    }
+
+    #[test]
+    fn continuation_preserves_descendant_fixes_after_repeated_blocks() {
+        for blocked in [Step::WorkBlocked, Step::ReviewBlocked, Step::AuditBlocked] {
+            let fixture = make_fixture(one_phase());
+            let mut steps = steps_to_block(blocked);
+            steps.extend([Step::UnblockRetry, blocked]);
+            let first = FakeInvoker::new(steps, &fixture.repo);
+            run_with_invoker(&fixture.store, request(&fixture), &first).unwrap();
+            let before = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
+            fs::write(fixture.repo.join("operator-fix.txt"), "Committed repair").unwrap();
+            git_ok(&fixture.repo, &["add", "operator-fix.txt"]);
+            git_ok(&fixture.repo, &["commit", "-m", "operator fix"]);
+            let fixed = git_text(&fixture.repo, &["rev-parse", "HEAD"]).unwrap();
+            let final_scope = matches!(before.scope, Scope::Final);
+            let next = FakeInvoker::new(
+                if final_scope {
+                    vec![Step::AuditPass]
+                } else {
+                    vec![Step::ReviewPass, Step::AuditPass]
+                },
+                &fixture.repo,
+            );
+            assert!(matches!(
+                run_with_invoker(&fixture.store, request(&fixture), &next).unwrap(),
+                BuildResult::Completed(_)
+            ));
+            assert_eq!(
+                git_text(&fixture.repo, &["rev-parse", "HEAD"]).unwrap(),
+                fixed
+            );
+            let packet = packet_from_record(&next.records()[0]);
+            assert_eq!(packet["gate"], if final_scope { "audit" } else { "review" });
+            assert_eq!(packet["checkpoint_commit"], fixed);
+            assert_eq!(
+                packet["feedback"].as_array().unwrap().len(),
+                before.feedback.len()
+            );
+            if final_scope {
+                assert_ne!(
+                    packet["implementation"],
+                    serde_json::to_value(before.implementation).unwrap()
+                );
+                let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
+                assert_eq!(
+                    packet["implementation"],
+                    serde_json::to_value(state.completion.unwrap().implementation).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn continuation_rejects_unrelated_commits_without_altering_state_or_checkout() {
+        let fixture = make_fixture(one_phase());
+        let first = FakeInvoker::new(
+            [Step::WorkBlocked, Step::UnblockRetry, Step::WorkBlocked],
+            &fixture.repo,
+        );
+        run_with_invoker(&fixture.store, request(&fixture), &first).unwrap();
+        let state_path = fixture.build_dir.join(STATE_FILE);
+        let stopped = fs::read(&state_path).unwrap();
+        git_ok(&fixture.repo, &["checkout", "--orphan", "unrelated"]);
+        git_ok(&fixture.repo, &["commit", "-m", "independent root"]);
+        let head = git_text(&fixture.repo, &["rev-parse", "HEAD"]).unwrap();
+        let empty = FakeInvoker::new([], &fixture.repo);
+        assert!(
+            run_with_invoker(&fixture.store, request(&fixture), &empty)
+                .unwrap_err()
+                .to_string()
+                .contains("nothing was discarded")
+        );
+        assert_eq!(fs::read(&state_path).unwrap(), stopped);
+        assert_eq!(
+            git_text(&fixture.repo, &["rev-parse", "HEAD"]).unwrap(),
+            head
+        );
+        ensure_clean(&fixture.repo).unwrap();
+        assert!(empty.records().is_empty());
+    }
+
+    #[test]
+    fn fresh_process_continues_ready_state_with_only_packet_context() {
+        let fixture = make_fixture(one_phase());
+        initialize(
+            &fixture.store,
+            &fixture.effort,
+            &fixture.repo,
+            &fixture.build_dir,
+        )
+        .unwrap();
+        let state_path = fixture.build_dir.join(STATE_FILE);
+        let mut state = load_state(&state_path).unwrap();
+        let inputs = load_execution_inputs(&fixture.build_dir, &state).unwrap();
+        let fake = FakeInvoker::new(
+            [
+                Step::WorkComplete,
+                Step::ReviewChanges,
+                Step::WorkComplete,
+                Step::ReviewPass,
+                Step::AuditPass,
+            ],
+            &fixture.repo,
+        );
+        let mut sessions = RuntimeSessions::default();
+        for _ in 0..2 {
+            execute_gate(
+                &fixture.store,
+                &fixture.effort,
+                &fixture.repo,
+                &fixture.build_dir,
+                &mut state,
+                &mut sessions,
+                &inputs,
+                &fake,
+            )
+            .unwrap();
+        }
+        assert!(sessions.worker.is_some() && sessions.reviewer.is_some());
+        drop(sessions);
+        drop(state);
+        let durable: serde_json::Value =
+            serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(durable["schema_version"], 5);
+        assert!(
+            durable.get("worker_session").is_none() && durable.get("reviewer_session").is_none()
+        );
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let records = fake.records();
+        assert!(records[2].session_in.is_none() && records[3].session_in.is_none());
+        assert_eq!(records[4].session_in.as_deref(), Some("session-Review"));
+        assert_eq!(
+            packet_from_record(&records[2])["feedback"][0]["purpose"],
+            "Review report"
+        );
+        assert_eq!(
+            packet_from_record(&records[3])["feedback"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn providers_without_session_ids_complete_the_same_correction_loop() {
+        let fixture = make_fixture(one_phase());
+        let mut fake = FakeInvoker::new(
+            [
+                Step::WorkComplete,
+                Step::ReviewChanges,
+                Step::WorkComplete,
+                Step::ReviewPass,
+                Step::AuditPass,
+            ],
+            &fixture.repo,
+        );
+        fake.no_sessions = true;
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        assert_eq!(fake.records().len(), 5);
+        assert!(
+            fake.records()
+                .iter()
+                .all(|record| record.session_in.is_none())
+        );
     }
 
     fn request(fixture: &Fixture) -> BuildRequest {

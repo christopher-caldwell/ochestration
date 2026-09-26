@@ -164,13 +164,14 @@ For more detail, see [Reconcile](reconcile.md).
 
 ## 4. Build and final Audit
 
-Later, use `$build` to discuss and prepare the exact effort, Reconciled Discovery, and detailed
-implementation plan. Invoking `$build` does not run a CLI command, write Build files, start or
+Later, use `$build` to discuss and prepare the exact effort, Reconciled Discovery, and phase
+implementation documents. Invoking `$build` does not run a CLI command, write Build files, start or
 continue the driver, or dispatch provider work. Explicitly authorize each CLI operation. Scaffold the
-Build directory, bind the exact Reconciled artifact in plan schema 3, list each phase's task and
-requirement IDs, and configure the worker/reviewer (and optional unblocker) in config schema 4.
-The detailed-plan and `plan.json` bytes are frozen by digest at initialization. Each explicit
-Build launch validates those files and loads config once.
+Build directory, bind the exact Reconciled artifact and ordered phase directory names in plan
+schema 4, and configure the worker/reviewer (and optional unblocker) in config schema 4. Each phase
+has a required `phase.md` and optional immediate Markdown task/context files. Only `plan.json`
+bytes are frozen by digest at initialization. Phase Markdown may be refined after a semantic stop.
+Each explicit Build launch validates the plan and documents and loads config once.
 
 An explicit `orchestrate build --effort "<effort>"` launch authorizes the complete internal
 Work → Review → Audit loop. Work commits at the product checkpoint. Review and Audit use disposable
@@ -182,10 +183,11 @@ bounded Unblock detour. Technical suggestions remain advisory.
 `orchestrate build status --effort "<effort>"` reports durable state only. Provider failure,
 malformed output, Git invariant failure, or interrupted execution stops for explicit reset.
 `orchestrate build reset` restores the saved commit, removes ordinary untracked files while
-preserving ignored files, clears sessions, and requeues the same gate. An external requirement
-stops cleanly; once addressed, explicitly launch `orchestrate build` again. That launch preserves a
+preserving ignored files, and requeues the same gate. Unblock `blocked` or a repeated gate block
+stops cleanly as `stopped / blocked`; once addressed, explicitly launch `orchestrate build` again. That launch preserves a
 clean operator repair and continues the loop. Stderr carries compact transitions; stdout carries one
-JSON result.
+JSON result. Provider sessions are optional process-local conveniences; a new launch starts fresh
+conversations from complete action packets.
 
 For more detail, see [Build and Audit](build-and-audit.md).
 

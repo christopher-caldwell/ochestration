@@ -20,16 +20,16 @@ Each Discovery operates from the effort's frozen baseline and publishes an immut
 
 ## Build state and routing
 
-Build schema versions are intentionally breaking: plan 3, config 4, state 4. There is no migration path for earlier Build state. Initialization requires a clean Git-visible checkout, verifies that the Discovery baseline is an ancestor of current `HEAD`, creates/reuses Adoption, and records `HEAD` as both the starting point and first checkpoint. A digest binds the exact `plan.json` bytes and referenced detailed-plan bytes; each explicit launch validates the plan and loads configuration once.
+Build schema versions are intentionally breaking: plan 4, config 4, state 5. There is no migration path for earlier Build state. Initialization requires a clean Git-visible checkout, verifies that the Discovery baseline is an ancestor of current `HEAD`, creates/reuses Adoption, and records `HEAD` as both the starting point and first checkpoint. A digest binds only the exact `plan.json` bytes; each explicit launch validates the plan and loads configuration once.
 
-The durable controller state contains the exact Reconciled and Adoption refs, starting commit, immutable plan digest, scope, gate, status, checkpoint commit, bounded handoff refs, optional Unblock context, current action id, adapter-tagged Worker and Reviewer sessions, implementation ref, completion refs, and a transition-relevant stop. Every role receives the complete Reconciled contract; phase requirement mappings are scope and ordering guidance. Action paths in state are relative to the Build directory. History is retained, but transitions use only state.
+The durable controller state contains the exact Reconciled and Adoption refs, starting commit, immutable plan digest, scope, gate, status, checkpoint commit, bounded handoff refs, optional Unblock context, current action id, implementation ref, completion refs, and a transition-relevant stop. Every role receives the complete Reconciled contract; ordered phase directory names route Work/Review, and their Markdown documents are model-facing guidance. Action paths in state are relative to the Build directory. History is retained, but transitions use only state.
 
 ```text
 phase Work ──complete──→ phase Review ──pass──→ next phase Work
      │                       │                         └─last phase→ final Audit
      │                       └─changes_required→ same phase Work
      ├─blocked→ Unblock ─retry→ same gate / checkpoint
-     │                       └─external_requirement→ stopped; explicit relaunch
+     │                       └─blocked→ stopped; explicit relaunch
      └─malformed/provider/Git failure→ reset_required; explicit reset
 
 final Audit ──pass──→ complete
@@ -39,7 +39,9 @@ final Audit ──pass──→ complete
 
 Review and Audit use detached disposable worktrees at the exact checkpoint. Work succeeds only when its reported commit exists, descends from the prior checkpoint, equals product `HEAD`, and leaves a clean tracked/untracked checkout. Review must return the inspected checkpoint and leave its worktree clean. Audit associates one exact submitted implementation artifact with its assessment; the existing Audit contract derives `PASS`, `CHANGES_REQUIRED`, or `BLOCKED`.
 
-An explicit blocked result permits one Unblock detour in a disposable source checkout. A Work block is reset automatically because the provider completed and rejected its partial work. `retry` restores the checkpoint and requeues the original gate with originating context, original feedback, and Unblock guidance. A second block stops; no recursive Unblock is available. `external_requirement` is a clean stop. Explicit continuation preserves a clean operator repair, routes a descendant commit through Review or Audit, and starts a new attempt with one available Unblock detour. Provider failure, malformed output, Git invariant failure, or restart during `running` requires destructive `build reset`, which removes the current disposable worktree, runs `git reset --hard <checkpoint>` and `git clean -fd`, preserves ignored files, clears sessions, and requeues the same gate.
+An explicit blocked result permits one Unblock detour in a disposable source checkout. A Work block is reset automatically because the provider completed and rejected its partial work. `retry` restores the checkpoint and requeues the original gate with originating context, original feedback, and Unblock guidance. A second block stops as `stopped / blocked`, preserving its report and the originating gate context; no recursive Unblock is available. Unblock `blocked` is also a clean stop. Explicit continuation preserves a clean operator repair, routes a descendant commit through Review or Audit, and starts a new attempt with one available Unblock detour. Provider failure, malformed output, Git invariant failure, or restart during `running` requires destructive `build reset`, which removes the current disposable worktree, runs `git reset --hard <checkpoint>` and `git clean -fd`, preserves ignored files, and requeues the same gate.
+
+Phase packets include `phase.md` first, then other immediate Markdown documents in filename order. Rust does not parse their prose. Phase Markdown is not hashed and may change between a semantic stop and the next launch; the ordered machine plan remains frozen. Worker and Reviewer sessions are optional process-local adapter state; Unblock is sessionless. New Rust invocations rely on complete packets and start fresh provider conversations. The supported operating model is one person, one local machine, and one Build process at a time.
 
 Every launch records the selected native adapter config and exact argv before atomically marking state `running`. The adapters handle executable selection, native argv ordering, cwd/prompt delivery, streaming raw transport and stderr to ordinary action files, final-response/session extraction, and process exit. Rust persists parsed `result.json`, `report.md`, and Audit `assessment.json`. There are no provider callbacks, heartbeat supervision, recovery ladders, or inferred continuation sessions.
 

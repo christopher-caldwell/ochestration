@@ -10,8 +10,8 @@ pub mod state;
 
 pub use controller::{BuildRequest, BuildResult, reset, run, scaffold, status};
 pub use state::{
-    BuildCompletion, BuildConfig, BuildPlan, BuildState, Gate, PlanPhase, RoleConfig, Scope,
-    Session, Status, Stop, StopKind, UnblockContext,
+    BuildCompletion, BuildConfig, BuildPlan, BuildState, Gate, RoleConfig, Scope, Status, Stop,
+    StopKind, UnblockContext,
 };
 
 pub const BUILD_PLAN_VERSION: u32 = state::PLAN_VERSION;
@@ -38,7 +38,7 @@ mod tests {
 
     #[test]
     fn legacy_plan_and_config_versions_are_rejected_with_guidance() {
-        let plan = temp_file("plan.json", r#"{"schema_version":2}"#);
+        let plan = temp_file("plan.json", r#"{"schema_version":3}"#);
         assert!(
             load_plan(&plan)
                 .unwrap_err()
@@ -52,7 +52,7 @@ mod tests {
                 .to_string()
                 .contains("migration is not supported")
         );
-        let state = temp_file("state.json", r#"{"schema_version":3}"#);
+        let state = temp_file("state.json", r#"{"schema_version":4}"#);
         assert!(
             load_state(&state)
                 .unwrap_err()
@@ -67,20 +67,15 @@ mod tests {
     #[test]
     fn new_plan_and_config_schemas_deserialize_exact_role_fields() {
         let plan = BuildPlan {
-            schema_version: 3,
+            schema_version: 4,
             reconciled: orchestrate_contracts::ArtifactRef {
                 kind: orchestrate_contracts::ArtifactKind::ReconciledDiscovery,
                 artifact_id: "r".into(),
                 digest: "d".into(),
             },
-            detailed_plan: "detail.md".into(),
-            phases: vec![super::PlanPhase {
-                id: "P1".into(),
-                tasks: vec!["task".into()],
-                requirement_ids: vec!["R-1".into()],
-            }],
+            phases: vec!["phase_01".into()],
         };
-        assert_eq!(plan.schema_version, 3);
+        assert_eq!(plan.schema_version, 4);
         let config = BuildConfig {
             schema_version: 4,
             worker: super::RoleConfig {

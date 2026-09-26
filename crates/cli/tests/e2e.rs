@@ -1,6 +1,4 @@
-use orchestrate_build::state::{
-    BuildState, Gate, STATE_VERSION, Scope, Session, Status, Stop, StopKind,
-};
+use orchestrate_build::state::{BuildState, Gate, STATE_VERSION, Scope, Status, Stop, StopKind};
 use orchestrate_contracts::{
     ArtifactKind, ArtifactRef, AuditAssessment, Coverage, CoverageState, DiscoverySourceRef,
     EvidenceKind, EvidenceNode, EvidenceStatus, EvidenceSynthesis, ReconcileProposal,
@@ -1796,8 +1794,17 @@ fn build_scaffold_status_and_removed_commands_match_the_small_surface() {
     let plan: serde_json::Value =
         serde_json::from_slice(&fs::read(build_dir.join("plan.json")).unwrap()).unwrap();
     let config = fs::read_to_string(build_dir.join("config.toml")).unwrap();
-    assert_eq!(plan["schema_version"], 3);
-    assert!(plan["phases"][0]["requirement_ids"].is_array());
+    assert_eq!(plan["schema_version"], 4);
+    assert_eq!(plan["phases"][0], "phase_01_foundation");
+    let phase_file = build_dir.join("phase_01_foundation/phase.md");
+    assert!(phase_file.is_file());
+    assert!(!build_dir.join("implementation-plan.md").exists());
+    fs::write(&phase_file, "Keep operator phase guidance").unwrap();
+    command(&root, &["build", "scaffold", "--effort", &effort]);
+    assert_eq!(
+        fs::read_to_string(phase_file).unwrap(),
+        "Keep operator phase guidance"
+    );
     assert!(config.contains("schema_version = 4"));
     let status = command(&root, &["build", "status", "--effort", &effort]);
     assert_eq!(status["details"]["status"], "uninitialized");
@@ -1847,14 +1854,6 @@ fn build_reset_returns_durable_state_json_without_dispatch() {
         feedback: Vec::new(),
         unblock: None,
         current_action_id: Some("a-reset".into()),
-        worker_session: Some(Session {
-            adapter: "codex".into(),
-            id: "worker-session".into(),
-        }),
-        reviewer_session: Some(Session {
-            adapter: "claude".into(),
-            id: "reviewer-session".into(),
-        }),
         implementation: None,
         completion: None,
         stop: Some(Stop {
