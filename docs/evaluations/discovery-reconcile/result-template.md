@@ -9,7 +9,9 @@ Complete this record outside the repositories. This template is not an executed 
 - Orchestrate revision or binary version:
 - Captured guide path:
 - Model prompt copy/path:
-- Exact A/B/C input directories:
+- Exact selected input labels, artifact IDs, and directories:
+- Operator case sheet, evidence citations, and inapplicable criteria:
+- Explicit evaluation exceptions and limitations (if any):
 - Initial response and access transcript:
 - Hypothetical scope-answer turn and subsequent response:
 - Isolation/access visibility and limitations:
@@ -18,15 +20,15 @@ Complete this record outside the repositories. This template is not an executed 
 
 For each item, record pass/fail/unobserved, the response passage or tool access, and the reason.
 
-1. Historical admission:
-2. Shared mechanism:
+1. Selected inputs and eligibility:
+2. Supported explanation:
 3. Initial scope conflict and clarification:
 4. Coherent selected direction and acceptance criteria:
 5. Alternatives:
 6. Compatibility:
-7. Case B uncertainty:
-8. Reproduction limits:
-9. Inventory limitation:
+7. Factual uncertainty:
+8. Verification limits:
+9. Scope limitations:
 10. Evidence/access boundary:
 
 ## Result
@@ -36,4 +38,4 @@ For each item, record pass/fail/unobserved, the response passage or tool access,
 - Specific failure requiring a change, if demonstrated:
 - What this run does not establish:
 
-Do not claim a live-model result from guide inspection, Rust tests, or the historical audit.
+Do not claim a live-model result from guide inspection, Rust tests, or prior reviews.

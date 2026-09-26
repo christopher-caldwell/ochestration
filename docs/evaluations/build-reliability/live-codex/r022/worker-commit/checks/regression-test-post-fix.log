@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/e2e.rs (target/debug/deps/e2e-3084de1b5027db62)
+
+running 1 test
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-live-preflight-stdout-repo-1790367866696431000/.git/
+[main (root-commit) a1060db] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test live_preflight_keeps_stdout_a_single_json_value ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 1.85s
+

@@ -1,0 +1,14 @@
+captured_at_utc=2026-09-25T20:12:49Z
+val_dir=/tmp/claude-502/orch-live-worker-commit
+orchestrate_bin=/Users/christophercaldwell/.cargo/bin/orchestrate
+orchestrate_bin_sha256=2555f3cff48ae15800f908f555a00cc3c5436f5c079b797bbb14d3cee50182b1
+codex_path=/Users/christophercaldwell/.nvm/versions/node/v22.13.1/bin/codex
+codex_sha256=61b0194f3bb6534439c8d26a3ed57d0805f84b884588b761795323eeb92fcf70
+codex-cli 0.156.1
+path=/Users/christophercaldwell/.railway/bin:/Users/christophercaldwell/Library/pnpm/bin:/Users/christophercaldwell/.nvm/versions/node/v22.13.1/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/Applications/VMware Fusion.app/Contents/Public:/usr/local/go/bin:/Users/christophercaldwell/.local/bin:/Users/christophercaldwell/.cargo/bin:/Users/christophercaldwell/Library/Application Support/JetBrains/Toolbox/scripts:/Users/christophercaldwell/go:/usr/local/go/bin:/Users/christophercaldwell/go/bin:/Users/christophercaldwell/.nvm/versions/node/v21.7.3/bin:/Users/christophercaldwell/Library/pnpm:/Users/christophercaldwell/Library/Application Support/Claude-3p/local-agent-mode-sessions/skills-plugin/00000000-0000-4000-8000-000000000001/1fd9f465-f45b-4e65-80e2-98d033ce650d/bin
+installed_orchestrate_version=orchestrate 0.0.1
+source_built_orchestrate_version=orchestrate 0.0.1
+source_built_path=/Users/christophercaldwell/Code/projects/ai_orchestration/target/debug/orchestrate
+source_built_sha256=2555f3cff48ae15800f908f555a00cc3c5436f5c079b797bbb14d3cee50182b1
+head_commit=946787bab4a2702196d40e5a1a3db7654a3e85c4
+3501dfbc9d2d043f8c59f8a0b3ad30f8ee389c80fb95d7c7098af511210663c9  target/debug/orchestrate

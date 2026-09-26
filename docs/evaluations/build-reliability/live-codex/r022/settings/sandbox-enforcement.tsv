@@ -1,0 +1,6 @@
+reviewer	read-only
+reviewer	read-only
+reviewer	read-only
+worker	workspace-write
+reviewer	read-only
+unblocker	read-only

@@ -19,14 +19,16 @@
 
 ## Reference
 
+- [Provider translation reference](guides/provider-mappings.md) — the complete per-setting translation from a role's provider-neutral configuration to Codex, Claude Code, and Cursor CLI arguments, including what each dispatch records, the transport arguments, and the refused combinations.
 - [Architecture](architecture.md) — authority boundaries, artifacts, and deterministic rules.
-- [Discovery/Reconcile evaluation case](evaluations/discovery-reconcile/README.md) — repeatable, output-only evaluation using three historical attempts, with a separate operator rubric.
+- [Discovery/Reconcile evaluation procedure](evaluations/discovery-reconcile/README.md) — repeatable, output-only evaluation using explicitly supplied attempts, with a separate operator rubric.
 
 ## Planned changes
 
 - [Discovery and Reconcile hardening](plans/discovery-reconcile-hardening.md) — planned scope, acceptance criteria, and compatibility boundaries for four targeted fixes; implementation and model evaluation are separate steps.
 
-The CLI is the versioned product. Skills only dispatch to `orchestrate <action> guide`, which
-prints the instructions embedded in the installed binary. Human docs explain the workflow; they
-are not a second copy of those instructions. You normally should not need raw CLI commands for
-normal workflow phases.
+The CLI is the versioned product and embeds the canonical workflow guides. A skill may request a
+guide command only when the human explicitly authorizes that CLI operation. The `$build` skill is
+deliberately non-executing: it uses the checked-in Build guide when available and does not invoke
+the CLI, including for `guide` or `prepare`. Human docs explain the workflow without silently
+starting a run. You normally should not need raw CLI commands for normal workflow phases.

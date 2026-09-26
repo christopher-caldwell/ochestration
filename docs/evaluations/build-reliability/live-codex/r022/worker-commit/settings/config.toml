@@ -1,0 +1,17 @@
+schema_version = 2
+
+[worker]
+adapter = "codex"
+model = "gpt-5.6-luna"
+reasoning_effort = "medium"
+permission = "full_access"
+
+[reviewer]
+adapter = "codex"
+model = "gpt-5.6-sol"
+reasoning_effort = "low"
+
+[unblocker]
+adapter = "codex"
+model = "gpt-5.6-sol"
+reasoning_effort = "low"

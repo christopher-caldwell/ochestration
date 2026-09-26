@@ -1,4 +1,4 @@
-//! Guards the instruction-ownership boundary: skills dispatch, the CLI instructs.
+//! Guards the instruction-ownership boundary: most skills dispatch, Build never launches the CLI.
 
 use std::{
     fs,
@@ -69,10 +69,17 @@ fn skills_are_dispatchers_only() {
         assert_eq!(entries[0].1, name);
         assert_dispatcher_description(&name, &entries[1].1);
         assert_eq!(entries[2].1, "true");
-        assert_eq!(
-            body,
-            format!("You must run `orchestrate {name} guide` for instructions.")
-        );
+        if name == "build" {
+            assert!(body.contains("`$build` is not authorization"));
+            assert!(body.contains("Do not execute `orchestrate build guide`"));
+            assert!(body.contains("Never infer that launch authorization"));
+            assert!(!body.contains("You must run `orchestrate"));
+        } else {
+            assert_eq!(
+                body,
+                format!("You must run `orchestrate {name} guide` for instructions.")
+            );
+        }
     }
 }
 
@@ -97,11 +104,13 @@ fn flat_frontmatter(frontmatter: &str, name: &str) -> Vec<(String, String)> {
 }
 
 fn assert_dispatcher_description(name: &str, description: &str) {
-    assert!(
+    let valid = if name == "build" {
+        description == "Prepare or explain an Orchestrate Build without starting its CLI driver."
+    } else {
         description.starts_with("Load the current Orchestrate ")
-            && description.ends_with(" instructions."),
-        "{name} description must stay a dispatcher label"
-    );
+            && description.ends_with(" instructions.")
+    };
+    assert!(valid, "{name} description must stay a dispatcher label");
     assert!(
         description.len() <= 72,
         "{name} description is long enough to carry procedure"

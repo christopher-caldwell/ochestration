@@ -3,18 +3,28 @@ set -uo pipefail
 
 usage() {
   cat <<'TXT'
-Capture one Orchestrate Build invocation for later analysis.
+Capture one Orchestrate Build run, or collect an existing run's evidence.
 
 Required:
-  EFFORT=<effort-id-or-selector>
+  EFFORT=<effort-id>
 
 Optional:
+  MODE=collect|run                Default: collect (never dispatches the Build)
   ORCHESTRATE_ROOT=<store root>   Default: ~/.orchestration
-  PROJECT_ROOT=<git repository>  Default: current repository
+  PROJECT_ROOT=<git repository>   Default: current repository
   CAPTURE_ROOT=<output parent>    Default: ~/orchestrate-build-captures
 
-Example:
+MODE=collect gathers the effort's durable evidence through
+`orchestrate build export`, which selects its members before traversal and
+verifies the archive. It dispatches nothing, so it is safe on a stopped,
+blocked or historically failed run.
+
+MODE=run additionally invokes `orchestrate build` first, exactly as an operator
+would, and then collects the same evidence.
+
+Examples:
   EFFORT="effort-abc123" bash docs/examples/capture-build-run.sh
+  MODE=run EFFORT="effort-abc123" bash docs/examples/capture-build-run.sh
 TXT
 }
 
@@ -29,6 +39,12 @@ done
 
 [[ -n "${EFFORT:-}" ]] || { usage >&2; fail "EFFORT is required"; }
 
+MODE="${MODE:-collect}"
+case "$MODE" in
+  collect|run) ;;
+  *) fail "MODE must be collect or run" ;;
+esac
+
 ORCHESTRATE_ROOT="${ORCHESTRATE_ROOT:-$HOME/.orchestration}"
 PROJECT_ROOT="${PROJECT_ROOT:-$PWD}"
 CAPTURE_ROOT="${CAPTURE_ROOT:-$HOME/orchestrate-build-captures}"
@@ -37,16 +53,14 @@ PROJECT_ROOT="$(git -C "$PROJECT_ROOT" rev-parse --show-toplevel 2>/dev/null)" \
   || fail "PROJECT_ROOT is not inside a Git repository"
 PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd -P)"
 
-ORCHESTRATE_ROOT="$(python3 - "$ORCHESTRATE_ROOT" <<'PY'
+abspath() {
+  python3 - "$1" <<'PY'
 import os, sys
 print(os.path.abspath(os.path.expanduser(sys.argv[1])))
 PY
-)"
-CAPTURE_ROOT="$(python3 - "$CAPTURE_ROOT" <<'PY'
-import os, sys
-print(os.path.abspath(os.path.expanduser(sys.argv[1])))
-PY
-)"
+}
+ORCHESTRATE_ROOT="$(abspath "$ORCHESTRATE_ROOT")"
+CAPTURE_ROOT="$(abspath "$CAPTURE_ROOT")"
 
 python3 - "$PROJECT_ROOT" "$CAPTURE_ROOT" <<'PY' || fail "CAPTURE_ROOT must be outside the target repository"
 import os, sys
@@ -62,12 +76,12 @@ PY
 safe_effort="$(printf '%s' "$EFFORT" | tr -c 'A-Za-z0-9._-' '_')"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 CAPTURE_DIR="$CAPTURE_ROOT/${safe_effort}-${stamp}-$$"
-mkdir -p "$CAPTURE_DIR/capture" "$CAPTURE_DIR/git" "$CAPTURE_DIR/store"
+mkdir -p "$CAPTURE_DIR/capture" "$CAPTURE_DIR/git"
 
 status_before="$CAPTURE_DIR/capture/status.before.json"
-if ! orchestrate --root "$ORCHESTRATE_ROOT" status --effort "$EFFORT" >"$status_before" 2>"$CAPTURE_DIR/capture/status.before.stderr.log"; then
+if ! orchestrate --root "$ORCHESTRATE_ROOT" build status --effort "$EFFORT" >"$status_before" 2>"$CAPTURE_DIR/capture/status.before.stderr.log"; then
   cat "$CAPTURE_DIR/capture/status.before.stderr.log" >&2
-  fail "could not resolve effort before Build"
+  fail "could not resolve effort before collection"
 fi
 
 BUILD_DIR="$(python3 - "$status_before" <<'PY'
@@ -92,6 +106,7 @@ PY
 
 {
   printf 'captured_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'mode=%s\n' "$MODE"
   printf 'project_root=%s\n' "$PROJECT_ROOT"
   printf 'orchestrate_root=%s\n' "$ORCHESTRATE_ROOT"
   printf 'effort=%s\n' "$EFFORT"
@@ -114,28 +129,44 @@ PY
   git status --porcelain=v1 --untracked-files=all >"$CAPTURE_DIR/git/status.before.txt"
 )
 
+build_exit=0
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '%s\n' "$started_at" >"$CAPTURE_DIR/capture/started-at.txt"
-
-(
-  cd "$PROJECT_ROOT" || exit 1
-  RUST_BACKTRACE="${RUST_BACKTRACE:-1}" \
-  RUST_LIB_BACKTRACE="${RUST_LIB_BACKTRACE:-1}" \
-    orchestrate --root "$ORCHESTRATE_ROOT" build --effort "$EFFORT"
-) >"$CAPTURE_DIR/capture/controller.stdout.log" \
-  2>"$CAPTURE_DIR/capture/controller.stderr.log"
-build_exit=$?
-
+if [[ "$MODE" == "run" ]]; then
+  (
+    cd "$PROJECT_ROOT" || exit 1
+    RUST_BACKTRACE="${RUST_BACKTRACE:-1}" \
+    RUST_LIB_BACKTRACE="${RUST_LIB_BACKTRACE:-1}" \
+      orchestrate --root "$ORCHESTRATE_ROOT" build --effort "$EFFORT"
+  ) >"$CAPTURE_DIR/capture/controller.stdout.log" \
+    2>"$CAPTURE_DIR/capture/controller.stderr.log"
+  build_exit=$?
+else
+  printf 'MODE=collect: no Build was dispatched and no provider was invoked.\n' \
+    >"$CAPTURE_DIR/capture/controller.stdout.log"
+  : >"$CAPTURE_DIR/capture/controller.stderr.log"
+fi
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '%s\n' "$finished_at" >"$CAPTURE_DIR/capture/finished-at.txt"
 printf '%s\n' "$build_exit" >"$CAPTURE_DIR/capture/process-exit-code.txt"
 
-orchestrate --root "$ORCHESTRATE_ROOT" status --effort "$EFFORT" \
+orchestrate --root "$ORCHESTRATE_ROOT" build status --effort "$EFFORT" \
   >"$CAPTURE_DIR/capture/status.after.json" \
   2>"$CAPTURE_DIR/capture/status.after.stderr.log" || true
 orchestrate --root "$ORCHESTRATE_ROOT" journal --effort "$EFFORT" \
   >"$CAPTURE_DIR/capture/journal.json" \
   2>"$CAPTURE_DIR/capture/journal.stderr.log" || true
+
+# The effort's evidence comes from the exporter, which selects its expected
+# members from durable state before traversing anything, excludes bulky
+# generated and scratch trees by class, and verifies membership and hashes
+# before promoting its archive. The wrapper never copies an effort tree itself.
+export_archive="$CAPTURE_DIR/effort-evidence.zip"
+export_json="$CAPTURE_DIR/capture/export.json"
+export_exit=0
+orchestrate --root "$ORCHESTRATE_ROOT" build export --effort "$EFFORT" --output "$export_archive" \
+  >"$export_json" 2>"$CAPTURE_DIR/capture/export.stderr.log"
+export_exit=$?
 
 (
   cd "$PROJECT_ROOT" || exit 1
@@ -166,64 +197,7 @@ orchestrate --root "$ORCHESTRATE_ROOT" journal --effort "$EFFORT" \
     2>"$CAPTURE_DIR/git/bundle.stderr.log" || true
 )
 
-# Preserve the effort at its original store-relative path so artifact references remain easy to follow.
-effort_rel="$(python3 - "$ORCHESTRATE_ROOT" "$EFFORT_DIR" <<'PY'
-import os, sys
-print(os.path.relpath(os.path.realpath(sys.argv[2]), os.path.realpath(sys.argv[1])))
-PY
-)"
-effort_copy="$CAPTURE_DIR/store/$effort_rel"
-mkdir -p "$(dirname "$effort_copy")"
-cp -R "$EFFORT_DIR" "$effort_copy"
-
-# Contained Build review/audit checkouts are shared Git clones and are not portable by themselves.
-# Their exact commits are retained by the Git bundle and matching store snapshots below.
-if [[ -d "$effort_copy/build/artifacts" ]]; then
-  find "$effort_copy/build/artifacts" -type d \( -name source -o -name verification \) -prune -exec rm -rf {} \; 2>/dev/null || true
-fi
-
-for meta in "$ORCHESTRATE_ROOT/store.json" "$(dirname "$(dirname "$EFFORT_DIR")")/project.json"; do
-  if [[ -f "$meta" ]]; then
-    rel="$(python3 - "$ORCHESTRATE_ROOT" "$meta" <<'PY'
-import os, sys
-print(os.path.relpath(os.path.realpath(sys.argv[2]), os.path.realpath(sys.argv[1])))
-PY
-)"
-    mkdir -p "$CAPTURE_DIR/store/$(dirname "$rel")"
-    cp -p "$meta" "$CAPTURE_DIR/store/$rel"
-  fi
-done
-
-# Copy only source snapshots actually referenced somewhere in this effort.
-python3 - "$effort_copy" "$ORCHESTRATE_ROOT" "$CAPTURE_DIR/store" <<'PY'
-import re, shutil, sys
-from pathlib import Path
-
-effort = Path(sys.argv[1])
-root = Path(sys.argv[2])
-out = Path(sys.argv[3])
-pattern = re.compile(r'(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])')
-commits = set()
-for path in effort.rglob('*'):
-    if not path.is_file() or path.suffix not in {'.json', '.jsonl', '.md', '.toml', '.txt'}:
-        continue
-    try:
-        text = path.read_text(encoding='utf-8', errors='ignore')
-    except OSError:
-        continue
-    commits.update(pattern.findall(text))
-
-for commit in sorted(commits):
-    source = root / 'snapshots' / commit
-    if not source.is_dir():
-        continue
-    dest = out / 'snapshots' / commit
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(source, dest, symlinks=True)
-PY
-
-python3 - "$CAPTURE_DIR" "$started_at" "$finished_at" "$build_exit" <<'PY'
+python3 - "$CAPTURE_DIR" "$started_at" "$finished_at" "$build_exit" "$export_exit" "$MODE" <<'PY'
 import json, sys
 from pathlib import Path
 
@@ -242,18 +216,39 @@ if stdout.exists():
             operation = value.get('operation_status')
             if semantic is not None or operation is not None:
                 break
+export = None
+export_path = root / 'capture' / 'export.json'
+if export_path.exists():
+    try:
+        export = json.loads(export_path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError:
+        export = None
+cleanup_record = None
+status_after = root / 'capture' / 'status.after.json'
+if status_after.exists():
+    try:
+        cleanup_record = json.loads(status_after.read_text(encoding='utf-8'))['details'].get('cleanup')
+    except (json.JSONDecodeError, KeyError, TypeError):
+        cleanup_record = None
 manifest = {
-    'format': 1,
+    'format': 2,
+    'mode': sys.argv[6],
     'started_at_utc': sys.argv[2],
     'finished_at_utc': sys.argv[3],
-    'process_exit_code': int(sys.argv[4]),
+    'build_process_exit_code': int(sys.argv[4]),
+    'export_process_exit_code': int(sys.argv[5]),
     'operation_status': operation,
     'semantic_outcome': semantic,
+    'export_status': None if export is None else export.get('semantic_outcome'),
+    # Cleanup is a separate operator command; the wrapper records whatever the
+    # controller last recorded about it and never runs it itself.
+    'last_cleanup_record': cleanup_record,
     'notes': [
-        'Provider structured stdout is retained in each Build action transport.jsonl.',
-        'Outer provider/controller stderr is retained in capture/controller.stderr.log.',
+        'Build semantic outcome, cleanup outcome and export outcome are separate facts; a nonzero export exit never implies a failed Build and a passing Build never hides a failed export. This wrapper never runs cleanup.',
+        'The effort evidence archive is effort-evidence.zip, produced by `orchestrate build export`, which selects expected members before traversal and verifies membership and hashes before promotion.',
+        'Provider structured stdout is retained in each Build action transport.jsonl; raw provider stderr in provider-stderr.log; per-dispatch facts in invocation.json.',
         'Native provider home/session directories are intentionally not swept because they may contain unrelated private conversations.',
-        'Contained shared Git review/audit checkouts are omitted; referenced snapshots and repository.bundle preserve their committed source.'
+        'Contained Git review/audit/once-over checkouts are excluded by class; their exact commits are recorded in the exported Build state and git-evidence/checkout.json.'
     ],
 }
 (root / 'capture' / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
@@ -283,9 +278,14 @@ with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, allowZip64=
             zf.write(path, Path(root.name) / path.relative_to(root))
 PY
 
-printf 'Build exit code: %s\n' "$build_exit"
+printf 'Build process exit code: %s\n' "$build_exit"
+printf 'Export process exit code: %s\n' "$export_exit"
 printf 'Capture directory: %s\n' "$CAPTURE_DIR"
 printf 'Archive: %s\n' "$archive"
-printf 'Interpret capture/manifest.json semantic_outcome; process exit code alone is not the Build verdict.\n'
+printf 'Interpret capture/manifest.json: build process exit, export exit and semantic outcome are independent facts.\n'
 
+if [[ "$export_exit" -ne 0 ]]; then
+  printf 'capture-build-run: evidence export failed; the effort evidence archive is not a complete capture\n' >&2
+  exit "$export_exit"
+fi
 exit "$build_exit"

@@ -43,7 +43,8 @@ Keep the reconciled document path and effort ID.
 
 ## 4. Build
 
-Later, explicitly use `$build` with the effort and detailed implementation plan.
+Later, use `$build` to prepare the effort and detailed implementation plan. `$build` does not run
+the CLI or start the driver; explicitly authorize the exact Build CLI operation when ready.
 
 Build runs the delivery phases, reviews, corrections, implementation registration, and the final
 Audit until it finishes or cannot safely continue automatically. A user or infrastructure need is

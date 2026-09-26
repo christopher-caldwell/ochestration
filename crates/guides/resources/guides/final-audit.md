@@ -32,4 +32,4 @@ Write `assessment.json`, `report.md`, and `result.json` at the exact paths in `a
 {"action_id": "<action_id>", "scope": "<scope>", "outcome": "complete"}
 ```
 
-`outcome` is `complete` or `blocked`. Rust derives the verdict from the assessment. Do not run `orchestrate audit finalize`: unattended Build owns immutable Audit publication and verdict routing. Do not edit product source or controller state.
+`outcome` is `complete` or `blocked`. Rust derives the verdict from the assessment. If your permission does not let you create these files, state the same three artifacts in the marked blocks of your final response, as the `output_contract` guide named in `action.json` specifies. Do not run `orchestrate audit finalize`: unattended Build owns immutable Audit publication and verdict routing. Do not edit product source or controller state.

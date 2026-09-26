@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"01a0da36-f6d6-75b1-a779-bf73c333afc5"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,120p' README.md && git rev-parse HEAD\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,120p' README.md && git rev-parse HEAD\"","aggregated_output":"orchestrate preflight fixture\nprobe token: orchestrate-probe-e4b1321c0830036c\n590f49d004e78e2279713032826b14466876ae17\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"orchestrate-probe-e4b1321c0830036c\n590f49d004e78e2279713032826b14466876ae17"}}
+{"type":"turn.completed","usage":{"input_tokens":30439,"cached_input_tokens":27008,"cache_write_input_tokens":0,"output_tokens":174,"reasoning_output_tokens":34}}

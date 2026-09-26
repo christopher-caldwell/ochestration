@@ -270,6 +270,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "symlink",
 ]
 
 [[package]]
@@ -287,6 +288,7 @@ name = "orchestrate-build"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "hex",
  "orchestrate-audit",
  "orchestrate-contracts",
  "orchestrate-core",
@@ -294,6 +296,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "symlink",
  "toml",
 ]
 
@@ -467,6 +470,12 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "symlink"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
 
 [[package]]
 name = "syn"

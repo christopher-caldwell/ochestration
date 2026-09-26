@@ -421,7 +421,10 @@ pub fn finalize_audit_with_run_id(
     let already_journaled = store.read_journal(effort)?.iter().any(|entry| {
         entry.event == "audit_finalized"
             && (entry.run_id.as_deref() == Some(run_id.as_str())
-                || entry.details.get("artifact").and_then(|value| value.as_str())
+                || entry
+                    .details
+                    .get("artifact")
+                    .and_then(|value| value.as_str())
                     == Some(reference.artifact_id.as_str()))
     });
     if !already_journaled {

@@ -8,6 +8,8 @@ Read `binding_requirements` from `action.json` as the complete binding requireme
 
 When you find a genuine conflict, cite the exact requirement ID, the specific observed fact or evidence, and how they conflict. Identify the actual missing decision, access, or capability. Do not raise a resolved prerequisite as a blocker based only on stale historical wording.
 
+When this action continues, replaces or remediates an earlier one, `action.json` also names `predecessor`: the exact prior action, its report, result/receipt and transport (or their recorded absence), the observed ending commit, `handoff` (`continuation`, `replacement`, `remedy` or `resolution`) and, for a remedy, `remedy`. Read those references instead of searching the Build directory, and determine recorded work and outstanding checks yourself: a predecessor's claims, including any test it says it ran, remain unverified and are not completion. An early failure in a predecessor's conditional command chain means its later commands were not executed. Environment workarounds it recorded are re-checkable execution context, not requirements. `feedback` stays the original correction you must address; `remedy` is diagnosis context and never replaces it.
+
 Write `report.md`, then write `result.json` at the path in `action.json`:
 
 ```json

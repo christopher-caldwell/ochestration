@@ -1,0 +1,20 @@
+[
+  {
+    "role": "worker",
+    "fixture": "/private/tmp/orch-build-live.CpfPVP/store/projects/project/efforts/codex-live-validation/build/preflight/live-1790365022443/fixture-worker",
+    "head_after": "8c1beb1b666d32ecfb4dd1f239a599e6823bf60b",
+    "git_status_porcelain": "?? preflight-worker.txt"
+  },
+  {
+    "role": "reviewer",
+    "fixture": "/private/tmp/orch-build-live.CpfPVP/store/projects/project/efforts/codex-live-validation/build/preflight/live-1790365022443/fixture-reviewer",
+    "head_after": "9249ec321bced7b104ac9e4a20691585dcc580fe",
+    "git_status_porcelain": ""
+  },
+  {
+    "role": "unblocker",
+    "fixture": "/private/tmp/orch-build-live.CpfPVP/store/projects/project/efforts/codex-live-validation/build/preflight/live-1790365022443/fixture-unblocker",
+    "head_after": "4efd19ad71f4e082ac255c43a2416bacde35dc0c",
+    "git_status_porcelain": ""
+  }
+]

@@ -31,14 +31,16 @@ The short version is:
 
 4. Review the Reconciled Discovery. Reconcile stops here.
 
-5. Later, when ready, run `$build` with the detailed implementation plan.
-   It prepares Build, drives work/review/correction, registers the implementation, and runs the
-   final Audit until completion or until it cannot safely continue automatically.
+5. Later, use `$build` to discuss and prepare the effort and detailed implementation plan. It does
+   not run the CLI or start/resume the driver. Separately authorize the exact Build CLI operation
+   when ready; the Rust driver then owns work/review/correction, implementation registration, and
+   final Audit until completion or a safe stop.
 ```
 
-You normally do **not** operate the Orchestrate CLI yourself. The installed skills only load the
-current instructions with `orchestrate <action> guide` and then follow them. Updating the CLI
-updates that behavior; reinstalling skills is not part of a normal methodology change.
+You normally interact through Orchestrate skills. A skill may load its current instructions from
+the CLI when that specific operation is authorized. `$build` is deliberately non-executing: it
+uses the checked-in Build guide and does not call even a guide command. Updating the CLI updates
+its embedded guidance; reinstall skills when dispatcher behavior changes.
 
 ## Easiest installation
 
@@ -72,6 +74,18 @@ See the [installation guide](docs/guides/agent-installation.md) for the manual f
 - **Build** is an unattended Rust-driven worker/reviewer loop for a prepared detailed implementation plan.
 - **Audit** checks the exact registered implementation against the binding reconciled requirements;
   unattended Build invokes it automatically.
+
+## How roles talk to providers
+
+A Build role declares provider-neutral settings (`adapter`, `model_strength`, `reasoning_effort`,
+`permission`) and the controller translates them into that provider's own CLI arguments at the
+adapter edge. It injects no environment variable, reads and writes no provider configuration or
+credential store, and touches no provider state: each role inherits the launching environment, so
+the backend, endpoint and credentials stay exactly as that host is set up.
+
+The complete per-setting translation table for Codex, Claude Code, and Cursor — plus what each
+dispatch records, the transport arguments, and the refused combinations — is the
+[provider translation reference](docs/guides/provider-mappings.md).
 
 For deeper details, see the [documentation index](docs/README.md) and
 [architecture](docs/architecture.md).

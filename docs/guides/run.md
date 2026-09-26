@@ -2,8 +2,10 @@
 
 This is the canonical day-to-day workflow.
 
-You normally interact with Orchestrate through model skills, not raw CLI commands. Each skill loads
-its current instructions from `orchestrate <action> guide`.
+You normally interact with Orchestrate through model skills. Skills load current guidance from the
+installed CLI when their operation calls for it. `$build` is the exception: it never invokes any
+Orchestrate CLI command by itself. A human must explicitly authorize each Build CLI operation; the
+read-only help command is `orchestrate build prepare`.
 
 ```text
 Prepare → Discovery × N → Reconcile → STOP
@@ -162,13 +164,31 @@ For more detail, see [Reconcile](reconcile.md).
 
 ## 4. Build and final Audit
 
-Later, explicitly invoke `$build` with the exact effort, Reconciled Discovery, and detailed implementation plan. That invocation authorizes Build and creates or reuses Adoption. It prepares the
-contained Build files; you do not hand-author the controller JSON/TOML.
+Later, use `$build` to discuss and prepare the exact effort, Reconciled Discovery, and detailed
+implementation plan. Invoking `$build` does not run the CLI, write the Build files, start or resume
+the driver, or spend inference on preflight. Explicitly authorize the specific `scaffold`, preflight,
+or driver operation before chat runs its CLI command. The driver launch binds the exact Reconciled
+Discovery and creates or reuses Adoption.
 
 The process runs every delivery phase, independent reviews, corrections, implementation
 registration, and fresh final Audits until it reaches a published Audit PASS or cannot safely
 continue automatically. An external user or infrastructure need is one common blocker. There are
 no normal `next`, `accept`, `continue`, or Audit-window steps. Technical suggestions remain advisory.
+
+Before product-changing work, `orchestrate build preflight --effort "<effort>"` reports each
+configured role's executable, exact provider arguments and unknown capabilities. The optional
+`--live --authorize-live` probe spends real provider inference in disposable fixtures and is
+refused without that explicit authorization.
+
+While it runs, progress goes to stderr and one JSON result is written to stdout;
+`orchestrate build status --effort "<effort>"` is a read-only view of the phase, action, configured
+role, accepted phase count, elapsed time, provider activity age, durable stop and the latest Audit
+with its unresolved requirement IDs. A stop is a recorded acceptance decision, not a crash: resolve
+it with `orchestrate build resolve`, which records your intervention and authorizes one
+continuation without discarding earlier work. Afterwards, `orchestrate build cleanup` releases
+generated Cargo products from checkouts the controller owns, and `orchestrate build export`
+produces a verified evidence archive whose completeness is reported separately from the Build's
+outcome.
 
 For more detail, see [Build and Audit](build-and-audit.md).
 
@@ -189,7 +209,7 @@ Once installed:
 
 4. Review the Reconciled Discovery; Reconcile stops.
 
-5. Later, explicitly run $build with the detailed implementation plan.
+5. Later, use $build to prepare. Separately authorize the exact CLI launch when ready.
 
 ```
 

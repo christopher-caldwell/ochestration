@@ -43,7 +43,7 @@ enum Command {
         #[command(subcommand)]
         command: AuditCommand,
     },
-    /// Run a prepared Build, print the Build guide, or materialize Build templates.
+    /// Run an explicitly authorized Build, print help, or materialize templates.
     #[command(args_conflicts_with_subcommands = true)]
     Build {
         #[arg(
@@ -75,6 +75,11 @@ enum Command {
         command: GuideOnly,
     },
     Unblock {
+        #[command(subcommand)]
+        command: GuideOnly,
+    },
+    /// Optional advisory whole-implementation once-over. Internal role guide.
+    OnceOver {
         #[command(subcommand)]
         command: GuideOnly,
     },
@@ -121,20 +126,58 @@ enum GuideOnly {
 enum BuildCommand {
     /// Print the current embedded Build guide and exit.
     Guide,
+    /// Non-executing preparation/help path; prints the canonical Build guide.
+    Prepare,
     /// Write plan.json and config.toml into the effort Build directory.
     Scaffold {
         #[arg(long)]
         effort: String,
+    },
+    /// Read-only status of a prepared, running or stopped Build.
+    Status {
+        #[arg(long)]
+        effort: String,
+    },
+    /// Bounded preflight of the configured execution path.  Static by default;
+    /// a live probe needs explicit authorization.
+    Preflight {
+        #[arg(long)]
+        effort: String,
+        #[arg(
+            long,
+            help = "Run the optional live probe; refused without --authorize-live"
+        )]
+        live: bool,
+        #[arg(
+            long = "authorize-live",
+            help = "Recorded authorization to spend provider inference on the live probe"
+        )]
+        authorize_live: bool,
+    },
+    /// Remove eligible generated Cargo products from inactive owned checkouts.
+    Cleanup {
+        #[arg(long)]
+        effort: String,
+        #[arg(
+            long = "dry-run",
+            help = "Report what would be removed and remove nothing"
+        )]
+        dry_run: bool,
+    },
+    /// Export one effort's evidence, verifying membership and hashes before
+    /// promoting the archive.
+    Export {
+        #[arg(long)]
+        effort: String,
+        #[arg(long, help = "Final archive path; a .partial file is used first")]
+        output: PathBuf,
     },
     /// Record an operator intervention on a stopped Build and create the
     /// continuation boundary it authorizes.  Dispatches no provider action.
     Resolve {
         #[arg(long)]
         effort: String,
-        #[arg(
-            long,
-            help = "Exact stopped action id reported by the stopped Build"
-        )]
+        #[arg(long, help = "Exact stopped action id reported by the stopped Build")]
         action: String,
         #[arg(long, value_parser = parse_resolution_kind)]
         kind: orchestrate_build::ResolutionKind,
@@ -142,7 +185,10 @@ enum BuildCommand {
         note: Option<String>,
         #[arg(long = "note-file", conflicts_with = "note")]
         note_file: Option<PathBuf>,
-        #[arg(long = "evidence", help = "Evidence file bound to this resolution; repeatable")]
+        #[arg(
+            long = "evidence",
+            help = "Evidence file bound to this resolution; repeatable"
+        )]
         evidence: Vec<PathBuf>,
         #[arg(
             long = "confirm-not-running",
@@ -154,6 +200,28 @@ enum BuildCommand {
             help = "New role configuration for future invocations; environment_repair only"
         )]
         config: Option<PathBuf>,
+    },
+    /// Record an additive authority refusal for a historical in-flight action
+    /// with no durable stop. This does not change state or resume provider work.
+    AmendAuthority {
+        #[arg(long)]
+        effort: String,
+        #[arg(long, help = "Exact current action id from the historical Build")]
+        action: String,
+        #[arg(long, conflicts_with = "note_file")]
+        note: Option<String>,
+        #[arg(long = "note-file", conflicts_with = "note")]
+        note_file: Option<PathBuf>,
+        #[arg(
+            long = "evidence",
+            help = "Evidence file bound to this authority amendment; repeatable"
+        )]
+        evidence: Vec<PathBuf>,
+        #[arg(
+            long = "confirm-not-running",
+            help = "Recorded confirmation that the historical provider action is no longer running"
+        )]
+        confirm_not_running: bool,
     },
 }
 #[derive(Subcommand)]
@@ -404,12 +472,17 @@ fn execute(store: Store, command: Command) -> Result<()> {
             command: Some(BuildCommand::Guide),
             ..
         }
+        | Command::Build {
+            command: Some(BuildCommand::Prepare),
+            ..
+        }
         | Command::PrepDiscoveryTicket { .. }
         | Command::PrepDiscoveryFreeform { .. }
         | Command::Work { .. }
         | Command::Review { .. }
         | Command::FinalAudit { .. }
-        | Command::Unblock { .. } => unreachable!(),
+        | Command::Unblock { .. }
+        | Command::OnceOver { .. } => unreachable!(),
         Command::Discovery {
             command: Discovery::Prepare { effort, provenance },
         } => {
@@ -684,6 +757,124 @@ fn execute(store: Store, command: Command) -> Result<()> {
             }
         }
         Command::Build {
+            command:
+                Some(BuildCommand::AmendAuthority {
+                    effort,
+                    action,
+                    note,
+                    note_file,
+                    evidence,
+                    confirm_not_running,
+                }),
+            ..
+        } => {
+            let note = match (note, note_file) {
+                (Some(note), None) => note,
+                (None, Some(path)) => fs::read_to_string(&path)
+                    .with_context(|| format!("cannot read {}", path.display()))?,
+                (None, None) => bail!("an authority amendment requires --note or --note-file"),
+                (Some(_), Some(_)) => unreachable!("clap rejects both note sources"),
+            };
+            let outcome = orchestrate_build::amend_authority(
+                &store,
+                orchestrate_build::AuthorityAmendmentRequest {
+                    effort,
+                    action,
+                    note,
+                    evidence,
+                    confirm_not_running,
+                },
+            )?;
+            output(
+                "SUCCESS",
+                "AUTHORITY_AMENDED_REFUSED",
+                serde_json::to_value(outcome)?,
+            );
+        }
+        Command::Build {
+            command: Some(BuildCommand::Status { effort }),
+            ..
+        } => {
+            let effort = store.load_effort(&effort)?;
+            let status = orchestrate_build::status::build_status(&store, &effort)?;
+            // The human summary goes to stderr; stdout stays one JSON value.
+            for line in orchestrate_build::status::status_lines(&store, &effort)? {
+                eprintln!("{line}");
+            }
+            output("SUCCESS", "READ_ONLY", status);
+        }
+        Command::Build {
+            command:
+                Some(BuildCommand::Preflight {
+                    effort,
+                    live,
+                    authorize_live,
+                }),
+            ..
+        } => {
+            let effort = store.load_effort(&effort)?;
+            let mut report = orchestrate_build::preflight::static_preflight(&store, &effort)?;
+            if live {
+                // The live probe runs only with the explicit authorization the
+                // contract requires; without it the refusal and its disclosure
+                // are returned instead of inference.
+                let probe = orchestrate_build::preflight::live_preflight_with_local_adapters(
+                    &store,
+                    &effort,
+                    authorize_live,
+                )?;
+                report.live = Some(probe);
+                report.mode = "live";
+            }
+            let retained = orchestrate_build::preflight::retain_report(&store, &effort, &report)?;
+            output(
+                "SUCCESS",
+                "READ_ONLY",
+                serde_json::json!({"preflight": report, "retained": retained}),
+            );
+        }
+        Command::Build {
+            command: Some(BuildCommand::Cleanup { effort, dry_run }),
+            ..
+        } => {
+            let effort = store.load_effort(&effort)?;
+            let outcome = orchestrate_build::cleanup::cleanup(&store, &effort, dry_run)?;
+            let complete = outcome.complete;
+            output(
+                "SUCCESS",
+                if complete {
+                    "CLEANUP_COMPLETE"
+                } else {
+                    "CLEANUP_INCOMPLETE"
+                },
+                serde_json::to_value(&outcome)?,
+            );
+        }
+        Command::Build {
+            command:
+                Some(BuildCommand::Export {
+                    effort,
+                    output: archive,
+                }),
+            ..
+        } => {
+            let effort = store.load_effort(&effort)?;
+            let outcome = orchestrate_build::export::export(&store, &effort, &archive)?;
+            let complete = outcome.complete;
+            let status = outcome.export_status;
+            // Collection outcome is reported independently of any Build
+            // semantic outcome; a failure here is this command's own failure.
+            output("SUCCESS", status, serde_json::to_value(&outcome)?);
+            if !complete {
+                bail!(
+                    "evidence export is {status}; no complete archive was promoted ({} failed, {} changed, {} omissions)",
+                    outcome.failed,
+                    outcome.changed,
+                    outcome.omissions.len()
+                );
+            }
+        }
+        Command::Build {
             command: Some(BuildCommand::Scaffold { effort }),
             ..
         } => {
@@ -787,6 +978,10 @@ impl Command {
                 command: Some(BuildCommand::Guide),
                 ..
             } => Some("build"),
+            Command::Build {
+                command: Some(BuildCommand::Prepare),
+                ..
+            } => Some("build"),
             Command::PrepDiscoveryTicket {
                 command: GuideOnly::Guide,
             } => Some("prep-discovery-ticket"),
@@ -805,6 +1000,9 @@ impl Command {
             Command::Unblock {
                 command: GuideOnly::Guide,
             } => Some("unblock"),
+            Command::OnceOver {
+                command: GuideOnly::Guide,
+            } => Some("once-over"),
             _ => None,
         }
     }

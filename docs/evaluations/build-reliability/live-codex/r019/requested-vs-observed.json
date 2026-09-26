@@ -1,0 +1,49 @@
+{
+  "installed_version": "codex-cli 0.156.1",
+  "fresh_dispatch": {
+    "source": "preflight run record: ../r022/preflight-1790362267666.json; raw role transport: ../r022/preflight-live-1790362155518/probe-worker/transport.jsonl",
+    "requested_model": "gpt-5.6-luna",
+    "requested_reasoning_effort": "medium",
+    "controller_attribute_arguments": [
+      "--model",
+      "gpt-5.6-luna",
+      "-c",
+      "model_reasoning_effort=medium"
+    ],
+    "temporary_launcher_sandbox": "workspace-write",
+    "session_id": "01a0d9e6-7f91-77e3-a5d3-df81ed501642",
+    "provider_outcome": "provider process exited 0; worker wrote one file and a report; requested Git commit failed on .git/index.lock"
+  },
+  "resume_dispatch": {
+    "argv": [
+      "exec",
+      "--json",
+      "-C",
+      "/tmp/orch-build-live.CpfPVP/store/projects/project/efforts/codex-live-validation/build/preflight/live-1790362155518/fixture-worker",
+      "--add-dir",
+      "/tmp/orch-build-live.CpfPVP/store/projects/project/efforts/codex-live-validation/build/preflight/live-1790362155518/probe-worker",
+      "resume",
+      "01a0d9e6-7f91-77e3-a5d3-df81ed501642",
+      "--model",
+      "gpt-5.6-luna",
+      "-c",
+      "model_reasoning_effort=medium",
+      "-o",
+      "/tmp/orch-build-live.CpfPVP/evidence/r019/resume-response.md",
+      "-"
+    ],
+    "requested_model": "gpt-5.6-luna",
+    "requested_reasoning_effort": "medium",
+    "sandbox_argument": "none; installed `codex exec resume --help` does not list --sandbox",
+    "provider_observed_session_id": "01a0d9e6-7f91-77e3-a5d3-df81ed501642",
+    "provider_exit_code": 0,
+    "observed_effect": "the resumed turn created only resume-permission-probe.txt in the disposable fixture and reported git status plus the unchanged HEAD",
+    "fixture_head": "ace2992da97ad98f351cce477084dd7e34cfdaea"
+  },
+  "limits": [
+    "The provider stream identifies the session and returns normal completion/usage metadata but does not report its effective model or effective reasoning effort; accepted flags do not prove those settings were honored.",
+    "The resume CLI exposes no sandbox override in its help. A write succeeded during resume, but this does not distinguish inherited session policy from the host default.",
+    "The worker preflight proved ordinary workspace file writes but could not create Git metadata; no commit capability is claimed.",
+    "The ephemeral R-002 calls and the R-022 read-only role calls are documented in their own folders."
+  ]
+}

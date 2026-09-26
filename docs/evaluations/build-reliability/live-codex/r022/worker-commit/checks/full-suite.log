@@ -1,0 +1,1451 @@
+   Compiling orchestrate-build v0.0.1 (/Users/christophercaldwell/Code/projects/ai_orchestration/crates/build)
+   Compiling orchestrate v0.0.1 (/Users/christophercaldwell/Code/projects/ai_orchestration/crates/cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.20s
+     Running unittests src/main.rs (target/debug/deps/orchestrate-392bc8831ff4596f)
+
+running 2 tests
+test prepared_request::tests::split_preserves_the_body_offset_for_lf_and_crlf ... ok
+test prepared_request::tests::ticket_body_is_read_without_rewriting_its_contents ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/architecture.rs (target/debug/deps/architecture-a4c34fe4d7eb66c7)
+
+running 11 tests
+test every_installed_skill_has_exactly_one_public_guide ... ok
+test prepare_guides_challenge_intent_without_preempting_discovery ... ok
+test embedded_guides_preserve_high_value_instruction_boundaries ... ok
+test reconcile_guide_is_closed_world_convergent_and_stops_before_build ... ok
+test codex_install_docs_use_the_current_global_skill_directory ... ok
+test host_files_are_install_pointers_only ... ok
+test skills_are_dispatchers_only ... ok
+test skill_directories_hold_no_operational_assets ... ok
+Installed six Orchestrate dispatchers in /tmp/claude-502/orchestrate-skill-install-88253
+test skill_installer_replaces_dispatchers_without_backups_and_preserves_unrelated_skills ... ok
+test the_old_guide_subcommand_is_gone ... ok
+test guide_commands_are_bootstrap_safe_and_canonical ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/e2e.rs (target/debug/deps/e2e-3084de1b5027db62)
+
+running 31 tests
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-concurrent-repo-1790367783478436000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-operator-repo-1790367783478192000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-project-collision-a-1790367783478298000/same_name/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-audit-contract-repo-1790367783478159000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-blocked-reconcile-repo-1790367783478054000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-resolve-repo-1790367783478277000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-git-index-metadata-repo-1790367783478409000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-context-values-repo-1790367783478207000/.git/
+[main (root-commit) 3b4cd94] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) aeb3fcd] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) aeb3fcd] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) aeb3fcd] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) aeb3fcd] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) aeb3fcd] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) aeb3fcd] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) aeb3fcd] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-project-collision-b-1790367783478467000/same_name/.git/
+[main (root-commit) 3b4cd94] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test colliding_human_project_names_from_different_repositories_are_rejected ... ok
+test build_resolution_requires_a_stopped_build_and_a_known_kind ... ok
+test concurrent_identical_initialization_converges_on_one_frozen_effort ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-many-discoveries-repo-1790367784475230000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-frozen-inputs-repo-1790367784484845000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-git-drift-repo-1790367784498021000/.git/
+[main (root-commit) ac99def] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) ac99def] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) ac99def] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test discovery_allows_unchanged_source_with_index_metadata_flags ... ok
+test blocked_reconciled_discovery_cannot_be_adopted ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-technical-spec-body-repo-1790367785665177000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-source-worktree-repo-1790367785727089000/.git/
+[main (root-commit) b02d43b] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) b02d43b] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test discovery_publication_rechecks_complete_frozen_context_and_source ... ok
+test adoption_implementation_and_audit_follow_the_reconciled_binding_contract ... ok
+test discovery_context_requires_complete_values_but_allows_equivalent_json_and_scratch_files ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-discovery-provenance-repo-1790367785896113000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-immutable-effort-repo-1790367785978091000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-live-preflight-stdout-repo-1790367786024533000/.git/
+[main (root-commit) 88bc4f0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 88bc4f0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 88bc4f0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test discovery_rejects_generated_technical_spec_even_with_a_valid_graph ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-prepared-repo-1790367786350830000/.git/
+test effort_slug_freezes_request_and_constraints_but_other_slugs_are_allowed ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-reconcile-inputs-repo-1790367786395164000/.git/
+test build_operator_commands_status_preflight_cleanup_and_export ... ok
+[main (root-commit) 88bc4f0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-rendered-contract-repo-1790367786418093000/.git/
+[main (root-commit) 88bc4f0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 88bc4f0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test prepared_request_has_no_slots_or_quorum_and_legacy_fields_are_rejected ... ok
+test discovery_verification_and_human_source_label_round_trip ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-reconcile-source-rendering-repo-1790367786729062000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-user-clarification-repo-1790367786774263000/.git/
+[main (root-commit) 88bc4f0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 88bc4f0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test discovery_rejects_missing_or_enclosing_source_worktree_and_blocked_drift ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-reconcile-empty-behavior-repo-1790367786913323000/.git/
+[main (root-commit) de2c812] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[detached HEAD e101fbd] different commit
+test live_preflight_keeps_stdout_a_single_json_value ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-reconcile-verification-repo-1790367787147427000/.git/
+[main (root-commit) de2c812] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test discovery_is_arbitrarily_repeatable_without_slots ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-reconcile-finalize-repo-1790367787929445000/.git/
+test reconciled_markdown_is_rendered_only_from_the_structured_contract ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-frozen-governing-repo-1790367788017378000/.git/
+test discovery_rejects_every_git_state_drift_including_ignored_files ... ok
+[main (root-commit) e4d9d54] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) e4d9d54] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test reconciliation_accepts_explicit_user_clarification_as_direct_authority ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-rejected-finding-verification-repo-1790367788099190000/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-governing-bypass-repo-1790367788286155000/.git/
+test reconciled_markdown_renders_source_node_ids_in_every_citation_section ... ok
+[main (root-commit) e4d9d54] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-reconcile-sources-repo-1790367788365792000/.git/
+[main (root-commit) e4d9d54] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) e4d9d54] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test reconciliation_allows_empty_changed_behavior_categories ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-ordinary-requirement-source-repo-1790367788595179000/.git/
+[main (root-commit) e4d9d54] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test reconciliation_binds_verification_methods_to_directly_cited_findings ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-Example_Target_Project-repo-1790367789079785000/.git/
+[main (root-commit) ecec72c] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test storage_uses_human_names_while_preserving_internal_identity_and_file_provenance ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-historical-version-six-repo-1790367789416053000/.git/
+[main (root-commit) ecec72c] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test reconciliation_preserves_frozen_constraints_as_governing_authority ... ok
+test reconciliation_rejects_model_supplied_governing_requirements ... ok
+test reconciliation_preserves_verification_for_rejected_findings ... ok
+test reconcile_binds_an_explicit_arbitrary_set_without_quorum ... ok
+test reconciliation_requires_discovery_authority_for_ordinary_requirements ... ok
+test reconciliation_rejects_unselected_or_missing_evidence_sources ... ok
+test reconciliation_preserves_exact_parents_and_allows_a_minority_source ... ok
+test supported_version_six_bundles_reconcile_after_mutable_workspaces_are_removed ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.18s
+
+     Running unittests src/lib.rs (target/debug/deps/orchestrate_audit-143b967b4cf249c5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/orchestrate_build-dd43e84507dde526)
+
+running 104 tests
+test tests::a_member_changing_during_collection_is_classified_not_completed ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367791038-8/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367791038-12/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367791038-10/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367791038-13/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367791038-11/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367791038-9/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367791039-16/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367791038-14/.git/
+[main (root-commit) c96c2cf] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) c96c2cf] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) c96c2cf] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) c96c2cf] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) c96c2cf] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) c96c2cf] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) c96c2cf] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) c96c2cf] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::a_missing_required_executable_stops_before_any_product_work ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367792021-26/.git/
+[main (root-commit) f4e7e3a] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 0d51733] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+[main 4592402] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 0d51733] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+[main 4592402] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 4592402] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 4592402] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 4592402] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::a_receipt_written_before_transport_completed_is_ignored ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367792290-28/.git/
+[main (root-commit) f4e7e3a] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::a_mutated_review_checkout_is_rejected ... ok
+[main fb54cda] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367792964-38/.git/
+[main (root-commit) 7d560a2] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main b45669c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 509a990] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main b45669c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main b45669c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main fb54cda] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main a40a0af] late fix
+ 1 file changed, 1 insertion(+)
+ create mode 100644 late-fix.txt
+[main 5dc2fd5] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 960bab5] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main f3f253e] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main e89abce] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+test tests::a_change_at_the_archived_read_is_detected_and_never_promoted ... ok
+[main 085e3d9] work
+ 2 files changed, 2 insertions(+)
+ create mode 100644 partial-work.txt
+ create mode 100644 work-3.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367795554-71/.git/
+[main (root-commit) 341bc7a] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::a_failed_launch_still_keeps_its_invocation_record ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367796070-79/.git/
+[main d3b5f53] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+test tests::a_blocked_audit_stops_on_the_exact_unresolved_requirements ... ok
+[main (root-commit) 60d10a2] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367796375-83/.git/
+[main cd0342c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) 60d10a2] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367796766-88/.git/
+[main (root-commit) d3cfece] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367797211-92/.git/
+[main d108ba9] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) d3cfece] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 26d17fe] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-4.txt
+test tests::a_recorded_resolution_whose_binding_still_holds_applies ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367797805-102/.git/
+[main 514fcb6] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) 1126c38] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::a_replayed_overlay_configuration_governs_its_recorded_first_action ... ok
+[main 514fcb6] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::a_restart_runs_the_bounded_diagnosis_a_stop_left_pending ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367798448-109/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367798579-112/.git/
+[main 5f648a4] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main d7da6a6] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main (root-commit) 1126c38] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 1126c38] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main c1b2bb0] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work.txt
+test tests::a_tampered_requirement_projection_stops_before_dispatch ... ok
+test tests::absent_roles_fall_back_and_configured_roles_route_exactly ... ok
+test tests::a_configured_once_over_runs_once_per_new_audit_commit ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367799770-126/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367799975-131/.git/
+test tests::a_role_cannot_poison_the_next_roles_guide ... ok
+[main (root-commit) 06cc591] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 06cc591] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367800172-135/.git/
+[main (root-commit) 06cc591] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 259f7ff] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main 44d94e8] work
+ 2 files changed, 2 insertions(+)
+ create mode 100644 partial-work.txt
+ create mode 100644 work-3.txt
+test tests::a_scope_that_keeps_blocking_stops_instead_of_looping ... ok
+[main 86631f4] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 86631f4] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::a_resolution_whose_journal_append_was_lost_still_records_it_once ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367801127-146/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367801294-149/.git/
+[main (root-commit) 547ef5a] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 547ef5a] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::a_resolved_overlay_that_removes_the_once_over_records_its_absence ... ok
+[main a7e48ff] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367801895-156/.git/
+test tests::an_interrupted_dispatch_keeps_its_launch_record_without_inventing_an_end ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367802247-163/.git/
+[main caf595b] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main (root-commit) 08754e5] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main e651203] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) 08754e5] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main caf595b] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::a_pending_resolution_is_rejected_when_the_repository_moved ... ok
+test tests::a_recorded_but_unapplied_resolution_effectively_transitions_once ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367802765-169/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367802904-172/.git/
+[main 11968bd] advance before build
+ 1 file changed, 1 insertion(+)
+ create mode 100644 advanced.txt
+[main e7a967b] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-4.txt
+[main (root-commit) 17ecab0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 17ecab0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::build_start_may_be_a_descendant_and_is_recorded_separately ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367803153-177/.git/
+Switched to a new branch 'unrelated'
+test tests::blocked_results_keep_their_fields_and_add_trigger_data ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367803494-182/.git/
+[unrelated (root-commit) 632aba5] unrelated history
+ 2 files changed, 2 insertions(+)
+ create mode 100644 source.txt
+ create mode 100644 unrelated.txt
+[main (root-commit) 17ecab0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::build_start_rejects_a_head_unrelated_to_the_discovery_baseline ... ok
+[main (root-commit) 17ecab0] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367803736-186/.git/
+[main 1943016] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::authority_changes_are_refused_with_successor_guidance_and_leave_state_alone ... ok
+[main (root-commit) de7b77e] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-cleanup-tracked-repo-1790367804039-190/.git/
+[main 93228f2] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) dff5f18] tracked product directory
+ 2 files changed, 2 insertions(+)
+ create mode 100644 source.txt
+ create mode 100644 target/schema.sql
+test tests::an_absent_once_over_never_runs ... ok
+[main 93228f2] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367804593-196/.git/
+test tests::an_incomplete_action_continues_its_session_then_replaces_it ... ok
+[main (root-commit) de7b77e] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 0edc1ad] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367804968-202/.git/
+[main e4b8ae2] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main b211cab] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) 8eda7e9] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367805243-205/.git/
+[main (root-commit) 8eda7e9] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main c29c552] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 0edc1ad] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main c29c552] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main f7acb2b] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 0f88d89] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 1f1ec3f] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main f7acb2b] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 0f88d89] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::build_status_is_read_only_and_separates_liveness_from_uncertainty ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367807185-230/.git/
+[main 2d277d6] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main (root-commit) 317cda7] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 2d277d6] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::cleanup_failures_are_recorded_without_changing_acceptance ... ok
+test tests::codex_and_claude_receive_the_external_build_directory ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367807892-241/.git/
+[main 52ee3ab] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) c498f97] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::cleanup_never_removes_tracked_files_under_a_product_directory ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367808350-245/.git/
+test tests::cleanup_is_owned_scoped_dry_runnable_and_idempotent ... ok
+test tests::build_status_reports_the_stop_and_exact_unresolved_requirements ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367808655-248/.git/
+[main (root-commit) c498f97] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367808664-250/.git/
+[main (root-commit) c498f97] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) c498f97] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::cleanup_preserves_cited_evidence_and_unknown_files_inside_product_directories ... ok
+[main d39e029] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::cleanup_skips_ambiguous_legacy_content_instead_of_deleting_it ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367809012-254/.git/
+[main df2f6fa] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367809220-258/.git/
+[main (root-commit) 694766d] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main d39e029] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) 694766d] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main d39e029] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367810076-271/.git/
+[main 468feeb] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main d33685a] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main 64e7c14] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main (root-commit) 7cdfbd1] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 019e039] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 03d4e37] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 0df38eb] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 5bd72d6] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-4.txt
+[main 8a4c8fa] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::cleanup_skips_symlinked_product_roots_without_touching_external_bytes ... ok
+[main 8d70118] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367812220-292/.git/
+[main 9f48b8d] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main (root-commit) c95f52f] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 45248f9] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 41a5c17] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+test tests::deterministic_spawn_failure_stops_without_consuming_recovery ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367813616-306/.git/
+[main (root-commit) c704b01] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::conflicting_bytes_under_one_audit_attempt_identity_are_rejected ... ok
+test tests::continuations_and_replacements_carry_their_predecessor_facts ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367814192-311/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367814328-314/.git/
+[main (root-commit) ce5b255] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::config_overlays_are_versioned_and_govern_only_future_actions ... ok
+[main (root-commit) ce5b255] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367814729-318/.git/
+[main cb7149e] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) fd1a879] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367815077-321/.git/
+[main (root-commit) fd1a879] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 5588e06] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 5588e06] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 11dbf5a] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-4.txt
+[main dd749bc] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367816398-333/.git/
+[main (root-commit) ccaf371] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main f2d4cd3] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 385330f] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 0e20aed] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 0e1204c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::corrections_repeat_work_review_and_final_audit_automatically ... ok
+[main bf8b4ef] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367817971-348/.git/
+[main ddbe93f] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main (root-commit) 3b75833] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 91eeed2] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main e941261] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::distinct_worker_and_reviewer_adapters_are_both_driven ... ok
+[main 87c70e1] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367819083-361/.git/
+test tests::config_overlay_versions_are_immutable_and_govern_their_own_actions ... ok
+[main (root-commit) 60f65f7] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367819385-367/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367819457-369/.git/
+[main (root-commit) 60f65f7] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 60f65f7] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367819792-375/.git/
+test tests::duplicate_resolutions_are_idempotent_and_conflicts_are_stale ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367820075-377/.git/
+[main 7637124] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::definitive_provider_failures_resume_then_replace_without_user_action ... ok
+[main (root-commit) 9a2e161] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 9a2e161] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367820228-383/.git/
+[main 7637124] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 884c415] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+[main (root-commit) 9a2e161] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 8427fbc] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main e1022d8] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::export_collects_nested_live_probe_and_resolution_evidence ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367821192-393/.git/
+[main e1022d8] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367821518-400/.git/
+test tests::export_describes_receipt_absence_and_validation_from_the_recorded_stop ... ok
+[main (root-commit) 2f53740] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 6403591] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367821626-402/.git/
+[main (root-commit) 2f53740] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 2f53740] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main bbbc8ea] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main f9b60b3] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 4ece6e2] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 3fd498d] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 3fd498d] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 3fd498d] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main f9b60b3] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main e24680e] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main e24680e] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main e24680e] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367824108-432/.git/
+[main (root-commit) 5863de6] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::export_detects_a_lost_executed_resolution_continuation ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367824454-439/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367824426-437/.git/
+[main (root-commit) 5863de6] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 5863de6] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367824692-447/.git/
+[main 6ac1c2d] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) 1916325] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::export_owns_its_scratch_paths_and_never_removes_unrelated_files ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367825219-453/.git/
+[main 7de912d] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 7de912d] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) 1916325] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::export_reports_directory_inventory_and_entry_failures ... ok
+test tests::advisory_once_over_outcomes_never_gate_the_formal_audit ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367825642-460/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367825752-462/.git/
+[main ac4a157] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367825824-465/.git/
+[main (root-commit) 1916325] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 7af3143] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main (root-commit) 1916325] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 2a46ccf] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 4bb35d4] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 73cad8e] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 73cad8e] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 4bb35d4] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 4bb35d4] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main daa290a] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::external_requirement_stops_without_retrying_work ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367827301-485/.git/
+[main 55b4c35] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main (root-commit) 6499e80] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 55b4c35] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main e45278f] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::export_distinguishes_blocked_audit_receipt_from_lost_published_assessment ... ok
+test tests::fresh_and_resumed_dispatches_map_the_same_attributes_exactly ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367828214-497/.git/
+[main 7c184fb] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+[main (root-commit) 51d7581] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367828672-504/.git/
+test tests::export_selects_first_and_verifies_before_promotion ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367828796-509/.git/
+test tests::export_refuses_symlinked_directories_that_escape_the_effort ... ok
+[main (root-commit) 51d7581] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::heartbeats_report_activity_and_stop_with_the_guard ... ok
+[main (root-commit) 51d7581] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367828947-513/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367829028-515/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367829090-517/.git/
+[main (root-commit) d0c81e3] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) d0c81e3] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) d0c81e3] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main fe8250b] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Note: switching to '55b4c35a34a3415c0e70aeb8ccd0acc6bb05ea84'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+[main fe8250b] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367829865-527/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367829987-531/.git/
+[main (root-commit) 529f6c9] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 14ac927] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367830168-535/.git/
+[main (root-commit) 529f6c9] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 529f6c9] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main e84ae12] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::frozen_input_changes_record_a_stop_instead_of_a_bare_error ... ok
+[main ca107a6] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367830778-541/.git/
+[main (root-commit) 3d9b807] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::external_evidence_at_final_scope_resolves_with_new_evidence ... ok
+[main 4fdc6cd] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367831224-551/.git/
+Note: switching to '529f6c9dcb763facc53aecbc1b77cef0655afb20'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367831231-553/.git/
+test tests::exported_git_evidence_restores_the_implementation_without_a_baseline ... ok
+[main 1a88ff3] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main (root-commit) 3d9b807] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 3d9b807] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367831328-555/.git/
+[main (root-commit) 3d9b807] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main a982a58] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main 711e643] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367832337-570/.git/
+[main d9e997d] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 05982ef] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+[main (root-commit) 0f44d79] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 39f7395] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-4.txt
+[main 05982ef] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+test tests::export_classifies_lost_and_legitimately_absent_action_records ... ok
+test tests::forged_receipts_never_advance_the_controller ... ok
+test tests::named_adapters_build_supported_local_commands ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367833109-582/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367833148-584/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367833242-587/.git/
+[main (root-commit) 64fc6da] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 64fc6da] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 64fc6da] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main cdd0d74] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-4.txt
+test tests::in_flight_work_needs_a_recorded_confirmation_before_continuation ... ok
+[main cdd0d74] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-4.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367833734-593/.git/
+[main 8439bea] ignore local cache
+ 1 file changed, 1 insertion(+)
+ create mode 100644 .gitignore
+[main (root-commit) 64fc6da] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::new_build_allows_ignored_environment_state ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367833976-599/.git/
+[main 32e3a26] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367834136-602/.git/
+[main (root-commit) b9d1f57] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::handoffs_keep_the_original_correction_and_name_the_predecessor ... ok
+[main (root-commit) b9d1f57] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367834377-606/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367834408-609/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367834504-611/.git/
+[main (root-commit) b9d1f57] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) b9d1f57] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::malformed_or_missing_frozen_inputs_still_record_a_typed_stop ... ok
+[main (root-commit) b9d1f57] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367834784-615/.git/
+[main (root-commit) fa4ee83] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367835100-618/.git/
+[main 5ed9acd] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::invocation_records_are_passive_prompt_elided_and_attributed ... ok
+test tests::opencode_is_rejected_until_its_cli_contract_is_verified ... ok
+test tests::phase_authority_keeps_mapping_evidence_and_exclusions_together ... ok
+test tests::plan_ids_are_restricted ... ok
+[main 41104a5] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main (root-commit) fa4ee83] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367835466-623/.git/
+[main 5ed9acd] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 5ed9acd] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::invocation_records_keep_requested_and_observed_sessions_apart ... ok
+[main (root-commit) fa4ee83] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::new_build_rejects_staged_unstaged_and_untracked_checkout_state ... ok
+test tests::provider_stderr_is_retained_verbatim_and_forwarded_with_attribution ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367835887-628/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367836018-633/.git/
+[main bd2c6ed] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+[main (root-commit) 6f48d28] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 6f48d28] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::new_evidence_is_refused_outside_a_blocked_final_audit ... ok
+[main afb22a7] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 860dab8] preflight worker commit
+ 1 file changed, 1 insertion(+)
+ create mode 100644 preflight-worker.txt
+[main afb22a7] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367836855-643/.git/
+[main db6ff15] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+[main (root-commit) 9360e8b] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 5a81bcf] D2
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D2.txt
+[main e97fabf] preflight worker commit
+ 1 file changed, 1 insertion(+)
+ create mode 100644 preflight-worker.txt
+test tests::readiness_rechecks_the_configuration_an_overlay_makes_effective ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367838103-663/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367838172-665/.git/
+[main aa6138c] D2
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D2.txt
+[main (root-commit) 9089dee] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) 9089dee] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::export_reports_incomplete_collection_without_promoting ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367839080-676/.git/
+test tests::one_run_crosses_delivery_phases_and_final_audit ... ok
+[main (root-commit) 3a402fc] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::required_role_readiness_never_gates_optional_roles ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367839441-682/.git/
+test tests::migrated_final_scope_blocked_recovery_continues_with_new_evidence ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367839894-687/.git/
+[main 7a9782a] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main (root-commit) 3a402fc] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) b5bef15] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::raw_provider_transport_is_retained_verbatim ... ok
+test tests::requirement_projection_is_digest_bound_ordered_and_immutable ... ok
+[main 54da183] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367840330-694/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367840341-696/.git/
+[main (root-commit) b5bef15] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) b5bef15] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367840620-701/.git/
+test tests::new_evidence_publishes_a_distinct_audit_at_the_unchanged_implementation ... ok
+[main 9b391d1] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) b5bef15] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367840919-704/.git/
+[main c2890be] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+test tests::preflight_is_static_by_default_and_live_only_when_authorized ... ok
+[main (root-commit) 1c35761] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367841240-709/.git/
+[main 8e94097] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main 8e94097] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) 1c35761] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 6d10b4d] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main 9108b69] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::resumed_build_does_not_repeat_the_initial_checkout_check ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367842360-724/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367842635-730/.git/
+[main (root-commit) 5b7e452] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 1a0a2c9] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main (root-commit) 5b7e452] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main e3e949a] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+test tests::remedy_unblock_resumes_the_interrupted_action ... ok
+test tests::role_attributes_route_exactly_and_unsupported_values_fail_clearly ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367843373-740/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367843385-742/.git/
+[main 5a48549] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::process_failures_stop_with_typed_durable_records ... ok
+[main (root-commit) c32617b] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main ce515b0] work
+ 2 files changed, 2 insertions(+)
+ create mode 100644 partial-work.txt
+ create mode 100644 work-3.txt
+[main (root-commit) c32617b] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-scaffold-repo-1790367843750-745/.git/
+test tests::resumed_build_refreshes_stale_role_guides ... ok
+test tests::session_ids_are_read_from_provider_events ... ok
+[main (root-commit) 756d08e] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367844179-751/.git/
+[main 7ce26f3] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-4.txt
+test tests::scaffold_writes_the_embedded_templates_once ... ok
+[main (root-commit) 756d08e] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367844453-756/.git/
+[main beaddbb] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main beaddbb] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) 756d08e] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::restart_after_audit_publication_reuses_the_published_audit ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367844954-763/.git/
+[main 6e2f34c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) ca0e3bc] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 6e2f34c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main ea842d9] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+test tests::restart_before_the_implementation_was_recorded_reuses_it ... ok
+test tests::resolution_resumes_the_interrupted_scope_and_dispatches_nothing ... ok
+[main ea842d9] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367845803-772/.git/
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367845796-770/.git/
+[main (root-commit) ca0e3bc] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main (root-commit) ca0e3bc] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::stale_review_receipts_do_not_advance_a_phase ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367846167-778/.git/
+[main b023b9c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+[main (root-commit) ec100b1] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+[main 44b606c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-5.txt
+[main c12b6b1] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-2.txt
+[main b023b9c] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-1.txt
+test tests::uncertain_provider_acceptance_never_retries ... ok
+Initialized empty Git repository in /private/tmp/claude-502/orchestrate-build-repo-1790367847050-790/.git/
+[main 4871127] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+[main (root-commit) 152bfff] baseline
+ 1 file changed, 1 insertion(+)
+ create mode 100644 source.txt
+test tests::worker_completion_still_rejects_leftover_tracked_changes ... ok
+test tests::written_archives_carry_a_real_local_crc_and_round_trip ... ok
+test tests::resolution_rejects_stale_foreign_terminal_and_unstopped_targets ... ok
+[main ddaf76f] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-6.txt
+[main 32cc18d] D1
+ 1 file changed, 1 insertion(+)
+ create mode 100644 D1.txt
+[main ac098ab] work
+ 1 file changed, 1 insertion(+)
+ create mode 100644 work-3.txt
+test tests::standalone_audits_neither_ambigify_nor_supply_the_build_verdict ... ok
+test tests::worker_owned_untracked_file_does_not_block_commit_handoff ... ok
+[main f982049] work
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+test tests::repeated_correction_cycles_stay_automatic ... ok
+test tests::same_commit_reverification_does_not_rerun_the_once_over ... ok
+test tests::state_v3_migration_preserves_original_bytes_and_lineage ... ok
+test tests::successor_linkage_names_the_predecessor_and_the_new_contract ... ok
+
+test result: ok. 104 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 58.91s
+
+     Running unittests src/lib.rs (target/debug/deps/orchestrate_contracts-491ea420b8c76839)
+
+running 12 tests
+test tests::legacy_resolved_question_status_is_rejected ... ok
+test tests::duplicate_keys_fail ... ok
+test tests::failed_requirement_cannot_pass ... ok
+test tests::not_applicable_coverage_needs_evidence ... ok
+test tests::failed_coverage_needs_evidence ... ok
+test tests::failed_coverage_needs_a_correction ... ok
+test tests::missing_coverage_cannot_pass ... ok
+test tests::justified_not_applicable_conditional_requirement_can_pass ... ok
+test tests::partial_implementation_cannot_pass ... ok
+test tests::passed_coverage_needs_evidence ... ok
+test tests::unconditional_requirement_cannot_be_not_applicable ... ok
+test tests::unknown_requirement_cannot_pass ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/orchestrate_core-e234bb7b4ce2050f)
+
+running 2 tests
+test tests::concurrent_store_creation_never_reports_a_legacy_store ... ok
+test tests::concurrent_journal_appends_remain_line_framed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+     Running unittests src/lib.rs (target/debug/deps/orchestrate_discovery-c286313e92feba5c)
+
+running 6 tests
+test tests::implementation_ready_discovery_needs_evidence ... ok
+test tests::technical_spec_needs_content_not_prescribed_headings ... ok
+test tests::technical_spec_rejects_heading_only_content ... ok
+test tests::answered_required_question_needs_an_accepted_finding ... ok
+test tests::accepted_findings_need_a_nonempty_source ... ok
+test tests::no_change_is_terminal_but_open_and_blocked_are_not_ready ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/orchestrate_guides-189bdde81d6d625f)
+
+running 4 tests
+test tests::public_actions_are_the_installed_skills_only ... ok
+test tests::build_roles_are_directed_to_the_binding_requirement_projection ... ok
+test tests::templates_are_embedded ... ok
+test tests::every_registered_guide_is_nonempty_and_unique ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/orchestrate_reconcile-75cb99ec7fefef55)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests orchestrate_audit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests orchestrate_build
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests orchestrate_contracts
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests orchestrate_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests orchestrate_discovery
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests orchestrate_guides
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests orchestrate_reconcile
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -18,6 +18,12 @@ pub const WORK: &str = include_str!("../resources/guides/work.md");
 pub const REVIEW: &str = include_str!("../resources/guides/review.md");
 pub const FINAL_AUDIT: &str = include_str!("../resources/guides/final-audit.md");
 pub const UNBLOCK: &str = include_str!("../resources/guides/unblock.md");
+/// Optional advisory whole-implementation once-over. Off unless configured.
+pub const ONCE_OVER: &str = include_str!("../resources/guides/once-over.md");
+/// The one durable-output contract for roles whose permission prevents them
+/// from writing their evidence files.  It is materialized beside a role's own
+/// guide and named by `action.json`, so the roles share one copy of it.
+pub const EVIDENCE_OUTPUT: &str = include_str!("../resources/guides/evidence-output.md");
 
 /// User-installed actions. Sorted by name. `unblock`, `work`, `review`, and
 /// `final-audit` are deliberately absent: the Build controller materializes those
@@ -34,6 +40,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
 /// Guides the Build controller shows to a role. Not installed as skills.
 pub const INTERNAL: &[(&str, &str)] = &[
     ("final-audit", FINAL_AUDIT),
+    ("once-over", ONCE_OVER),
     ("review", REVIEW),
     ("unblock", UNBLOCK),
     ("work", WORK),
@@ -115,6 +122,20 @@ mod tests {
     #[test]
     fn templates_are_embedded() {
         assert!(templates::PLAN_JSON.contains("\"schema_version\": 2"));
-        assert!(templates::CONFIG_TOML.contains("schema_version = 2"));
+        assert!(templates::CONFIG_TOML.contains("schema_version = 3"));
+        assert!(templates::CONFIG_TOML.contains("model_strength"));
+        assert!(templates::CONFIG_TOML.contains("workspace_write"));
+    }
+
+    #[test]
+    fn build_instructions_keep_the_human_cli_boundary() {
+        assert!(BUILD.contains("does not authorize the chat to run any Orchestrate CLI command"));
+        assert!(BUILD.contains("never runs `orchestrate build guide`"));
+        assert!(BUILD.contains("own the complete Work/Review/Unblock/Audit loop"));
+        assert!(!BUILD.contains("`$build` invokes the driver after preparation"));
+        let dispatcher = include_str!("../../../skills/build/SKILL.md");
+        assert!(dispatcher.contains("`$build` is not authorization"));
+        assert!(dispatcher.contains("Do not execute `orchestrate build guide`"));
+        assert!(!dispatcher.contains("You must run `orchestrate build guide`"));
     }
 }

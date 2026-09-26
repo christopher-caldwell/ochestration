@@ -1,0 +1,57 @@
+{
+  "adapter": "codex",
+  "installed_version": "codex-cli 0.156.1",
+  "temporary_store_effort": "effort-e61630ba4632e17e",
+  "temporary_config_file": "config.toml",
+  "roles": {
+    "worker": {
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "medium",
+      "attribute_arguments": [
+        "--model",
+        "gpt-5.6-luna",
+        "-c",
+        "model_reasoning_effort=medium"
+      ],
+      "sandbox": "workspace-write"
+    },
+    "reviewer": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "low",
+      "attribute_arguments": [
+        "--model",
+        "gpt-5.6-sol",
+        "-c",
+        "model_reasoning_effort=low"
+      ],
+      "sandbox": "read-only"
+    },
+    "unblocker": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "low",
+      "attribute_arguments": [
+        "--model",
+        "gpt-5.6-sol",
+        "-c",
+        "model_reasoning_effort=low"
+      ],
+      "sandbox": "read-only"
+    },
+    "once_over": {
+      "configured": false,
+      "invocations": 0
+    }
+  },
+  "sandbox_method": "A temporary PATH launcher selected role by its isolated fixture path and injected --sandbox per role. It logged role/mode in sandbox-enforcement.tsv. The launcher did not use or change global Codex configuration and never enabled full access. The controller preflight JSON records the wrapper executable and model/effort args; the wrapper-side sandbox mode is separately evidenced.",
+  "provider_config_permission": "unset in Build config; the wrapper supplied the explicit test sandbox. No global settings, credentials, or permissions were changed.",
+  "rerun_after_transport_capture_fix": {
+    "command": "orchestrate --root /tmp/orch-build-live.CpfPVP/store build preflight --effort effort-e61630ba4632e17e --live --authorize-live",
+    "exit_code": 0,
+    "preflight_evidence_dir": "/private/tmp/orch-build-live.CpfPVP/store/projects/project/efforts/codex-live-validation/build/preflight/live-1790365022443",
+    "worker_outcome": "cannot_commit",
+    "reviewer_outcome": "read_and_command_verified",
+    "unblocker_outcome": "read_and_command_verified",
+    "once_over": "absent",
+    "evidence": "../preflight-result.json"
+  }
+}

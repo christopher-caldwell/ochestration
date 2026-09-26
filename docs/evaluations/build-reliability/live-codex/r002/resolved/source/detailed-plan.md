@@ -1,0 +1,1 @@
+For this bounded local phase, record the implementation contract and verification boundaries in implementation.md. Live provider acceptance is excluded. Do not make network requests or access credentials.

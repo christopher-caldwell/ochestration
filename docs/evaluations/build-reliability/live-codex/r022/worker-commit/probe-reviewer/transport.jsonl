@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a0da36-d27d-7152-94b9-d19a6018532b"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll read the fixture token and query the current commit without modifying anything."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,120p' README.md && git rev-parse HEAD\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,120p' README.md && git rev-parse HEAD\"","aggregated_output":"orchestrate preflight fixture\nprobe token: orchestrate-probe-3e3b08a00065f0ee\na22aa09022fc6a181c541ea18bb9916520cec552\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"orchestrate-probe-3e3b08a00065f0ee\na22aa09022fc6a181c541ea18bb9916520cec552"}}
+{"type":"turn.completed","usage":{"input_tokens":30420,"cached_input_tokens":27008,"cache_write_input_tokens":0,"output_tokens":161,"reasoning_output_tokens":0}}

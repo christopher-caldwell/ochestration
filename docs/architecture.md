@@ -22,9 +22,11 @@ Those guides, and the Build `plan.json` / `config.toml` templates, are Markdown 
 and the Cursor orchestration rule) only explain how to install or update that CLI and those
 dispatchers.
 
-Work, review, final Audit, and unblock are internal Build roles. They are not installed skills.
+Work, review, final Audit, and unblock are internal Build roles; a configured, off-by-default
+`once_over` role is advisory only and never gates the formal Audit. They are not installed skills.
 Whenever Build starts or resumes, the driver writes the role guides embedded in the running
-CLI into the Build directory, replacing any previously generated copies.
+CLI into the Build directory, replacing any previously generated copies, and keeps the exact
+instruction bytes each invocation received beside its action.
 
 ## Authority boundaries
 
@@ -107,6 +109,20 @@ implementation. Rust requires one coverage row per binding requirement, rejects 
 for an unconditional requirement, requires evidence when a conditional requirement is marked
 `not_applicable`, and derives the verdict: any failure gives `CHANGES_REQUIRED`;
 otherwise unknown or missing coverage gives `BLOCKED`; otherwise a submitted implementation passes.
+Publication, replay and consumption bind to the exact final-Audit attempt identity, so a replay
+republishes one immutable bundle while a genuinely new attempt at the same implementation
+publishes separately, and no Audit is ever selected by implementation or recency.
+
+A stopped Build stays stopped until an operator resolves it. Resolution records the exact
+intervention, the stopped action, the frozen digests and the observed checkout, then authorizes
+one distinct continuation; it dispatches nothing itself, and a proposed change to the adopted
+contract is refused and directed to a linked successor Build. Role attributes live in Build
+`config.toml` and are forwarded to the provider exactly as configured, or refused with the role,
+attribute and adapter named; an operator-authorized overlay is immutable, versioned, and governs
+only the actions recorded after it. Cleanup and export are separate operator commands: cleanup
+removes only generated Cargo products from checkouts the controller recorded and owns, and export
+selects its members from durable state before traversal and verifies the archive before promoting
+it, reporting collection independently of the Build's semantic outcome.
 
 ## Storage
 

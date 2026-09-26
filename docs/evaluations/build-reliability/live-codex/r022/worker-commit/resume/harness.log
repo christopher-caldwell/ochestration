@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (target/debug/deps/orchestrate_build-4f217755e9e6eb74)
+
+running 1 test
+{
+  "completion": "Completed",
+  "head_after": "36e3bf06f302fa254688bd6257dc010d8544aaa6",
+  "head_before": "4fc39df2b08c738e61180aee1f423255403caf1e",
+  "observed_session": "01a0da36-77c1-70e2-9c4a-02f342ab7163",
+  "requested_session": "01a0da36-77c1-70e2-9c4a-02f342ab7163",
+  "resume_commit_contains_expected_file": true
+}
+test tests::live_worker_resume_commits_through_the_configured_adapter ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 104 filtered out; finished in 19.38s
+

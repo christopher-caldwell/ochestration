@@ -1,0 +1,3 @@
+# Synthetic active contract change evidence
+
+Fixture-only signed change record `SYNTHETIC-CC-2026-09-25-001`, received 2026-09-25 and marked effective immediately by the synthetic service owner. It states that the currently deployed manual-listings route is `https://api-v2.kvcore.invalid/v2/manual/listings?limit=1`, the required header is `Authorization: Bearer <Entry-resolved PLATFORM_TOKEN>`, and authenticated redirects are enabled for this deployment. The record says the prior endpoint and redirect policy are retired. Its signature check is represented as verified within this isolated fixture only. These facts are intentionally inconsistent with binding service-contract requirement R-010. This synthetic record does not amend the frozen Reconciled Discovery.

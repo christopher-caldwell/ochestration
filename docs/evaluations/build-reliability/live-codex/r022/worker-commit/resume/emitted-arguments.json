@@ -1,0 +1,26 @@
+{
+  "arguments": [
+    "exec",
+    "--json",
+    "-C",
+    "/private/tmp/claude-502/orch-live-worker-commit/store/projects/project/efforts/live-worker-commit/build/preflight/live-1790367397511/fixture-worker",
+    "--add-dir",
+    "/private/tmp/claude-502/orch-live-worker-commit/store/projects/project/efforts/live-worker-commit/build/preflight/live-1790367397511/resume-worker",
+    "resume",
+    "01a0da36-77c1-70e2-9c4a-02f342ab7163",
+    "--model",
+    "gpt-5.6-luna",
+    "-c",
+    "model_reasoning_effort=medium",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "This is an Orchestrate preflight resume probe, not product work. In this disposable fixture, create a file named `resume-worker.txt` containing the single line `resume worker commit`, stage it, and commit it with the message `resume worker commit`. Change nothing else. In your final response, briefly report whether the commit succeeded."
+  ],
+  "configured": {
+    "adapter": "codex",
+    "model": "gpt-5.6-luna",
+    "permission": "full_access",
+    "reasoning_effort": "medium"
+  },
+  "program": "codex",
+  "requested_session": "01a0da36-77c1-70e2-9c4a-02f342ab7163"
+}
