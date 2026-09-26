@@ -524,7 +524,7 @@ fn effort_slug_freezes_request_and_constraints_but_other_slugs_are_allowed() {
         .contains("prepared request is immutable")
     );
     assert_eq!(
-        init("example-effort-revised", "request B", "constraint B")["semantic_outcome"],
+        init("revised-effort", "request B", "constraint B")["semantic_outcome"],
         "EFFORT_READY"
     );
 }
@@ -1614,7 +1614,7 @@ fn reconciliation_accepts_explicit_user_clarification_as_direct_authority() {
     let mut clarified = proposal(&selected[0]);
     clarified.requirements[0].source_refs = vec![];
     clarified.requirements[0].user_clarification =
-        Some("The user chose local time for displayed timestamps.".into());
+        Some("The user chose UTC timestamps for exported reports.".into());
     let path = write_proposal(&root, &clarified);
     let reconciled = reference(
         &command(
@@ -1643,7 +1643,7 @@ fn reconciliation_accepts_explicit_user_clarification_as_direct_authority() {
     assert!(requirement.requirement.governing);
     assert_eq!(
         requirement.user_clarification.as_deref(),
-        Some("The user chose local time for displayed timestamps.")
+        Some("The user chose UTC timestamps for exported reports.")
     );
 }
 
@@ -1778,7 +1778,7 @@ fn build_prepare_is_a_non_executing_canonical_help_path() {
     let guide = String::from_utf8(output.stdout).unwrap();
     assert!(guide.contains("Preparation, `$build`, and readiness discussion do not authorize any Orchestrate CLI command"));
     assert!(guide.contains(
-        "explicit Build launch authorizes the Rust controller to own the complete internal Work"
+        "An explicit Build launch authorizes the Rust controller to run the Work ↔ Review phase loop"
     ));
     assert!(
         !root.exists(),
