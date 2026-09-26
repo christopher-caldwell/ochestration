@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn build_instructions_keep_the_human_cli_boundary() {
         assert!(BUILD.contains("Preparation, `$build`, and readiness discussion do not authorize any Orchestrate CLI command"));
-        assert!(BUILD.contains("explicit Build launch authorizes the Rust controller to own the complete internal Work → Review → Audit loop"));
+        assert!(BUILD.contains("explicit Build launch authorizes the Rust controller to run the Work ↔ Review phase loop through an exact Implementation candidate and then invoke the independent Audit stage automatically"));
         assert!(!BUILD.contains("`$build` invokes the driver after preparation"));
         let dispatcher = include_str!("../../../skills/build/SKILL.md");
         assert!(dispatcher.contains("`$build` is not authorization"));

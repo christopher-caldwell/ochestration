@@ -5,7 +5,8 @@ Orchestrate is deterministic machinery for an interactive model-window workflow:
 ```text
 Prepare → Discovery × N → Reconcile → STOP
 
-Later, explicitly: Build → done
+Later, explicitly authorized:
+Adoption → Build (Work ↔ Review phases) → Implementation → Audit → reviewed final product
 ```
 
 The model does the engineering work. Orchestrate keeps the request, Discovery runs, reconciled
@@ -33,8 +34,8 @@ The short version is:
 
 5. Later, use `$build` to discuss and prepare the effort and detailed implementation plan. It does
    not run the CLI or start/continue the driver. Separately authorize the exact Build CLI operation
-   when ready; the Rust driver then owns work/review/correction, implementation registration, and
-   final Audit until completion or a safe stop.
+   when ready; the Rust driver then runs Work ↔ Review phases, registers the exact Implementation, and
+   invokes independent Audit automatically until reviewed completion or a safe stop.
 ```
 
 You normally interact through Orchestrate skills. A skill may load its current instructions from
@@ -71,9 +72,11 @@ See the [installation guide](docs/guides/agent-installation.md) for the manual f
 - **Discovery** investigates the frozen repository and may ask you material questions.
 - **Reconcile** analyzes only the Discovery outputs you explicitly give it and produces the
   authoritative answer to "what are we actually going to do?"
-- **Build** is a checkpointed Rust-driven Work → Review → Audit gate runner with one bounded Unblock detour.
-- **Audit** checks the exact registered implementation against the binding reconciled requirements;
-  unattended Build invokes it automatically.
+- **Build** runs checkpointed Work ↔ Review across ordered phases and produces an exact Implementation candidate.
+- **Audit** independently checks that exact registered Implementation against the complete binding
+  Reconciled Discovery. The unattended Rust driver invokes it automatically under the Build launch
+  authorization, with one bounded Unblock detour available. Audit also supports eligible registered
+  Implementations from manual or external work through its public workflow, without running Build.
 
 ## How roles talk to providers
 

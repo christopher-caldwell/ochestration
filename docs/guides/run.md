@@ -162,7 +162,7 @@ For more detail, see [Reconcile](reconcile.md).
 
 ---
 
-## 4. Build and final Audit
+## 4. Build, then independent Audit
 
 Later, use `$build` to discuss and prepare the exact effort, Reconciled Discovery, and phase
 implementation documents. Invoking `$build` does not run a CLI command, write Build files, start or
@@ -173,12 +173,20 @@ has a required `phase.md` and optional immediate Markdown task/context files. On
 bytes are frozen by digest at initialization. Phase Markdown may be refined after a semantic stop.
 Each explicit Build launch validates the plan and documents and loads config once.
 
-An explicit `orchestrate build --effort "<effort>"` launch authorizes the complete internal
-Work → Review → Audit loop. Work commits at the product checkpoint. Review and Audit use disposable
-detached checkouts. A phase review passes to the next phase or final Audit, or sends one complete
-correction report back to Work. Audit derives its verdict from exact requirement coverage: pass
-completes, failure routes to final-scope Work, and unknown or missing coverage routes through one
-bounded Unblock detour. Technical suggestions remain advisory.
+An explicit `orchestrate build --effort "<effort>"` launch authorizes Rust to run the Work ↔ Review
+phase loop, register the exact Implementation candidate, and invoke the independent Audit stage
+automatically. No additional confirmation or orchestration command is needed before Audit. Work
+commits at the product checkpoint. Review and Audit use disposable detached checkouts. A phase
+Review passes to the next phase or, after the last phase, Implementation registration; corrections
+return to Work with the complete report. Rust derives the Audit verdict from exact requirement
+coverage: `PASS` permits reviewed completion; `CHANGES_REQUIRED` routes to final-scope Build Work,
+then a new registered Implementation and another Audit; unknown or missing coverage routes through
+one bounded Unblock detour. Technical suggestions remain advisory.
+
+Audit also remains independently callable for eligible registered Implementations from manual or
+external work: Reconciled Discovery → Adoption → implementation → Implementation registration →
+Audit. Use the public [Audit workflow](../../crates/guides/resources/guides/audit.md); no Build
+controller run or Build state is required.
 
 `orchestrate build status --effort "<effort>"` reports durable state only. Provider failure,
 malformed output, Git invariant failure, or interrupted execution stops for explicit reset.

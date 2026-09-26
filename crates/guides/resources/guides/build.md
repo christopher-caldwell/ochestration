@@ -2,9 +2,11 @@
 
 ## Human-controlled CLI boundary
 
-Preparation, `$build`, and readiness discussion do not authorize any Orchestrate CLI command. Do not run `orchestrate build guide`, `prepare`, `scaffold`, `status`, `reset`, or the Build driver unless the human explicitly authorizes that exact operation. An explicit Build launch authorizes the Rust controller to own the complete internal Work → Review → Audit loop and its single bounded Unblock detour; no per-gate approval is needed.
+Preparation, `$build`, and readiness discussion do not authorize any Orchestrate CLI command. Do not run `orchestrate build guide`, `prepare`, `scaffold`, `status`, `reset`, or the Build driver unless the human explicitly authorizes that exact operation. An explicit Build launch authorizes the Rust controller to run the Work ↔ Review phase loop through an exact Implementation candidate and then invoke the independent Audit stage automatically, with a single bounded Unblock detour; no per-transition or separate Audit approval is needed.
 
 ## Authority and preparation
+
+Build runs Work ↔ Review across ordered phases and produces an exact Implementation candidate. Audit independently assesses that Implementation against the complete adopted Reconciled Discovery. These are distinct stages that the same unattended Rust driver coordinates; no separate process or orchestration command is required. Standalone Audit also accepts eligible registered Implementations from manual or external work without running Build.
 
 Build implements one exact, implementation-ready Reconciled Discovery. That artifact is binding WHAT; the phase Markdown documents are HOW and ordering. Do not let the phase Markdown documents add, remove, or weaken requirements. The Discovery baseline must be an ancestor of product `HEAD`. A new Build starts only from a clean Git-visible checkout; ignored files are allowed.
 
@@ -56,7 +58,7 @@ Only an explicit launch starts provider work:
 orchestrate --root "<root>" build --effort "<effort>"
 ```
 
-The controller begins at the current `HEAD` checkpoint and routes fixed gates. Work completes the entire assigned phase and commits against the product repository. Review inspects the whole phase and Audit inspects the complete implementation at that exact commit in disposable detached worktrees. Review passes to the next phase or final Audit; correction returns to Work with the complete report. Audit publishes the exact implementation lineage and derives the verdict from its assessment. A failed assessment routes to final-scope Work; unknown or missing coverage enters Unblock.
+The controller begins at the current `HEAD` checkpoint and routes fixed gates. Work completes the entire assigned phase and commits against the product repository. Review inspects the whole phase and Audit inspects the complete implementation at that exact commit in disposable detached worktrees. Review passes to the next phase; after the last phase passes, the controller registers the exact Implementation and invokes independent Audit. Review correction returns to Work with the complete report. Rust publishes the Audit against that Implementation and derives the verdict from its assessment. `PASS` permits reviewed completion. `CHANGES_REQUIRED` routes to final-scope Build Work, followed by registration of a new Implementation candidate and another Audit; unknown or missing coverage enters Unblock.
 
 A provider's explicit `blocked` result enters Unblock once in a disposable source checkout. `retry` restores the repository to its last checkpoint and retries the same gate with the originating context, original correction, and Unblock guidance. If the retry blocks again, or Unblock returns `blocked`, Build stops as `stopped / blocked`; it does not start another Unblock. Work partial changes are discarded back to the saved checkpoint. Blocker reports and guidance remain ordinary feedback. After addressing it, explicitly launch `build --effort <id>` to continue. Continuation never resets the product checkout: a clean unchanged checkout retries the gate, while a clean descendant commit becomes a candidate for Review or Audit. Dirty or unrelated repository state is rejected without deleting it. Explicit continuation starts a new attempt with one available Unblock detour.
 

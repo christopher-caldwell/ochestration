@@ -3,39 +3,58 @@
 ```text
 Prepare → Discovery × N → Reconcile → STOP
 
-Later: explicit Build → Adoption → Work → Review → Audit → done
-                                      ↑          │
-                                      └─ correction
+Later, explicitly authorized:
+Adoption → Build (Work ↔ Review across ordered phases) → Implementation
+                                                           ↓
+                                                         Audit
+                                                           ↓
+                                                  reviewed final product
 ```
 
 ## Authority and instruction ownership
 
 The prepared request and frozen user constraints establish intent. Discovery investigates; Reconcile publishes the binding contract. The detailed Build plan controls only implementation approach and ordering. Work, Review, and Audit make engineering judgments. Rust validates exact artifacts, commits, response schemas, and checkout state, then routes the fixed state machine. It does not infer engineering truth from reports.
 
-Checked-in skills dispatch substantive work. Build is intentionally different: `$build`, readiness discussion, or preparation is not CLI authorization. The canonical human boundary is in the embedded [Build guide](../crates/guides/resources/guides/build.md). An explicit Build launch authorizes the full internal gate loop; individual transitions require no additional approval.
+Checked-in skills dispatch substantive work. Build is intentionally different: `$build`, readiness discussion, or preparation is not CLI authorization. The canonical human boundary is in the embedded [Build guide](../crates/guides/resources/guides/build.md). An explicit Build launch authorizes Rust to run the Work ↔ Review phase loop, register the exact Implementation candidate, and invoke independent Audit automatically; individual transitions and Audit invocation require no additional approval.
 
 ## Discovery and Reconcile
 
 Each Discovery operates from the effort's frozen baseline and publishes an immutable evidence bundle. Reconcile binds an explicit set of finalized Discovery artifacts; it has no repository access and adds no unselected investigation. A Reconciled Discovery separates exhaustive binding requirements from advisory technical suggestions. Rust validates structure and lineage, not the truth of findings.
 
-## Build state and routing
+## Build and Audit responsibilities
+
+Build answers whether all planned phases have been implemented and reviewed, producing an exact Implementation candidate. Audit independently assesses that exact Implementation against the complete binding adopted Reconciled Discovery. The same unattended Rust controller may coordinate both stages in sequence and react to the Audit verdict. This requires neither a separate OS process nor a second orchestration command. Rust keeps the train moving without an AI orchestrating transitions.
+
+Standalone Audit remains available through its public workflow for any eligible registered Implementation, including manual or external work:
+
+```text
+Reconciled Discovery → Adoption → manual / external / other implementation
+  → Implementation registration → Audit
+```
+
+Audit does not require BuildState, phase state, Worker or Reviewer sessions, Build action directories, or a prior Build controller run. The internal Final Audit guide is an instruction surface used by the unattended controller to invoke this independent assessment, not another phase reviewer.
+
+## Build state and controller routing
 
 Build schema versions are intentionally breaking: plan 4, config 4, state 5. There is no migration path for earlier Build state. Initialization requires a clean Git-visible checkout, verifies that the Discovery baseline is an ancestor of current `HEAD`, creates/reuses Adoption, and records `HEAD` as both the starting point and first checkpoint. A digest binds only the exact `plan.json` bytes; each explicit launch validates the plan and loads configuration once.
 
 The durable controller state contains the exact Reconciled and Adoption refs, starting commit, immutable plan digest, scope, gate, status, checkpoint commit, bounded handoff refs, optional Unblock context, current action id, implementation ref, completion refs, and a transition-relevant stop. Every role receives the complete Reconciled contract; ordered phase directory names route Work/Review, and their Markdown documents are model-facing guidance. Action paths in state are relative to the Build directory. History is retained, but transitions use only state.
 
 ```text
-phase Work ──complete──→ phase Review ──pass──→ next phase Work
-     │                       │                         └─last phase→ final Audit
+phase Work ──complete──→ phase Review
+     │                       ├─pass, more phases→ next phase Work
+     │                       ├─pass, last phase→ register Implementation → Audit
      │                       └─changes_required→ same phase Work
      ├─blocked→ Unblock ─retry→ same gate / checkpoint
      │                       └─blocked→ stopped; explicit relaunch
      └─malformed/provider/Git failure→ reset_required; explicit reset
 
-final Audit ──pass──→ complete
-          ├─changes_required──→ final Work → Audit
-          └─unknown/missing coverage──→ Unblock
+Audit ──PASS──→ reviewed completion
+      ├─CHANGES_REQUIRED──→ final-scope Build Work → register new Implementation → Audit
+      └─unknown/missing coverage──→ Unblock
 ```
+
+`Gate::Audit` remains the controller’s routing point for invoking the independent Audit stage. Stage separation does not require the driver to exit after the last phase Review.
 
 Review and Audit use detached disposable worktrees at the exact checkpoint. Work succeeds only when its reported commit exists, descends from the prior checkpoint, equals product `HEAD`, and leaves a clean tracked/untracked checkout. Review must return the inspected checkpoint and leave its worktree clean. Audit associates one exact submitted implementation artifact with its assessment; the existing Audit contract derives `PASS`, `CHANGES_REQUIRED`, or `BLOCKED`.
 
@@ -47,6 +66,8 @@ Every launch records the selected native adapter config and exact argv before at
 
 ## Artifacts and storage
 
-Adoption binds one exact Reconciled artifact. Implementation records the Build start and target commits/trees and names Adoption and Reconciled ancestry. Audit publishes immutable assessment plus derived verdict. Bundle manifests hash payloads and record parent refs; the journal is diagnostic, while artifacts and Build state are authoritative. Store format and artifact schema version 6 remain independent of the breaking Build-local schemas.
+Adoption binds one exact Reconciled artifact. Implementation records the start and target commits/trees and names Adoption and Reconciled ancestry; it may be registered by the Build controller or through the public registration workflow. Audit publishes immutable assessment plus derived verdict. Bundle manifests hash payloads and record parent refs; the journal is diagnostic, while artifacts and Build state are authoritative. Store format and artifact schema version 6 remain independent of the breaking Build-local schemas.
+
+`orchestrate lineage` walks artifact parentage: Discovery artifacts → Reconciled Discovery → Adoption → Implementation → Audit. The Effort separately holds the original request, frozen context/constraints, and baseline. Together these provide traceability from user intent to the reviewed implementation; the original request is not an additional artifact in the lineage command’s graph.
 
 The CLI retains `build guide`, `prepare`, `scaffold`, and `status`; adds `reset`; and removes resume, preflight, cleanup, export, resolve, and authority-amendment machinery. Optional OnceOver and evidence-output protocols are removed.

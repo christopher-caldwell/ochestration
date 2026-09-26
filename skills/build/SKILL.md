@@ -8,4 +8,4 @@ disable-model-invocation: true
 
 Use the canonical workflow in `crates/guides/resources/guides/build.md` when the repository is available. Help the user prepare by inspecting repository files and explaining the next step. The CLI's non-executing help command is `orchestrate build prepare`; ask for explicit authorization before running it. Each other Build command is a separate operation and needs explicit authorization for that command or clearly defined operation.
 
-If the human explicitly authorizes the exact Build launch, the Rust driver owns the full Work → Review → Audit loop and one bounded Unblock detour without approval at each internal transition. Never infer launch authorization from `$build`, a request to prepare, or readiness discussion.
+If the human explicitly authorizes the exact Build launch, the Rust driver runs the Work ↔ Review phase loop, registers the exact Implementation, and invokes the independent Audit stage automatically, with one bounded Unblock detour and no approval at each transition or additional confirmation before Audit. Never infer launch authorization from `$build`, a request to prepare, or readiness discussion.
