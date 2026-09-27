@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod chat_import;
 mod prepared_request;
 
 #[derive(Parser)]
@@ -27,6 +28,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Init(Init),
+    /// Import a collaborative Chat Discovery ZIP into the current repository; stop before Build.
+    Import {
+        bundle: PathBuf,
+    },
     Discovery {
         #[command(subcommand)]
         command: Discovery,
@@ -267,6 +272,15 @@ fn run() -> Result<()> {
         return Ok(());
     }
     match command {
+        Command::Import { bundle } => {
+            let repo = std::env::current_dir()?;
+            let canonical_repo = fs::canonicalize(&repo)?;
+            let store_root = normalized_absolute_path(&root.unwrap_or_else(default_root))?;
+            ensure_outside_project(&store_root, &canonical_repo, "orchestration store root")?;
+            let result = chat_import::import(&Store::open(store_root)?, &repo, &bundle)?;
+            output("SUCCESS", "IMPLEMENTATION_READY", result);
+            Ok(())
+        }
         Command::Init(args) => {
             let input = resolve_init_input(root, args)?;
             let canonical_repo = fs::canonicalize(&input.project).with_context(|| {
@@ -374,6 +388,7 @@ fn initialize(store: &Store, input: InitInput) -> Result<()> {
 fn execute(store: Store, command: Command) -> Result<()> {
     match command {
         Command::Init(_)
+        | Command::Import { .. }
         | Command::Discovery {
             command: Discovery::Guide,
         }

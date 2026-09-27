@@ -21,6 +21,7 @@ orchestrate-guides = { path = "../guides" }
 serde_json.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+zip = { version = "3.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 orchestrate-core = { path = "../core" }

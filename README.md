@@ -3,14 +3,23 @@
 Orchestrate is deterministic machinery for an interactive model-window workflow:
 
 ```text
-Prepare → Discovery × N → Reconcile → STOP
+Normal:
+Prepare → Discovery × N → Reconcile ─┐
+                                     ├→ Reconciled Discovery → STOP
+Chat:
+Conversation → import as 1 Discovery ┘
 
-Later, explicitly authorized:
-Adoption → Build (Work ↔ Review phases) → Implementation → Audit → reviewed final product
+Later, explicitly:
+Reconciled Discovery → Adoption → Build → Implementation → Audit
 ```
 
 The model does the engineering work. Orchestrate keeps the request, Discovery runs, reconciled
 contract, implementation, and Audit tied to exact immutable inputs.
+
+For a collaborative single-conversation alternative to independent Discovery runs, use the
+[Chat Discovery guide](docs/chat-discovery.md). Importing its ZIP prepares the same Reconciled
+Discovery and Build handoff, then stops. Normal Reconcile still requires at least two distinct
+implementation-ready Discoveries.
 
 ## Start here
 

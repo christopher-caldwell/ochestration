@@ -1,14 +1,14 @@
 # Architecture
 
 ```text
-Prepare → Discovery × N → Reconcile → STOP
+Normal:
+Prepare → Discovery × N → Reconcile ─┐
+                                     ├→ Reconciled Discovery → STOP
+Chat:
+Conversation → import as 1 Discovery ┘
 
-Later, explicitly authorized:
-Adoption → Build (Work ↔ Review across ordered phases) → Implementation
-                                                           ↓
-                                                         Audit
-                                                           ↓
-                                                  reviewed final product
+Later, explicitly:
+Reconciled Discovery → Adoption → Build → Implementation → Audit
 ```
 
 ## Authority and instruction ownership
@@ -19,7 +19,7 @@ Checked-in skills dispatch substantive work. Build is intentionally different: `
 
 ## Discovery and Reconcile
 
-Each Discovery operates from the effort's frozen baseline and publishes an immutable evidence bundle. Reconcile binds an explicit set of finalized Discovery artifacts; it has no repository access and adds no unselected investigation. A Reconciled Discovery separates exhaustive binding requirements from advisory technical suggestions. Rust validates structure and lineage, not the truth of findings.
+Normal Discovery operates from the effort's frozen baseline and publishes an immutable evidence bundle. Normal Reconcile binds at least two distinct finalized implementation-ready Discovery artifacts; it has no repository access and adds no unselected investigation. The optional [Chat Discovery import](chat-discovery.md) records one collaborative conversation as one Discovery source, then publishes an ordinary Reconciled Discovery from it. The importer captures the target repository's committed HEAD as the Effort baseline and prepares Build files, but does not create Adoption or Build state. A Reconciled Discovery separates exhaustive binding requirements from advisory technical suggestions. Rust validates structure and lineage, not the truth of findings.
 
 ## Build and Audit responsibilities
 

@@ -399,7 +399,7 @@ pub fn render_reconciled_discovery(reconciled: &ReconciledDiscovery) -> String {
             }
             (Some(clarification), false) => {
                 markdown.push_str(&format!(
-                    "\n**Authority:** Explicit Reconcile-time user clarification\n\n> {clarification}\n"
+                    "\n**Authority:** Explicit user authority\n\n> {clarification}\n"
                 ));
             }
             (None, true) => {
