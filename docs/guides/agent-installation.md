@@ -36,7 +36,13 @@ Build controller uses these guides embedded in the CLI.
 
 ## Manual fallback
 
-Install the CLI from the checkout:
+If `just` is available, run `just install-cli` from this checkout for the CLI and Codex skills. Use
+`just update-cli` to refresh both from this checkout. For another host or an established custom
+skill directory, set `ORCHESTRATE_SKILLS_DIR` to its absolute path before either command. Use
+`install-only-cli` or `update-only-cli` for the binary alone, and `install-skills` or `update-skills`
+for the skills alone. The skill recipes also accept an absolute destination as an argument.
+
+Without `just`, install the CLI from the checkout:
 
 ```sh
 cargo install --path "/absolute/path/to/orchestration/crates/cli" --locked

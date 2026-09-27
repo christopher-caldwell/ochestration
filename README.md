@@ -72,6 +72,13 @@ build
 
 See the [installation guide](docs/guides/agent-installation.md) for the manual fallback.
 
+With `just` installed, run `just install-cli` from this checkout to install the CLI and six skills
+for Codex. Run `just update-cli` to refresh both from the current checkout, including CLI changes
+that keep the same version number. Use `just install-only-cli` or `just update-only-cli` for the
+binary alone, and `just install-skills` or `just update-skills` for the skills alone. Skill recipes
+default to `~/.agents/skills`; pass an absolute destination to a skill recipe or set
+`ORCHESTRATE_SKILLS_DIR=/absolute/path/to/host/skills` for a combined recipe.
+
 ## What each stage does
 
 - **Prepare** reads the original ticket or freeform request and may ask focused questions about
