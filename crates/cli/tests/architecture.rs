@@ -414,3 +414,22 @@ fn assert_install_body(text: &str, label: &str, skill_dir: &str, scope: &str) {
         "{label} must exclude ordinary work"
     );
 }
+
+#[test]
+fn build_guides_describe_live_output_and_color_without_changing_launch_authority() {
+    let public = fs::read_to_string(repo_root().join("docs/guides/build-and-audit.md")).unwrap();
+    for guide in [orchestrate_guides::BUILD, public.as_str()] {
+        assert!(
+            guide.contains("always shows a live status and append-only event history on stderr")
+        );
+        assert!(guide.contains("stdout remains exactly one JSON command result"));
+        assert!(guide.contains("piped stderr is plain append-only output"));
+        assert!(guide.contains("ORCHESTRATE_BUILD_COLOR=auto|always|never"));
+        assert!(guide.contains("takes precedence over `NO_COLOR`"));
+        assert!(guide.contains("even under a pipe (including ANSI and cursor control)"));
+        assert!(guide.contains("full reviewed-phase bar does not mean final Audit passed"));
+        assert!(guide.contains("orchestrate build status --effort <id>"));
+        assert!(!guide.contains("carries compact gate/transition messages"));
+        assert!(!guide.contains("contains compact transition messages"));
+    }
+}

@@ -321,6 +321,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "symlink",
+ "toml",
  "zip",
 ]
 

@@ -24,6 +24,7 @@ serde_yaml.workspace = true
 zip = { version = "3.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+toml.workspace = true
 orchestrate-core = { path = "../core" }
 symlink = "0.1.0"
 

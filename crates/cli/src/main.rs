@@ -11,6 +11,11 @@ use std::{
 };
 
 mod build_display;
+#[cfg(test)]
+mod build_integration_tests;
+#[cfg(test)]
+#[path = "../../build/test_support/mod.rs"]
+mod build_test_support;
 mod chat_import;
 mod prepared_request;
 
@@ -583,25 +588,17 @@ fn execute(store: Store, command: Command) -> Result<()> {
         Command::Build {
             effort,
             command: None,
-        } => match orchestrate_build::run_with_observer(
-            &store,
-            orchestrate_build::BuildRequest {
-                effort,
-                project: std::env::current_dir()?,
-            },
-            &mut build_display::Display::new(std::io::stderr(), build_display::Mode::stderr()),
-        )? {
-            orchestrate_build::BuildResult::Completed(done) => output(
-                "SUCCESS",
-                "BUILD_COMPLETE",
-                serde_json::json!({"implementation": done.implementation, "audit": done.audit}),
-            ),
-            orchestrate_build::BuildResult::Blocked { detail, state } => output(
-                "STOPPED",
-                "BLOCKED",
-                serde_json::json!({"detail": detail, "state": state}),
-            ),
-        },
+        } => println!(
+            "{}",
+            build_output(orchestrate_build::run_with_observer(
+                &store,
+                orchestrate_build::BuildRequest {
+                    effort,
+                    project: std::env::current_dir()?,
+                },
+                &mut build_display::Display::new(std::io::stderr(), build_display::Mode::stderr()),
+            )?)
+        ),
         Command::Build {
             command: Some(BuildCommand::Status { effort }),
             ..
@@ -699,12 +696,34 @@ fn bundle_file(bundle: &Path, filename: &str) -> PathBuf {
         bundle.to_owned()
     }
 }
+fn build_output(result: orchestrate_build::BuildResult) -> serde_json::Value {
+    match result {
+        orchestrate_build::BuildResult::Completed(done) => output_value(
+            "SUCCESS",
+            "BUILD_COMPLETE",
+            serde_json::json!({"implementation": done.implementation, "audit": done.audit}),
+        ),
+        orchestrate_build::BuildResult::Blocked { detail, state } => output_value(
+            "STOPPED",
+            "BLOCKED",
+            serde_json::json!({"detail": detail, "state": state}),
+        ),
+    }
+}
+fn output_value(
+    operation_status: &str,
+    semantic_outcome: &str,
+    details: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({"operation_status": operation_status, "semantic_outcome": semantic_outcome, "details": details})
+}
 fn output(operation_status: &str, semantic_outcome: &str, details: serde_json::Value) {
     println!(
         "{}",
-        serde_json::json!({"operation_status": operation_status, "semantic_outcome": semantic_outcome, "details": details})
+        output_value(operation_status, semantic_outcome, details)
     )
 }
+
 impl Command {
     /// The action whose embedded guide this command prints, if it is a guide lookup.
     /// Guide lookup must not open a store, so `run` handles it before any other work.

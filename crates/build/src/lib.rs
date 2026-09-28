@@ -3,6 +3,9 @@
 //! Rust validates durable facts and routes the fixed Work → Review → Audit
 //! loop. Providers own engineering judgment and return one structured result.
 
+#[cfg(test)]
+extern crate self as orchestrate_build;
+
 pub mod adapter;
 pub mod controller;
 pub mod observation;

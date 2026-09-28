@@ -2220,7 +2220,19 @@ fn build_reset_returns_durable_state_json_without_dispatch() {
     .unwrap();
     fs::write(repo.join("source.txt"), "dirty tracked data\n").unwrap();
     fs::write(repo.join("ordinary.tmp"), "remove on reset\n").unwrap();
-    let reset = command(&root, &["build", "reset", "--effort", &effort_id]);
+    let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .args(["build", "reset", "--effort", &effort_id])
+        .env("ORCHESTRATE_BUILD_COLOR", "always")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        format!("RESET checkpoint={checkpoint} gate=Work\n")
+    );
+    let reset: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(reset["semantic_outcome"], "RESET");
     assert_eq!(reset["details"]["status"], "ready");
     assert_eq!(reset["details"]["checkpoint_commit"], checkpoint);
@@ -2276,4 +2288,145 @@ fn blocked_reconciled_discovery_cannot_be_adopted() {
         )
         .contains("not implementation-ready")
     );
+}
+
+#[test]
+fn build_live_streams_keep_one_json_result_on_nonexecuting_fixture_paths() {
+    // These persisted terminal/restarted fixtures cannot dispatch a provider.
+    let (root, repo, effort_id) = new_effort("build-live-streams");
+    let store = Store::open(&root).unwrap();
+    let effort = store.load_effort(&effort_id).unwrap();
+    let build_dir = store.phase_dir(&effort, "build").unwrap();
+    let checkpoint = git_text(&repo, &["rev-parse", "HEAD"]);
+    let reference = |kind| ArtifactRef {
+        kind,
+        artifact_id: "fixture".into(),
+        digest: "digest".into(),
+    };
+    let mut state = BuildState {
+        schema_version: STATE_VERSION,
+        reconciled: reference(ArtifactKind::ReconciledDiscovery),
+        adoption: reference(ArtifactKind::Adoption),
+        build_start_commit: checkpoint.clone(),
+        plan_digest: "missing".into(),
+        scope: Scope::Final,
+        gate: Gate::Audit,
+        status: Status::Complete,
+        checkpoint_commit: checkpoint,
+        feedback: Vec::new(),
+        unblock: None,
+        current_action_id: None,
+        implementation: None,
+        completion: Some(orchestrate_build::BuildCompletion {
+            implementation: reference(ArtifactKind::Implementation),
+            audit: reference(ArtifactKind::Audit),
+        }),
+        stop: None,
+    };
+    for status in [Status::Complete, Status::Stopped, Status::Running] {
+        state.status = status.clone();
+        if status != Status::Complete {
+            state.current_action_id = Some("a-recorded-action".into());
+            state.completion = None;
+            state.stop = if status == Status::Stopped {
+                Some(Stop {
+                    kind: StopKind::ResetRequired,
+                    detail: "Private stop prose".into(),
+                })
+            } else {
+                None
+            };
+        }
+        for (override_value, no_color, ansi) in [
+            (None, None, false),
+            (Some("auto"), Some("1"), false),
+            (Some("always"), Some("1"), true),
+            (Some("never"), None, false),
+            (None, Some("1"), false),
+        ] {
+            orchestrate_build::state::save_state(&build_dir.join("state.json"), &state).unwrap();
+            let mut command = Command::new(env!("CARGO_BIN_EXE_orchestrate"));
+            command
+                .arg("--root")
+                .arg(&root)
+                .args(["build", "--effort", &effort_id])
+                .current_dir(&repo)
+                .env_remove("ORCHESTRATE_BUILD_COLOR")
+                .env_remove("NO_COLOR");
+            if let Some(value) = override_value {
+                command.env("ORCHESTRATE_BUILD_COLOR", value);
+            }
+            if let Some(value) = no_color {
+                command.env("NO_COLOR", value);
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(0));
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                result["operation_status"],
+                if status == Status::Complete {
+                    "SUCCESS"
+                } else {
+                    "STOPPED"
+                }
+            );
+            assert_eq!(
+                result["semantic_outcome"],
+                if status == Status::Complete {
+                    "BUILD_COMPLETE"
+                } else {
+                    "BLOCKED"
+                }
+            );
+            assert_eq!(result.as_object().unwrap().len(), 3);
+            assert!(!output.stdout.contains(&0x1b));
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(stderr.starts_with("Orchestrate Build\n"));
+            assert_eq!(stderr.contains('\x1b'), ansi);
+            assert!(!stderr.contains("Private stop prose") && !stderr.contains("started"));
+            assert!(
+                !stderr.contains("INITIALIZED checkpoint=")
+                    && !stderr.contains("RUNNING gate=")
+                    && !stderr.contains("ROUTED gate=")
+            );
+            if status != Status::Complete {
+                assert!(stderr.contains("a-recorded-action"));
+                assert!(stderr.contains("reset_required"));
+                let saved =
+                    orchestrate_build::state::load_state(&build_dir.join("state.json")).unwrap();
+                assert_eq!(saved.status, Status::Stopped);
+                assert_eq!(result["details"]["detail"], saved.stop.unwrap().detail);
+            }
+            assert!(!build_dir.join("actions").exists());
+        }
+    }
+    let bare = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .args(["--effort", &effort_id])
+        .output()
+        .unwrap();
+    assert_eq!(bare.status.code(), Some(2));
+}
+
+#[test]
+fn one_shot_build_surfaces_keep_stderr_and_json_contracts_with_forced_color() {
+    let (root, repo, effort_id) = new_effort("build-one-shot-streams");
+    for args in [
+        vec!["status", "--effort", &effort_id],
+        vec!["build", "scaffold", "--effort", &effort_id],
+        vec!["build", "status", "--effort", &effort_id],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+            .arg("--root")
+            .arg(&root)
+            .args(args)
+            .current_dir(&repo)
+            .env("ORCHESTRATE_BUILD_COLOR", "always")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0));
+        assert!(output.stderr.is_empty());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["operation_status"], "SUCCESS");
+        assert!(!output.stdout.contains(&0x1b));
+    }
 }
