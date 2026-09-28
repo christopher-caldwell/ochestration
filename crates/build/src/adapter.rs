@@ -17,7 +17,6 @@ pub struct Session {
 #[derive(Default)]
 pub struct RuntimeSessions {
     pub worker: Option<Session>,
-    pub reviewer: Option<Session>,
 }
 
 #[derive(Clone, Debug, Serialize)]

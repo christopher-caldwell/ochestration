@@ -54,7 +54,16 @@ pub fn scaffold(store: &Store, effort_id: &str) -> Result<PathBuf> {
         let phase = build_dir.join("phase_01_foundation");
         fs::create_dir_all(&phase)?;
         if !phase.join("phase.md").exists() {
-            write_bytes_sync(&phase.join("phase.md"), b"# Foundation\n\nDescribe the whole phase: purpose, expected outcome, boundaries, dependencies, implementation guidance, and deliberate exclusions. Add immediate Markdown task/context files as useful.\n")?;
+            write_bytes_sync(
+                &phase.join("phase.md"),
+                r#"# Foundation
+
+A phase is a substantial, coherent implementation slice that can be built, meaningfully verified, and reviewed efficiently as one unit. Optimize its boundaries for efficient Work → Review cycles and useful accepted checkpoints. Include the tests or verification naturally associated with the slice.
+
+Describe the whole phase: purpose, expected outcome, boundaries, dependencies, implementation guidance, and deliberate exclusions. Add immediate Markdown task/context files as useful.
+"#
+                .as_bytes(),
+            )?;
         }
         write_bytes_sync(&plan, orchestrate_guides::templates::PLAN_JSON.as_bytes())?;
     }
@@ -492,8 +501,7 @@ fn execute_gate(
     let role = role_for_gate(&inputs.config, &gate);
     let session = match gate {
         Gate::Work => sessions.worker.as_ref(),
-        Gate::Review | Gate::Audit => sessions.reviewer.as_ref(),
-        Gate::Unblock => None,
+        Gate::Review | Gate::Audit | Gate::Unblock => None,
     };
     let invocation = adapter::prepare_invocation(role, &packet.prompt, &cwd, session)?;
     write_bytes_sync(
@@ -549,7 +557,7 @@ fn execute_gate(
                 "Work blocked result must not include a commit"
             );
             persist_result(&packet.action_dir, response, &result.report, None)?;
-            update_session(sessions, &gate, role, process.observed_session);
+            update_worker_session(sessions, role, process.observed_session);
             if result.outcome == "blocked" {
                 outcome = ActionOutcome::Blocked;
                 reset_checkout(repo, &state.checkpoint_commit)?;
@@ -590,7 +598,6 @@ fn execute_gate(
                 repo,
                 checkout.as_deref().context("Review worktree missing")?,
             )?;
-            update_session(sessions, &gate, role, process.observed_session);
             ensure!(
                 result.inspected_commit == state.checkpoint_commit,
                 "Review inspected commit does not match the exact checkpoint"
@@ -598,6 +605,7 @@ fn execute_gate(
             match result.outcome.as_str() {
                 "pass" => {
                     outcome = ActionOutcome::Pass;
+                    sessions.worker = None;
                     state.feedback.clear();
                     state.unblock = None;
                     match state.scope {
@@ -650,7 +658,6 @@ fn execute_gate(
                 &state.checkpoint_commit,
             )?;
             remove_worktree(repo, checkout.as_deref().context("Audit worktree missing")?)?;
-            update_session(sessions, &gate, role, process.observed_session);
             match result.outcome.as_str() {
                 "blocked" => {
                     outcome = ActionOutcome::Blocked;
@@ -795,18 +802,12 @@ fn role_for_gate<'a>(config: &'a BuildConfig, gate: &Gate) -> &'a RoleConfig {
     }
 }
 
-fn update_session(
+fn update_worker_session(
     sessions: &mut RuntimeSessions,
-    gate: &Gate,
     role: &RoleConfig,
     observed: Option<String>,
 ) {
-    let target = match gate {
-        Gate::Work => &mut sessions.worker,
-        Gate::Review | Gate::Audit => &mut sessions.reviewer,
-        Gate::Unblock => return,
-    };
-    *target = observed
+    sessions.worker = observed
         .filter(|id| !id.trim().is_empty())
         .map(|id| Session {
             adapter: role.adapter.clone(),
@@ -1196,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn initialization_routes_two_phases_then_final_audit_and_reuses_reviewer_session() {
+    fn initialization_routes_two_phases_with_fresh_evaluators_and_worker_phases() {
         let phases = vec!["phase_01".into(), "phase_02".into()];
         let fixture = make_fixture(phases);
         let fake = FakeInvoker::new(
@@ -1229,8 +1230,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Work", "Review", "Work", "Review", "Audit"]
         );
-        assert_eq!(records[4].session_in.as_deref(), Some("session-Review"));
-        assert_eq!(records[2].session_in.as_deref(), Some("session-Work"));
+        assert_eq!(records[2].session_in, None);
+        assert!(records[1].session_in.is_none());
+        assert!(records[3].session_in.is_none());
+        assert!(records[4].session_in.is_none());
         let (_, authority): (_, ReconciledDiscovery) = fixture
             .store
             .load_json(
@@ -1297,6 +1300,159 @@ mod tests {
         assert_eq!(audit.assessment.reconciled, fixture.reconciled);
         assert_eq!(audit.assessment.implementation, completion.implementation);
         assert_eq!(audit.verdict, Verdict::Pass);
+    }
+
+    #[test]
+    fn worker_and_evaluator_sessions_follow_phase_and_final_scope_boundaries() {
+        let phases = vec!["phase_01".into(), "phase_02".into()];
+        let fixture = make_fixture(phases);
+        let mut config = load_config(&fixture.build_dir.join("config.toml")).unwrap();
+        config.reviewer = RoleConfig {
+            adapter: "claude".into(),
+            model: Some("reviewer-model".into()),
+            args: Some(vec!["--permission-mode".into(), "plan".into()]),
+        };
+        fs::write(
+            fixture.build_dir.join("config.toml"),
+            toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let mut fake = FakeInvoker::new(
+            [
+                Step::WorkComplete,
+                Step::ReviewChanges,
+                Step::WorkComplete,
+                Step::ReviewChanges,
+                Step::WorkComplete,
+                Step::ReviewPass,
+                Step::WorkComplete,
+                Step::ReviewPass,
+                Step::AuditFail,
+                Step::WorkComplete,
+                Step::AuditFail,
+                Step::WorkComplete,
+                Step::AuditPass,
+            ],
+            &fixture.repo,
+        );
+        fake.set_observed_sessions([
+            Some("phase-one-work-1".into()),
+            Some("review-output-1".into()),
+            Some("phase-one-work-2".into()),
+            Some("review-output-2".into()),
+            Some("phase-one-work-3".into()),
+            Some("review-output-3".into()),
+            Some("phase-two-work-1".into()),
+            Some("review-output-4".into()),
+            Some("audit-output-1".into()),
+            Some("final-work-1".into()),
+            Some("audit-output-2".into()),
+            Some("final-work-2".into()),
+            Some("audit-output-3".into()),
+        ]);
+
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let records = fake.records();
+        let gates = records
+            .iter()
+            .map(|record| {
+                packet_from_record(record)["gate"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            gates,
+            [
+                "work", "review", "work", "review", "work", "review", "work", "review", "audit",
+                "work", "audit", "work", "audit"
+            ]
+        );
+
+        assert!(records[0].session_in.is_none());
+        assert_eq!(records[2].session_in.as_deref(), Some("phase-one-work-1"));
+        assert_eq!(records[4].session_in.as_deref(), Some("phase-one-work-2"));
+        assert!(records[6].session_in.is_none(), "next phase starts fresh");
+        assert!(records[9].session_in.is_none(), "final scope starts fresh");
+        assert_eq!(records[11].session_in.as_deref(), Some("final-work-1"));
+        for index in [1, 3, 5, 7, 8, 10, 12] {
+            let record = &records[index];
+            assert!(record.session_in.is_none(), "evaluator {index} is fresh");
+            assert_eq!(record.adapter, "claude");
+            assert_eq!(record.model.as_deref(), Some("reviewer-model"));
+            assert_eq!(record.args, ["--permission-mode", "plan"]);
+            assert!(
+                record
+                    .argv
+                    .windows(2)
+                    .any(|pair| pair == ["--model", "reviewer-model"])
+            );
+            assert!(
+                record
+                    .argv
+                    .windows(2)
+                    .any(|pair| pair == ["--permission-mode", "plan"])
+            );
+            assert!(!record.argv.iter().any(|arg| arg == "--resume"));
+        }
+    }
+
+    #[test]
+    fn missing_and_blank_work_session_ids_clear_existing_worker_handles() {
+        let fixture = make_fixture(one_phase());
+        let mut fake = FakeInvoker::new(
+            [
+                Step::WorkComplete,
+                Step::ReviewChanges,
+                Step::WorkComplete,
+                Step::ReviewChanges,
+                Step::WorkComplete,
+                Step::ReviewChanges,
+                Step::WorkComplete,
+                Step::ReviewChanges,
+                Step::WorkComplete,
+                Step::ReviewPass,
+                Step::AuditPass,
+            ],
+            &fixture.repo,
+        );
+        fake.set_observed_sessions([
+            Some("initial-work".into()),
+            Some("review-output-1".into()),
+            None,
+            Some("review-output-2".into()),
+            Some("recovered-work".into()),
+            Some("review-output-3".into()),
+            Some("  \t ".into()),
+            Some("review-output-4".into()),
+            Some("after-blank-work".into()),
+            Some("review-output-5".into()),
+            Some("audit-output".into()),
+        ]);
+
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let records = fake.records();
+        assert_eq!(records[2].session_in.as_deref(), Some("initial-work"));
+        assert!(
+            records[4].session_in.is_none(),
+            "missing ID clears prior handle"
+        );
+        assert_eq!(records[6].session_in.as_deref(), Some("recovered-work"));
+        assert!(
+            records[8].session_in.is_none(),
+            "blank ID clears prior handle"
+        );
+        for index in [1, 3, 5, 7, 9, 10] {
+            assert!(records[index].session_in.is_none());
+        }
     }
 
     #[test]
@@ -1411,6 +1567,8 @@ mod tests {
                 Step::WorkComplete,
                 Step::ReviewBlocked,
                 Step::UnblockRetry,
+                Step::ReviewChanges,
+                Step::WorkComplete,
                 Step::ReviewPass,
                 Step::AuditUnknown,
                 Step::UnblockRetry,
@@ -1441,12 +1599,15 @@ mod tests {
         assert_eq!(
             gates,
             [
-                "Work", "Review", "Unblock", "Review", "Audit", "Unblock", "Audit"
+                "Work", "Review", "Unblock", "Review", "Work", "Review", "Audit", "Unblock",
+                "Audit"
             ]
         );
-        assert!(records[2].session_in.is_none() && records[5].session_in.is_none());
-        assert_eq!(records[3].session_in.as_deref(), Some("session-Review"));
-        assert_eq!(records[6].session_in.as_deref(), Some("session-Audit"));
+        assert!(records[2].session_in.is_none() && records[7].session_in.is_none());
+        assert!(records[1].session_in.is_none() && records[3].session_in.is_none());
+        assert!(records[5].session_in.is_none() && records[6].session_in.is_none());
+        assert!(records[8].session_in.is_none());
+        assert_eq!(records[4].session_in.as_deref(), Some("session-Work"));
     }
 
     #[test]
@@ -2107,7 +2268,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert!(sessions.worker.is_some() && sessions.reviewer.is_some());
+        assert!(sessions.worker.is_some());
         drop(sessions);
         drop(state);
         let durable: serde_json::Value =
@@ -2122,7 +2283,7 @@ mod tests {
         ));
         let records = fake.records();
         assert!(records[2].session_in.is_none() && records[3].session_in.is_none());
-        assert_eq!(records[4].session_in.as_deref(), Some("session-Review"));
+        assert!(records[4].session_in.is_none());
         assert_eq!(
             packet_from_record(&records[2])["feedback"][0]["purpose"],
             "Review report"

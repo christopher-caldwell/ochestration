@@ -258,6 +258,7 @@ pub struct FakeInvoker {
     steps: Mutex<VecDeque<Step>>,
     records: Mutex<Vec<adapter::InvocationRecord>>,
     repo: Mutex<Option<PathBuf>>,
+    observed_sessions: Mutex<Option<VecDeque<Option<String>>>>,
     pub no_sessions: bool,
 }
 
@@ -267,8 +268,12 @@ impl FakeInvoker {
             steps: Mutex::new(steps.into_iter().collect()),
             records: Mutex::new(Vec::new()),
             repo: Mutex::new(Some(repo.to_path_buf())),
+            observed_sessions: Mutex::new(None),
             no_sessions: false,
         }
+    }
+    pub fn set_observed_sessions(&mut self, sessions: impl IntoIterator<Item = Option<String>>) {
+        *self.observed_sessions.get_mut().unwrap() = Some(sessions.into_iter().collect());
     }
     pub fn records(&self) -> Vec<adapter::InvocationRecord> {
         self.records.lock().unwrap().clone()
@@ -386,6 +391,13 @@ impl adapter::InvocationApi for FakeInvoker {
         } else {
             response
         };
+        let observed_session = if self.no_sessions {
+            None
+        } else if let Some(sessions) = self.observed_sessions.lock().unwrap().as_mut() {
+            sessions.pop_front().flatten()
+        } else {
+            Some(format!("session-{gate}"))
+        };
         Ok(InvocationOutcome {
             success: !failure,
             exit_code: Some(if failure { 7 } else { 0 }),
@@ -394,7 +406,7 @@ impl adapter::InvocationApi for FakeInvoker {
             } else {
                 Some(response.clone())
             },
-            observed_session: (!self.no_sessions).then(|| format!("session-{gate}")),
+            observed_session,
             stdout: response,
             stderr: if failure {
                 "provider failed".into()
