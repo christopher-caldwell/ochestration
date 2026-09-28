@@ -5,10 +5,15 @@
 
 pub mod adapter;
 pub mod controller;
+pub mod observation;
 pub mod packet;
 pub mod state;
 
-pub use controller::{BuildRequest, BuildResult, reset, run, scaffold, status};
+pub use controller::{
+    BuildRequest, BuildResult, reset, run, run_with_invoker_and_observer, run_with_observer,
+    scaffold, status,
+};
+pub use observation::{ActionOutcome, BuildEvent, BuildObservation, BuildObserver, FinishedAction};
 pub use state::{
     BuildCompletion, BuildConfig, BuildPlan, BuildState, Gate, RoleConfig, Scope, Status, Stop,
     StopKind, UnblockContext,

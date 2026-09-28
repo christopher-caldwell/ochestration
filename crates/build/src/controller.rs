@@ -19,6 +19,7 @@ use std::{
 
 use crate::{
     adapter::{self, RuntimeSessions, Session},
+    observation::{ActionOutcome, BuildEvent, BuildObservation, BuildObserver, FinishedAction},
     packet::create_action_packet,
     state::{
         BuildCompletion, BuildConfig, BuildPlan, BuildState, FeedbackRef, Gate, RoleConfig,
@@ -162,13 +163,66 @@ fn prepare_continuation(
 }
 
 pub fn run(store: &Store, request: BuildRequest) -> Result<BuildResult> {
-    run_with_invoker(store, request, &adapter::ProcessInvocationApi)
+    run_with_observer(store, request, &mut legacy_observer)
 }
 
+/// Run Build with a synchronous read-only observer instead of legacy stderr.
+pub fn run_with_observer(
+    store: &Store,
+    request: BuildRequest,
+    observer: &mut dyn BuildObserver,
+) -> Result<BuildResult> {
+    run_with_invoker_and_observer(store, request, &adapter::ProcessInvocationApi, observer)
+}
+
+// Temporary compatibility presentation until the CLI supplies its live renderer.
+fn legacy_observer(observation: BuildObservation<'_>) {
+    use std::io::Write;
+    let state = observation.state;
+    let mut stderr = std::io::stderr().lock();
+    match observation.event {
+        BuildEvent::Initialized => {
+            let _ = writeln!(
+                stderr,
+                "INITIALIZED checkpoint={} gate=work",
+                state.checkpoint_commit
+            );
+        }
+        BuildEvent::ActionStarted => {
+            let _ = writeln!(
+                stderr,
+                "RUNNING gate={:?} action={} checkpoint={}",
+                state.gate,
+                state.current_action_id.as_deref().unwrap_or(""),
+                state.checkpoint_commit
+            );
+        }
+        BuildEvent::ActionRouted(_) => {
+            let _ = writeln!(
+                stderr,
+                "ROUTED gate={:?} scope={:?} status={:?} checkpoint={}",
+                state.gate, state.scope, state.status, state.checkpoint_commit
+            );
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
 fn run_with_invoker(
     store: &Store,
     request: BuildRequest,
     invoker: &dyn adapter::InvocationApi,
+) -> Result<BuildResult> {
+    run_with_invoker_and_observer(store, request, invoker, &mut legacy_observer)
+}
+
+/// Deterministic invocation seam shared by the driver and observer integration tests.
+pub fn run_with_invoker_and_observer(
+    store: &Store,
+    request: BuildRequest,
+    invoker: &dyn adapter::InvocationApi,
+    observer: &mut dyn BuildObserver,
 ) -> Result<BuildResult> {
     let effort = select_effort(store, &request)?;
     let project = store.project_for(&effort)?;
@@ -178,14 +232,30 @@ fn run_with_invoker(
     );
     let build_dir = store.phase_dir(&effort, "build")?;
     let state_path = build_dir.join(STATE_FILE);
-    if !state_path.exists() {
+    let fresh = !state_path.exists();
+    if fresh {
         initialize(store, &effort, &project.canonical_locator, &build_dir)?;
     }
     let mut state = load_state(&state_path)?;
+    let snapshot_plan = observation_plan(&build_dir, &state);
+    observer.observe(BuildObservation {
+        event: if fresh {
+            BuildEvent::Initialized
+        } else {
+            BuildEvent::Snapshot
+        },
+        state: &state,
+        plan: snapshot_plan.as_ref(),
+    });
     let mut sessions = RuntimeSessions::default();
     let mut inputs = None;
     match state.status {
         Status::Complete => {
+            observer.observe(BuildObservation {
+                event: BuildEvent::Terminal,
+                state: &state,
+                plan: snapshot_plan.as_ref(),
+            });
             return Ok(BuildResult::Completed(
                 state
                     .completion
@@ -205,7 +275,17 @@ fn run_with_invoker(
                     &state_path,
                     &mut state,
                 )?;
+                observer.observe(BuildObservation {
+                    event: BuildEvent::Continued,
+                    state: &state,
+                    plan: inputs.as_ref().map(|inputs| &inputs.plan),
+                });
             } else {
+                observer.observe(BuildObservation {
+                    event: BuildEvent::Terminal,
+                    state: &state,
+                    plan: snapshot_plan.as_ref(),
+                });
                 return Ok(BuildResult::Blocked {
                     detail: state
                         .stop
@@ -219,6 +299,11 @@ fn run_with_invoker(
             state.status = Status::Stopped;
             state.stop = Some(Stop { kind: StopKind::ResetRequired, detail: "Build restarted while an action was marked running; provider completion is uncertain. Run `orchestrate build reset --effort …` before retrying.".into() });
             save_state(&state_path, &state)?;
+            observer.observe(BuildObservation {
+                event: BuildEvent::Terminal,
+                state: &state,
+                plan: snapshot_plan.as_ref(),
+            });
             return Ok(BuildResult::Blocked {
                 detail: state.stop.as_ref().unwrap().detail.clone(),
                 state: state_path,
@@ -234,6 +319,11 @@ fn run_with_invoker(
 
     loop {
         if state.status == Status::Complete {
+            observer.observe(BuildObservation {
+                event: BuildEvent::Terminal,
+                state: &state,
+                plan: Some(&inputs.plan),
+            });
             return Ok(BuildResult::Completed(
                 state
                     .completion
@@ -242,6 +332,11 @@ fn run_with_invoker(
             ));
         }
         if state.status == Status::Stopped {
+            observer.observe(BuildObservation {
+                event: BuildEvent::Terminal,
+                state: &state,
+                plan: Some(&inputs.plan),
+            });
             return Ok(BuildResult::Blocked {
                 detail: state
                     .stop
@@ -259,6 +354,7 @@ fn run_with_invoker(
             &mut sessions,
             &inputs,
             invoker,
+            observer,
         );
         if let Err(error) = operation {
             state.status = Status::Stopped;
@@ -270,12 +366,31 @@ fn run_with_invoker(
                 ),
             });
             save_state(&state_path, &state)?;
+            observer.observe(BuildObservation {
+                event: BuildEvent::Terminal,
+                state: &state,
+                plan: Some(&inputs.plan),
+            });
             return Ok(BuildResult::Blocked {
                 detail: state.stop.as_ref().unwrap().detail.clone(),
                 state: state_path,
             });
         }
     }
+}
+
+// Presentation may be unavailable, but must not reject a previously valid
+// complete/stopped launch or display a changed plan as the accepted plan.
+fn observation_plan(build_dir: &Path, state: &BuildState) -> Option<BuildPlan> {
+    let path = build_dir.join(PLAN_FILE);
+    let plan = load_plan(&path).ok()?;
+    if digest_bytes(&fs::read(path).ok()?) != state.plan_digest
+        || plan.reconciled != state.reconciled
+        || matches!(state.scope, Scope::Phase { index } if index >= plan.phases.len())
+    {
+        return None;
+    }
+    Some(plan)
 }
 
 struct ExecutionInputs {
@@ -364,10 +479,6 @@ fn initialize(store: &Store, effort: &Effort, repo: &Path, build_dir: &Path) -> 
         stop: None,
     };
     save_state(&build_dir.join(STATE_FILE), &state)?;
-    eprintln!(
-        "INITIALIZED checkpoint={} gate=work",
-        state.checkpoint_commit
-    );
     Ok(())
 }
 
@@ -380,6 +491,7 @@ fn execute_gate(
     sessions: &mut RuntimeSessions,
     inputs: &ExecutionInputs,
     invoker: &dyn adapter::InvocationApi,
+    observer: &mut dyn BuildObserver,
 ) -> Result<()> {
     if state.gate == Gate::Audit {
         ensure_audit_implementation(store, effort, repo, state)?;
@@ -387,6 +499,7 @@ fn execute_gate(
     ensure_repo_at_checkpoint(repo, &state.checkpoint_commit)?;
     let action_id = action_id();
     let gate = state.gate.clone();
+    let scope = state.scope.clone();
     let action_dir = current_action_dir(build_dir, &action_id)?;
     ensure_action_root(build_dir)?;
     fs::create_dir(&action_dir)?;
@@ -424,10 +537,11 @@ fn execute_gate(
     state.current_action_id = Some(action_id.clone());
     state.stop = None;
     save_state(&build_dir.join(STATE_FILE), state)?;
-    eprintln!(
-        "RUNNING gate={gate:?} action={action_id} checkpoint={}",
-        state.checkpoint_commit
-    );
+    observer.observe(BuildObservation {
+        event: BuildEvent::ActionStarted,
+        state,
+        plan: Some(&inputs.plan),
+    });
 
     let process = match invoker.invoke(&invocation, &cwd, &packet.action_dir) {
         Ok(outcome) => outcome,
@@ -454,6 +568,7 @@ fn execute_gate(
         path: format!("actions/{action_id}/report.md"),
         purpose: gate_label(&gate).into(),
     };
+    let outcome;
     match gate {
         Gate::Work => {
             let result: WorkResult = parse_result(response, &action_id)?;
@@ -469,10 +584,12 @@ fn execute_gate(
             persist_result(&packet.action_dir, response, &result.report, None)?;
             update_session(sessions, &gate, role, process.observed_session);
             if result.outcome == "blocked" {
+                outcome = ActionOutcome::Blocked;
                 reset_checkout(repo, &state.checkpoint_commit)?;
                 state.feedback.push(feedback_ref);
                 route_blocked(state, Gate::Work, &result.report);
             } else {
+                outcome = ActionOutcome::Complete;
                 let commit = result.commit.context("Work complete result lacks commit")?;
                 validate_work_commit(repo, &state.checkpoint_commit, &commit)?;
                 state.checkpoint_commit = commit;
@@ -513,6 +630,7 @@ fn execute_gate(
             );
             match result.outcome.as_str() {
                 "pass" => {
+                    outcome = ActionOutcome::Pass;
                     state.feedback.clear();
                     state.unblock = None;
                     match state.scope {
@@ -529,12 +647,14 @@ fn execute_gate(
                     state.status = Status::Ready;
                 }
                 "changes_required" => {
+                    outcome = ActionOutcome::ChangesRequired;
                     state.feedback = vec![feedback_ref];
                     state.gate = Gate::Work;
                     state.unblock = None;
                     state.status = Status::Ready;
                 }
                 "blocked" => {
+                    outcome = ActionOutcome::Blocked;
                     state.feedback.push(feedback_ref);
                     route_blocked(state, Gate::Review, &result.report);
                 }
@@ -566,6 +686,7 @@ fn execute_gate(
             update_session(sessions, &gate, role, process.observed_session);
             match result.outcome.as_str() {
                 "blocked" => {
+                    outcome = ActionOutcome::Blocked;
                     state.feedback.push(feedback_ref);
                     route_blocked(state, Gate::Audit, &result.report);
                 }
@@ -597,6 +718,7 @@ fn execute_gate(
                         store.load_json(effort, &audit, "audit.json")?;
                     match report.verdict {
                         Verdict::Pass => {
+                            outcome = ActionOutcome::Pass;
                             state.completion = Some(BuildCompletion {
                                 implementation,
                                 audit,
@@ -607,6 +729,7 @@ fn execute_gate(
                             state.feedback.clear();
                         }
                         Verdict::ChangesRequired => {
+                            outcome = ActionOutcome::ChangesRequired;
                             state.feedback = vec![
                                 feedback_ref,
                                 FeedbackRef {
@@ -621,6 +744,7 @@ fn execute_gate(
                             state.status = Status::Ready;
                         }
                         Verdict::Blocked => {
+                            outcome = ActionOutcome::Blocked;
                             state.feedback.push(feedback_ref);
                             state.feedback.push(FeedbackRef {
                                 path: format!("actions/{action_id}/assessment.json"),
@@ -660,6 +784,7 @@ fn execute_gate(
             state.feedback.push(feedback_ref);
             match result.outcome.as_str() {
                 "retry" => {
+                    outcome = ActionOutcome::Retry;
                     let context = state.unblock.as_ref().unwrap().clone();
                     reset_checkout(repo, &state.checkpoint_commit)?;
                     state.scope = context.scope;
@@ -667,6 +792,7 @@ fn execute_gate(
                     state.status = Status::Ready;
                 }
                 "blocked" => {
+                    outcome = ActionOutcome::Blocked;
                     state.status = Status::Stopped;
                     state.stop = Some(Stop {
                         kind: StopKind::Blocked,
@@ -681,10 +807,16 @@ fn execute_gate(
         state.current_action_id = None;
     }
     save_state(&build_dir.join(STATE_FILE), state)?;
-    eprintln!(
-        "ROUTED gate={:?} scope={:?} status={:?} checkpoint={}",
-        state.gate, state.scope, state.status, state.checkpoint_commit
-    );
+    observer.observe(BuildObservation {
+        event: BuildEvent::ActionRouted(FinishedAction {
+            action_id,
+            gate,
+            scope,
+            outcome,
+        }),
+        state,
+        plan: Some(&inputs.plan),
+    });
     Ok(())
 }
 
@@ -2383,6 +2515,7 @@ mod tests {
                 &mut sessions,
                 &inputs,
                 &fake,
+                &mut legacy_observer,
             )
             .unwrap();
         }
@@ -2445,6 +2578,526 @@ mod tests {
         BuildRequest {
             effort: Some(fixture.effort.id.clone()),
             project: fixture.repo.clone(),
+        }
+    }
+
+    mod observations {
+        use super::*;
+        use std::sync::{Arc, mpsc};
+        use std::time::Duration;
+
+        #[derive(Clone, Debug)]
+        struct Recorded {
+            event: BuildEvent,
+            state: BuildState,
+            plan: Option<BuildPlan>,
+        }
+
+        struct Recorder {
+            build_dir: PathBuf,
+            events: Vec<Recorded>,
+        }
+
+        impl Recorder {
+            fn new(fixture: &Fixture) -> Self {
+                Self {
+                    build_dir: fixture.build_dir.clone(),
+                    events: Vec::new(),
+                }
+            }
+
+            fn routes(&self) -> Vec<(&FinishedAction, &BuildState)> {
+                self.events
+                    .iter()
+                    .filter_map(|event| match &event.event {
+                        BuildEvent::ActionRouted(action) => Some((action, &event.state)),
+                        _ => None,
+                    })
+                    .collect()
+            }
+        }
+
+        impl BuildObserver for Recorder {
+            fn observe(&mut self, observation: BuildObservation<'_>) {
+                // Every notification is already durable, including the retained
+                // action ID on stops and the evidence needed to explain routes.
+                assert_eq!(
+                    load_state(&self.build_dir.join(STATE_FILE)).unwrap(),
+                    *observation.state
+                );
+                match &observation.event {
+                    BuildEvent::ActionStarted => {
+                        assert_eq!(observation.state.status, Status::Running);
+                        let id = observation.state.current_action_id.as_ref().unwrap();
+                        let dir = current_action_dir(&self.build_dir, id).unwrap();
+                        assert!(dir.join("action.json").is_file());
+                        assert!(dir.join("invocation.json").is_file());
+                        assert!(!dir.join("result.json").exists());
+                    }
+                    BuildEvent::ActionRouted(action) => {
+                        let dir = current_action_dir(&self.build_dir, &action.action_id).unwrap();
+                        assert!(dir.join("result.json").is_file());
+                        assert!(dir.join("report.md").is_file());
+                        let start = self.events.last().unwrap();
+                        assert_eq!(start.event, BuildEvent::ActionStarted);
+                        assert_eq!(
+                            start.state.current_action_id.as_ref(),
+                            Some(&action.action_id)
+                        );
+                        assert_eq!(start.state.gate, action.gate);
+                        assert_eq!(start.state.scope, action.scope);
+                    }
+                    BuildEvent::Terminal => assert!(matches!(
+                        observation.state.status,
+                        Status::Stopped | Status::Complete
+                    )),
+                    _ => {}
+                }
+                self.events.push(Recorded {
+                    event: observation.event,
+                    state: observation.state.clone(),
+                    plan: observation.plan.cloned(),
+                });
+            }
+        }
+
+        fn observed_run(fixture: &Fixture, steps: impl IntoIterator<Item = Step>) -> Recorder {
+            let fake = FakeInvoker::new(steps, &fixture.repo);
+            let mut recorder = Recorder::new(fixture);
+            run_with_invoker_and_observer(&fixture.store, request(fixture), &fake, &mut recorder)
+                .unwrap();
+            assert_eq!(fake.remaining(), 0);
+            recorder
+        }
+
+        #[test]
+        fn observations_preserve_executed_scope_and_confirm_review_and_audit_verdicts() {
+            let phases = vec!["phase_01_foundation".into(), "phase_02_delivery".into()];
+            let fixture = make_fixture(phases.clone());
+            let recorder = observed_run(
+                &fixture,
+                [
+                    Step::WorkComplete,
+                    Step::ReviewChanges,
+                    Step::WorkComplete,
+                    Step::ReviewPass,
+                    Step::WorkComplete,
+                    Step::ReviewPass,
+                    Step::AuditFail,
+                    Step::WorkComplete,
+                    Step::AuditPass,
+                ],
+            );
+            assert_eq!(
+                recorder.events.first().unwrap().event,
+                BuildEvent::Initialized
+            );
+            assert_eq!(recorder.events.last().unwrap().event, BuildEvent::Terminal);
+            assert_eq!(recorder.events.len(), 20); // initial, nine start/route pairs, terminal
+            assert!(
+                recorder
+                    .events
+                    .iter()
+                    .all(|event| event.plan.as_ref().unwrap().phases == phases)
+            );
+            let expected = [
+                (
+                    Gate::Work,
+                    Scope::Phase { index: 0 },
+                    ActionOutcome::Complete,
+                    Gate::Review,
+                    Scope::Phase { index: 0 },
+                ),
+                (
+                    Gate::Review,
+                    Scope::Phase { index: 0 },
+                    ActionOutcome::ChangesRequired,
+                    Gate::Work,
+                    Scope::Phase { index: 0 },
+                ),
+                (
+                    Gate::Work,
+                    Scope::Phase { index: 0 },
+                    ActionOutcome::Complete,
+                    Gate::Review,
+                    Scope::Phase { index: 0 },
+                ),
+                (
+                    Gate::Review,
+                    Scope::Phase { index: 0 },
+                    ActionOutcome::Pass,
+                    Gate::Work,
+                    Scope::Phase { index: 1 },
+                ),
+                (
+                    Gate::Work,
+                    Scope::Phase { index: 1 },
+                    ActionOutcome::Complete,
+                    Gate::Review,
+                    Scope::Phase { index: 1 },
+                ),
+                (
+                    Gate::Review,
+                    Scope::Phase { index: 1 },
+                    ActionOutcome::Pass,
+                    Gate::Audit,
+                    Scope::Final,
+                ),
+                (
+                    Gate::Audit,
+                    Scope::Final,
+                    ActionOutcome::ChangesRequired,
+                    Gate::Work,
+                    Scope::Final,
+                ),
+                (
+                    Gate::Work,
+                    Scope::Final,
+                    ActionOutcome::Complete,
+                    Gate::Audit,
+                    Scope::Final,
+                ),
+                (
+                    Gate::Audit,
+                    Scope::Final,
+                    ActionOutcome::Pass,
+                    Gate::Audit,
+                    Scope::Final,
+                ),
+            ];
+            for ((action, state), (gate, scope, outcome, next_gate, next_scope)) in
+                recorder.routes().into_iter().zip(expected)
+            {
+                assert_eq!(
+                    (&action.gate, &action.scope, &action.outcome),
+                    (&gate, &scope, &outcome)
+                );
+                assert_eq!((&state.gate, &state.scope), (&next_gate, &next_scope));
+                assert_eq!(
+                    state.status,
+                    if gate == Gate::Audit && outcome == ActionOutcome::Pass {
+                        Status::Complete
+                    } else {
+                        Status::Ready
+                    }
+                );
+            }
+        }
+
+        #[test]
+        fn observations_distinguish_blocked_routes_retries_and_terminal_stops() {
+            for repeated in [false, true] {
+                let fixture = make_fixture(one_phase());
+                let recorder = observed_run(
+                    &fixture,
+                    if repeated {
+                        vec![Step::WorkBlocked, Step::UnblockRetry, Step::WorkBlocked]
+                    } else {
+                        vec![Step::WorkBlocked, Step::UnblockBlocked]
+                    },
+                );
+                let routes = recorder.routes();
+                assert_eq!(routes[0].0.outcome, ActionOutcome::Blocked);
+                assert_eq!(routes[0].1.gate, Gate::Unblock);
+                assert_eq!(routes[0].1.status, Status::Ready);
+                assert_eq!(routes[1].0.gate, Gate::Unblock);
+                assert_eq!(
+                    routes[1].0.outcome,
+                    if repeated {
+                        ActionOutcome::Retry
+                    } else {
+                        ActionOutcome::Blocked
+                    }
+                );
+                let last = recorder.events.last().unwrap();
+                assert_eq!(last.state.stop.as_ref().unwrap().kind, StopKind::Blocked);
+                assert_eq!(
+                    last.state.current_action_id.as_ref(),
+                    Some(&routes.last().unwrap().0.action_id)
+                );
+
+                let resumed = observed_run(
+                    &fixture,
+                    [Step::WorkComplete, Step::ReviewPass, Step::AuditPass],
+                );
+                assert_eq!(resumed.events[0].event, BuildEvent::Snapshot);
+                assert_eq!(resumed.events[0].state, last.state);
+                assert_eq!(resumed.events[1].event, BuildEvent::Continued);
+                assert_eq!(resumed.events[1].state.status, Status::Ready);
+                assert!(resumed.events[1].state.current_action_id.is_none());
+                assert_eq!(
+                    resumed.events.last().unwrap().state.status,
+                    Status::Complete
+                );
+            }
+            for audit_step in [Step::AuditUnknown, Step::AuditBlocked] {
+                let fixture = make_fixture(one_phase());
+                let recorder = observed_run(
+                    &fixture,
+                    [
+                        Step::WorkComplete,
+                        Step::ReviewBlocked,
+                        Step::UnblockRetry,
+                        Step::ReviewPass,
+                        audit_step,
+                        Step::UnblockRetry,
+                        Step::AuditPass,
+                    ],
+                );
+                let routes = recorder.routes();
+                assert_eq!(routes[1].0.outcome, ActionOutcome::Blocked);
+                assert_eq!(routes[1].1.gate, Gate::Unblock);
+                assert_eq!(routes[4].0.gate, Gate::Audit);
+                assert_eq!(routes[4].0.outcome, ActionOutcome::Blocked);
+                assert_eq!(routes[4].0.scope, Scope::Final);
+                assert_eq!(routes[4].1.status, Status::Ready);
+                assert_eq!(routes[4].1.gate, Gate::Unblock);
+                assert_eq!(routes[5].0.outcome, ActionOutcome::Retry);
+                assert_eq!(routes[5].1.gate, Gate::Audit);
+                assert_eq!(routes[6].0.outcome, ActionOutcome::Pass);
+            }
+        }
+
+        #[test]
+        fn observations_report_errors_and_restarted_running_without_a_confirmed_route() {
+            for step in [
+                Step::InvocationError,
+                Step::ProviderFailure,
+                Step::Malformed,
+                Step::WorkInvalidCommit,
+            ] {
+                let fixture = make_fixture(one_phase());
+                let recorder = observed_run(&fixture, [step]);
+                assert_eq!(
+                    recorder
+                        .events
+                        .iter()
+                        .map(|event| &event.event)
+                        .collect::<Vec<_>>(),
+                    vec![
+                        &BuildEvent::Initialized,
+                        &BuildEvent::ActionStarted,
+                        &BuildEvent::Terminal
+                    ]
+                );
+                let last = recorder.events.last().unwrap();
+                assert_eq!(
+                    last.state.stop.as_ref().unwrap().kind,
+                    StopKind::ResetRequired
+                );
+                assert_eq!(
+                    last.state.current_action_id,
+                    recorder.events[1].state.current_action_id
+                );
+            }
+            let fixture = make_fixture(one_phase());
+            initialize(
+                &fixture.store,
+                &fixture.effort,
+                &fixture.repo,
+                &fixture.build_dir,
+            )
+            .unwrap();
+            let path = fixture.build_dir.join(STATE_FILE);
+            let mut state = load_state(&path).unwrap();
+            state.status = Status::Running;
+            state.current_action_id = Some("a-interrupted".into());
+            save_state(&path, &state).unwrap();
+            fs::remove_file(fixture.build_dir.join(PLAN_FILE)).unwrap();
+            fs::remove_file(fixture.build_dir.join(CONFIG_FILE)).unwrap();
+            let recorder = observed_run(&fixture, []);
+            assert_eq!(recorder.events.len(), 2);
+            assert_eq!(recorder.events[0].event, BuildEvent::Snapshot);
+            assert_eq!(recorder.events[0].state, state);
+            assert!(recorder.events.iter().all(|event| event.plan.is_none()));
+            let last = &recorder.events[1];
+            assert_eq!(last.event, BuildEvent::Terminal);
+            assert_eq!(last.state.current_action_id, state.current_action_id);
+            assert_eq!(
+                last.state.stop.as_ref().unwrap().kind,
+                StopKind::ResetRequired
+            );
+            let stopped = observed_run(&fixture, []);
+            assert_eq!(stopped.events[0].state, last.state);
+            assert_eq!(stopped.events[1].state, last.state);
+        }
+
+        #[test]
+        fn observations_of_completed_builds_do_not_require_config_or_usable_plan() {
+            let fixture = make_fixture(one_phase());
+            let completed = observed_run(
+                &fixture,
+                [Step::WorkComplete, Step::ReviewPass, Step::AuditPass],
+            );
+            let final_state = &completed.events.last().unwrap().state;
+            fs::remove_file(fixture.build_dir.join(CONFIG_FILE)).unwrap();
+            let plan_path = fixture.build_dir.join(PLAN_FILE);
+            let accepted = fs::read(&plan_path).unwrap();
+            // A readable but altered plan must not supply unaccepted counts.
+            let mut changed = accepted.clone();
+            changed.push(b' ');
+            for contents in [
+                Some(accepted),
+                Some(changed),
+                Some(b"invalid".to_vec()),
+                None,
+            ] {
+                if let Some(bytes) = &contents {
+                    fs::write(&plan_path, bytes).unwrap();
+                } else {
+                    fs::remove_file(&plan_path).unwrap();
+                }
+                let recorder = observed_run(&fixture, []);
+                assert_eq!(recorder.events.len(), 2);
+                assert_eq!(recorder.events[0].event, BuildEvent::Snapshot);
+                assert_eq!(recorder.events[1].event, BuildEvent::Terminal);
+                for event in &recorder.events {
+                    assert_eq!(&event.state, final_state);
+                    assert_eq!(
+                        event.plan.is_some(),
+                        contents
+                            .as_ref()
+                            .is_some_and(|bytes| digest_bytes(bytes) == final_state.plan_digest)
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn observations_seed_resumed_phase_and_final_scope_from_persisted_state() {
+            for gates in [2, 4] {
+                let fixture = make_fixture(vec!["phase_01".into(), "phase_02".into()]);
+                initialize(
+                    &fixture.store,
+                    &fixture.effort,
+                    &fixture.repo,
+                    &fixture.build_dir,
+                )
+                .unwrap();
+                let mut state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
+                let inputs = load_execution_inputs(&fixture.build_dir, &state).unwrap();
+                let fake = FakeInvoker::new(
+                    [
+                        Step::WorkComplete,
+                        Step::ReviewPass,
+                        Step::WorkComplete,
+                        Step::ReviewPass,
+                        Step::AuditPass,
+                    ],
+                    &fixture.repo,
+                );
+                for _ in 0..gates {
+                    execute_gate(
+                        &fixture.store,
+                        &fixture.effort,
+                        &fixture.repo,
+                        &fixture.build_dir,
+                        &mut state,
+                        &mut RuntimeSessions::default(),
+                        &inputs,
+                        &fake,
+                        &mut |_: BuildObservation<'_>| {},
+                    )
+                    .unwrap();
+                }
+                let mut recorder = Recorder::new(&fixture);
+                run_with_invoker_and_observer(
+                    &fixture.store,
+                    request(&fixture),
+                    &fake,
+                    &mut recorder,
+                )
+                .unwrap();
+                assert_eq!(recorder.events[0].event, BuildEvent::Snapshot);
+                assert_eq!(recorder.events[0].state, state);
+                assert_eq!(
+                    state.scope,
+                    if gates == 2 {
+                        Scope::Phase { index: 1 }
+                    } else {
+                        Scope::Final
+                    }
+                );
+                assert_eq!(recorder.events[0].plan.as_ref().unwrap().phases.len(), 2);
+                assert_eq!(
+                    recorder.events.last().unwrap().state.status,
+                    Status::Complete
+                );
+            }
+        }
+
+        struct PausedInvoker {
+            fake: FakeInvoker,
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+
+        impl adapter::InvocationApi for PausedInvoker {
+            fn invoke(
+                &self,
+                plan: &adapter::InvocationPlan,
+                cwd: &Path,
+                action_dir: &Path,
+            ) -> Result<InvocationOutcome> {
+                self.entered.send(()).unwrap();
+                self.release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap();
+                self.fake.invoke(plan, cwd, action_dir)
+            }
+        }
+
+        #[test]
+        fn observations_expose_running_action_while_invocation_is_paused() {
+            let fixture = make_fixture(one_phase());
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let invoker = PausedInvoker {
+                fake: FakeInvoker::new([Step::ProviderFailure], &fixture.repo),
+                entered: entered_tx,
+                release: Mutex::new(release_rx),
+            };
+            let recorder = Arc::new(Mutex::new(Recorder::new(&fixture)));
+            std::thread::scope(|scope| {
+                let recorder_copy = Arc::clone(&recorder);
+                let fixture_ref = &fixture;
+                let invoker_ref = &invoker;
+                let worker = scope.spawn(move || {
+                    run_with_invoker_and_observer(
+                        &fixture_ref.store,
+                        request(fixture_ref),
+                        invoker_ref,
+                        &mut |event: BuildObservation<'_>| {
+                            recorder_copy.lock().unwrap().observe(event)
+                        },
+                    )
+                    .unwrap()
+                });
+                entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                {
+                    let recorder = recorder.lock().unwrap();
+                    assert_eq!(recorder.events.len(), 2);
+                    let started = &recorder.events[1];
+                    assert_eq!(started.event, BuildEvent::ActionStarted);
+                    assert_eq!(started.state.status, Status::Running);
+                    assert_eq!(started.state.gate, Gate::Work);
+                    assert_eq!(started.state.scope, Scope::Phase { index: 0 });
+                    assert!(started.state.current_action_id.is_some());
+                    assert!(!started.state.checkpoint_commit.is_empty());
+                    assert_eq!(invoker.fake.records().len(), 0);
+                }
+                release_tx.send(()).unwrap();
+                assert!(matches!(
+                    worker.join().unwrap(),
+                    BuildResult::Blocked { .. }
+                ));
+            });
+            assert_eq!(
+                recorder.lock().unwrap().events.last().unwrap().event,
+                BuildEvent::Terminal
+            );
         }
     }
 }
