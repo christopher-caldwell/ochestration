@@ -54,7 +54,16 @@ pub fn scaffold(store: &Store, effort_id: &str) -> Result<PathBuf> {
         let phase = build_dir.join("phase_01_foundation");
         fs::create_dir_all(&phase)?;
         if !phase.join("phase.md").exists() {
-            write_bytes_sync(&phase.join("phase.md"), b"# Foundation\n\nDescribe the whole phase: purpose, expected outcome, boundaries, dependencies, implementation guidance, and deliberate exclusions. Add immediate Markdown task/context files as useful.\n")?;
+            write_bytes_sync(
+                &phase.join("phase.md"),
+                r#"# Foundation
+
+A phase is a substantial, coherent implementation slice that can be built, meaningfully verified, and reviewed efficiently as one unit. Optimize its boundaries for efficient Work → Review cycles and useful accepted checkpoints. Include the tests or verification naturally associated with the slice.
+
+Describe the whole phase: purpose, expected outcome, boundaries, dependencies, implementation guidance, and deliberate exclusions. Add immediate Markdown task/context files as useful.
+"#
+                .as_bytes(),
+            )?;
         }
         write_bytes_sync(&plan, orchestrate_guides::templates::PLAN_JSON.as_bytes())?;
     }

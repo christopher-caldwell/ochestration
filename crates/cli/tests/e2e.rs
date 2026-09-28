@@ -2150,6 +2150,12 @@ fn build_scaffold_status_and_removed_commands_match_the_small_surface() {
     assert_eq!(plan["phases"][0], "phase_01_foundation");
     let phase_file = build_dir.join("phase_01_foundation/phase.md");
     assert!(phase_file.is_file());
+    let starter = fs::read_to_string(&phase_file).unwrap();
+    assert!(starter.contains("substantial, coherent implementation slice"));
+    assert!(starter.contains("meaningfully verified, and reviewed efficiently"));
+    assert!(starter.contains("efficient Work → Review cycles and useful accepted checkpoints"));
+    assert!(starter.contains("purpose, expected outcome, boundaries, dependencies, implementation guidance, and deliberate exclusions"));
+    assert!(starter.contains("Add immediate Markdown task/context files as useful."));
     assert!(!build_dir.join("implementation-plan.md").exists());
     fs::write(&phase_file, "Keep operator phase guidance").unwrap();
     command(&root, &["build", "scaffold", "--effort", &effort]);
