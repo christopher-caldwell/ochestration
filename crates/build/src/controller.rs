@@ -163,10 +163,10 @@ fn prepare_continuation(
 }
 
 pub fn run(store: &Store, request: BuildRequest) -> Result<BuildResult> {
-    run_with_observer(store, request, &mut legacy_observer)
+    run_with_observer(store, request, &mut |_: BuildObservation<'_>| {})
 }
 
-/// Run Build with a synchronous read-only observer instead of legacy stderr.
+/// Run Build with a synchronous read-only observer. The CLI owns presentation.
 pub fn run_with_observer(
     store: &Store,
     request: BuildRequest,
@@ -175,46 +175,13 @@ pub fn run_with_observer(
     run_with_invoker_and_observer(store, request, &adapter::ProcessInvocationApi, observer)
 }
 
-// Temporary compatibility presentation until the CLI supplies its live renderer.
-fn legacy_observer(observation: BuildObservation<'_>) {
-    use std::io::Write;
-    let state = observation.state;
-    let mut stderr = std::io::stderr().lock();
-    match observation.event {
-        BuildEvent::Initialized => {
-            let _ = writeln!(
-                stderr,
-                "INITIALIZED checkpoint={} gate=work",
-                state.checkpoint_commit
-            );
-        }
-        BuildEvent::ActionStarted => {
-            let _ = writeln!(
-                stderr,
-                "RUNNING gate={:?} action={} checkpoint={}",
-                state.gate,
-                state.current_action_id.as_deref().unwrap_or(""),
-                state.checkpoint_commit
-            );
-        }
-        BuildEvent::ActionRouted(_) => {
-            let _ = writeln!(
-                stderr,
-                "ROUTED gate={:?} scope={:?} status={:?} checkpoint={}",
-                state.gate, state.scope, state.status, state.checkpoint_commit
-            );
-        }
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 fn run_with_invoker(
     store: &Store,
     request: BuildRequest,
     invoker: &dyn adapter::InvocationApi,
 ) -> Result<BuildResult> {
-    run_with_invoker_and_observer(store, request, invoker, &mut legacy_observer)
+    run_with_invoker_and_observer(store, request, invoker, &mut |_: BuildObservation<'_>| {})
 }
 
 /// Deterministic invocation seam shared by the driver and observer integration tests.
@@ -2515,7 +2482,7 @@ mod tests {
                 &mut sessions,
                 &inputs,
                 &fake,
-                &mut legacy_observer,
+                &mut |_: BuildObservation<'_>| {},
             )
             .unwrap();
         }

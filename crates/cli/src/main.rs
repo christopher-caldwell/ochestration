@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod build_display;
 mod chat_import;
 mod prepared_request;
 
@@ -582,12 +583,13 @@ fn execute(store: Store, command: Command) -> Result<()> {
         Command::Build {
             effort,
             command: None,
-        } => match orchestrate_build::run(
+        } => match orchestrate_build::run_with_observer(
             &store,
             orchestrate_build::BuildRequest {
                 effort,
                 project: std::env::current_dir()?,
             },
+            &mut build_display::Display::new(std::io::stderr(), build_display::Mode::stderr()),
         )? {
             orchestrate_build::BuildResult::Completed(done) => output(
                 "SUCCESS",
