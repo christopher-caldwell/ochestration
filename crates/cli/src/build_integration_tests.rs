@@ -176,7 +176,9 @@ fn integrated_multiphase_corrections_and_audit_completion_preserve_evidence() {
         let records = fake.records();
         assert_eq!(records.len(), 9);
         assert_eq!(records[2].session_in.as_deref(), Some("session-Work"));
-        assert_eq!(records[6].session_in.as_deref(), Some("session-Review"));
+        assert!(records[4].session_in.is_none());
+        assert!(records[6].session_in.is_none());
+        assert!(records[8].session_in.is_none());
         for record in &records {
             let packet = packet_from_record(record);
             let id = packet["action_id"].as_str().unwrap();
