@@ -79,7 +79,7 @@ orchestrate --root "<root>" reconcile finalize --effort "<effort>" \
   --bundle "<absolute path to reconcile-proposal.json>"
 ```
 
-Then stop. Do not inspect code, create Adoption, ask for Build approval, start Build, or suggest continuing immediately. The normal chat response is concise:
+Then stop. Do not inspect code, create Adoption, ask for Build approval, or start Build. Printing the exact Build handoff is required and does not itself start Build. The normal chat response is concise:
 
 ```text
 Result: <one clear selected direction>
@@ -87,6 +87,9 @@ Result: <one clear selected direction>
 Key caveat: <only if materially important>
 
 Artifact: <absolute path>
+
+Next:
+$build "/absolute/path/to/reconciled-discovery.md" and scaffold the Build. You are authorized to run the Build scaffold operation for this effort.
 ```
 
-`Artifact:` must be the absolute path to `reconciled-discovery.md`, not a bundle directory. The artifact tells Build why; chat tells the user the answer.
+`Artifact:` and the path in `Next:` must use the actual absolute path to `reconciled-discovery.md`, not a bundle directory or a placeholder. The scaffold authorization applies only to the Build scaffold operation; it does not authorize Build execution or the driver. The artifact tells Build why; chat tells the user the answer.

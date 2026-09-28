@@ -34,6 +34,12 @@ constraints: []
 
 The Original Ticket section must reproduce the original ticket verbatim. Do not rewrite, summarize, improve, normalize, or reconstruct it. Add headings for supplemental context, explicit unknowns, or other clarifications only when useful; do not manufacture empty sections. Keep the exact ticket text distinct from the preparation additions. Preserve every substantive supplied statement, speaker, uncertainty, condition, exception, scope distinction, conflict, and deliberate delegation. Before saving, check for omissions, invented requirements, altered certainty, merged speakers, inferred constraints, or lost conditions.
 
-Read the saved file back. Check that the original ticket is unchanged and the clarified intent has its actual authority. In chat, provide the absolute prepared-request path and ask the user to review/edit it before Discovery. Once reviewed, tell the user to invoke the installed `discovery` skill in the current host with this exact prepared-request path.
+Read the saved file back. Check that the original ticket is unchanged and the clarified intent has its actual authority. In chat, provide the absolute prepared-request path and ask the user to review/edit it before Discovery. Once reviewed, print the exact next prompt using the actual resolved path:
+
+```text
+$discovery "/absolute/path/to/request.prepared.md"
+```
+
+Replace the example path with the real resolved path. Do not invoke Discovery yourself.
 
 Do not initialize an effort or run `orchestrate init` yourself.

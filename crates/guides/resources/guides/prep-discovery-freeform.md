@@ -28,6 +28,12 @@ constraints: []
 
 Organize the supplied request and preparation clarifications under headings appropriate to the actual content, such as Goal, Context, Explicit Unknowns, or Supporting Information. Do not force empty or irrelevant sections. Preserve every substantive supplied statement, speaker, uncertainty, condition, exception, scope distinction, conflict, and deliberate delegation. Do not invent new meaning. Before saving, check for omissions, invented requirements, altered certainty, merged speakers, inferred constraints, or lost conditions.
 
-Read the saved file back and check that clarified intent has its actual authority. In chat, provide the absolute prepared-request path and ask the user to review/edit it before Discovery. Once reviewed, tell the user to invoke the installed `discovery` skill in the current host with this exact prepared-request path.
+Read the saved file back and check that clarified intent has its actual authority. In chat, provide the absolute prepared-request path and ask the user to review/edit it before Discovery. Once reviewed, print the exact next prompt using the actual resolved path:
+
+```text
+$discovery "/absolute/path/to/request.prepared.md"
+```
+
+Replace the example path with the real resolved path. Do not invoke Discovery yourself.
 
 Do not initialize an effort or run `orchestrate init` yourself.

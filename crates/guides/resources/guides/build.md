@@ -50,6 +50,14 @@ adapter = "claude"
 # adapter = "cursor"
 ```
 
+After the Build is fully scaffolded and ready to launch, print the exact launch command using the actual resolved Orchestrate root and effort:
+
+```sh
+orchestrate --root "/actual/root" build --effort "actual-effort"
+```
+
+Do not print placeholders when those values are known. Do not run the command; printing it does not authorize Build execution, and launching Build requires separate explicit human authorization.
+
 ## Launch and durable state
 
 Only an explicit launch starts provider work:
