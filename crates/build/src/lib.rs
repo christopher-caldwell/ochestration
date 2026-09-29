@@ -53,7 +53,7 @@ mod tests {
                 .to_string()
                 .contains("migration is not supported")
         );
-        let config = temp_file("config.toml", "schema_version = 3\n");
+        let config = temp_file("config.toml", "schema_version = 4\n");
         assert!(
             load_config(&config)
                 .unwrap_err()
@@ -73,7 +73,10 @@ mod tests {
     }
 
     #[test]
-    fn new_plan_and_config_schemas_deserialize_exact_role_fields() {
+    fn plan_and_config_schema_versions_are_independent_and_current() {
+        assert_eq!(super::state::PLAN_VERSION, 4);
+        assert_eq!(super::state::STATE_VERSION, 5);
+        assert_eq!(super::state::CONFIG_VERSION, 5);
         let plan = BuildPlan {
             schema_version: 4,
             reconciled: orchestrate_contracts::ArtifactRef {
@@ -85,19 +88,48 @@ mod tests {
         };
         assert_eq!(plan.schema_version, 4);
         let config = BuildConfig {
-            schema_version: 4,
+            schema_version: 5,
             worker: super::RoleConfig {
                 adapter: "codex".into(),
                 model: Some("native-model".into()),
+                effort: Some("high".into()),
                 args: Some(vec!["--search".into()]),
             },
             reviewer: super::RoleConfig {
                 adapter: "claude".into(),
                 model: None,
+                effort: None,
                 args: None,
             },
             unblocker: None,
         };
         assert_eq!(config.worker.model.as_deref(), Some("native-model"));
+        assert_eq!(config.worker.effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn schema_five_config_loads_optional_effort_for_each_role() {
+        let config = temp_file(
+            "config.toml",
+            r#"schema_version = 5
+
+[worker]
+adapter = "codex"
+
+[reviewer]
+adapter = "claude"
+effort = "ultracode"
+
+[unblocker]
+adapter = "cursor"
+effort = "High"
+"#,
+        );
+        let loaded = load_config(&config).unwrap();
+        assert_eq!(loaded.worker.effort, None);
+        assert_eq!(loaded.reviewer.effort.as_deref(), Some("ultracode"));
+        // Effort vocabulary and canonical-case validation belong to adapters.
+        assert_eq!(loaded.unblocker.unwrap().effort.as_deref(), Some("High"));
+        let _ = fs::remove_file(config);
     }
 }

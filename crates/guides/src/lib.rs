@@ -107,8 +107,12 @@ mod tests {
     fn templates_are_embedded() {
         assert!(templates::PLAN_JSON.contains("\"schema_version\": 4"));
         assert!(templates::PLAN_JSON.contains("phase_01_foundation"));
-        assert!(templates::CONFIG_TOML.contains("schema_version = 4"));
+        assert!(templates::CONFIG_TOML.contains("schema_version = 5"));
         assert!(templates::CONFIG_TOML.contains("args"));
+        assert!(templates::CONFIG_TOML.contains("effort = \"high\""));
+        assert!(BUILD.contains("schema 5"));
+        assert!(BUILD.contains("ultracode"));
+        assert!(BUILD.contains("does not support the first-class `effort` setting"));
     }
 
     #[test]

@@ -1,9 +1,12 @@
-schema_version = 4
+schema_version = 5
 
 [worker]
 adapter = "codex"
-# Optional provider-native model and opaque native arguments.
+# Optional provider-native model.
 # model = "native-model-name"
+# Optional provider-neutral effort. Omit to leave the provider/model default untouched.
+# effort = "high"
+# Optional opaque provider-native arguments; appended after first-class effort.
 # args = ["--search"]
 
 [reviewer]
@@ -12,3 +15,4 @@ adapter = "codex"
 # Optional. If omitted, Unblock uses reviewer settings but never its session.
 # [unblocker]
 # adapter = "codex"
+# effort = "high"

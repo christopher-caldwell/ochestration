@@ -187,11 +187,13 @@ pub fn write_config(path: &Path, worker: &str, reviewer: &str) {
         worker: RoleConfig {
             adapter: worker.into(),
             model: Some("native-model".into()),
+            effort: None,
             args: Some(vec!["--search".into()]),
         },
         reviewer: RoleConfig {
             adapter: reviewer.into(),
             model: None,
+            effort: None,
             args: None,
         },
         unblocker: None,
