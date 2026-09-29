@@ -98,11 +98,13 @@ default to `~/.agents/skills`; pass an absolute destination to a skill recipe or
 ## How roles talk to providers
 
 Build config uses schema 5 and each role selects one native adapter (`codex`, `claude`, or `cursor`),
-with optional native `model`, neutral `effort`, and opaque CLI `args`. Omitted effort sends no
-provider setting. Codex and Claude translate exact lowercase provider-level effort values; Cursor
-uses provider-native effort-bearing model strings instead. Build does not check effort support for
-individual models, and opaque args follow first-class effort without effort parsing. Build state and
-plan are breaking schema versions; historical Build state is intentionally not migrated.
+with optional native `model`, neutral `effort`, and opaque CLI `args`. When `effort` is omitted,
+Orchestrate adds no first-class effort setting and chooses no default. Codex and Claude translate
+exact lowercase provider-level effort values; Cursor uses provider-native effort-bearing model
+strings instead. Build does not check effort support for individual models. Accepted opaque `args`
+are appended unchanged after any first-class effort arguments; they may independently set effort,
+which Build does not inspect, normalize, reconcile, or prevent. Build state and plan are breaking
+schema versions; historical Build state is intentionally not migrated.
 
 For deeper details, see the [documentation index](docs/README.md) and
 [architecture](docs/architecture.md).

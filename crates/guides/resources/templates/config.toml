@@ -4,9 +4,12 @@ schema_version = 5
 adapter = "codex"
 # Optional provider-native model.
 # model = "native-model-name"
-# Optional provider-neutral effort. Omit to leave the provider/model default untouched.
+# Optional provider-neutral effort. Omit to add no first-class effort setting;
+# Orchestrate chooses no default.
 # effort = "high"
-# Optional opaque provider-native arguments; appended after first-class effort.
+# Optional opaque provider-native arguments; appended unchanged after any first-class effort.
+# These may set effort independently; Orchestrate does not inspect, normalize,
+# reconcile, or prevent effort settings in them.
 # args = ["--search"]
 
 [reviewer]

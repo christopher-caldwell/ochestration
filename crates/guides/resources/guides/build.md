@@ -41,8 +41,8 @@ schema_version = 5
 [worker]
 adapter = "codex"
 model = "native-model-name" # optional
-effort = "high"             # optional; omission leaves the provider/model default untouched
-args = ["--search"]         # optional native arguments, appended after effort
+effort = "high"             # optional; omission adds no first-class effort setting
+args = ["--search"]         # optional native arguments, appended after any first-class effort
 
 [reviewer]
 adapter = "claude"
@@ -53,13 +53,13 @@ adapter = "claude"
 # model = "claude-opus-4-8-thinking-high" # provider-native effort variant; omit first-class effort
 ```
 
-`effort` records provider-neutral intent, while accepted values depend on the selected adapter. Values must use their exact lowercase spelling; Build validates them against provider-level adapter support and does not check whether a particular model supports them. Omitting the setting sends no effort flag or config override.
+`effort` records provider-neutral intent, while accepted values depend on the selected adapter. Values must use their exact lowercase spelling; Build validates them against provider-level adapter support and does not check whether a particular model supports them. Omitting it adds no first-class effort setting; Build does not choose a default.
 
 - Codex accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, translated through its `model_reasoning_effort` config override.
 - Claude accepts `low`, `medium`, `high`, `xhigh`, `max`, and `ultracode`, translated as `--effort <value>`.
 - Cursor does not support the first-class `effort` setting. Set an effort-bearing provider-native value through `model`, for example `model = "claude-opus-4-8-thinking-high"`; Build passes that string through unchanged.
 
-Opaque `args` follow the translated first-class effort and are not parsed for effort conflicts. The invocation record preserves both the neutral configured effort and the exact translated argv.
+Accepted opaque `args` are appended unchanged after any translated first-class effort arguments. They may independently contain provider-native effort settings; Build does not inspect, normalize, reconcile, or prevent those settings. The invocation record preserves both the neutral configured effort and the exact translated argv.
 
 After the Build is fully scaffolded and ready to launch, print the exact launch command using the actual resolved Orchestrate root and effort:
 
