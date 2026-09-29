@@ -39,9 +39,10 @@ The short version is:
 3. In a fresh model window, pass the finished Discovery directories to:
    $reconcile "/path/discovery-1" "/path/discovery-2" ...
 
-4. Review the Reconciled Discovery. Reconcile stops here.
+4. Review the Reconciled Discovery and its outcome. Reconcile stops here; a `BLOCKED` result
+   reports the upstream decision or evidence needed before Build.
 
-5. Later, use `$build` to prepare the ordered phases and their implementation documents. Then
+5. For `IMPLEMENTATION_READY`, use `$build` to prepare the ordered phases and their implementation documents. Then
    explicitly authorize the Build launch. Rust runs Work ↔ Review across the phases, registers the
    exact Implementation, and invokes independent Audit automatically.
 ```

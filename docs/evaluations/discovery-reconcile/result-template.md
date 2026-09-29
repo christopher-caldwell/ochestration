@@ -7,6 +7,7 @@ Complete this record outside the repositories. This template is not an executed 
 - Date:
 - Model/provider and reasoning setting (unknown if unavailable):
 - Orchestrate revision or binary version:
+- Role and case variant (historical or synthetic):
 - Captured guide path:
 - Model prompt copy/path:
 - Exact selected input labels, artifact IDs, and directories:
@@ -30,6 +31,16 @@ For each item, record pass/fail/unobserved, the response passage or tool access,
 8. Verification limits:
 9. Scope limitations:
 10. Evidence/access boundary:
+11. Acceptance assertion and completion consequence:
+12. Conditional exclusions:
+13. Published ready/blocked handoff (if applicable):
+
+## Other role observations (if exercised)
+
+- Discovery publication: acceptance meaning, known limitation, clarification, and evidence status:
+- Planner: phase evidence, local repairs, capability setup, or precise upstream return:
+- Chat Discovery with phases / without phases: coherent authority, phase consistency, blockers:
+- Exact input boundary and any unobserved access for each role:
 
 ## Result
 

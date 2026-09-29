@@ -90,6 +90,9 @@ analyze the finished Discovery without reopening the repository.
 
 Before publication, Discovery reviews the specification and graph together for consistent
 references, evidence, decisions, and limitations. Passing structural validation does not replace
-that review. Deferred findings may remain useful without creating implementation requirements.
+that review. Acceptance must say whether a real check verifies correct handling of its observed
+result or requires a particular successful external result; a health predicate alone does not
+settle that question. Preserve conditions on scope exclusions and explain how known limitations
+affect completion. Deferred findings may remain useful without creating implementation requirements.
 
 Next: [Reconcile](reconcile.md).
