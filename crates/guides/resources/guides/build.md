@@ -50,7 +50,7 @@ adapter = "claude"
 # Optional; absent means Unblock uses reviewer settings, without a session.
 # [unblocker]
 # adapter = "cursor"
-# effort = "high"
+# model = "claude-opus-4-8-thinking-high" # provider-native effort variant; omit first-class effort
 ```
 
 `effort` records provider-neutral intent, while accepted values depend on the selected adapter. Values must use their exact lowercase spelling; Build validates them against provider-level adapter support and does not check whether a particular model supports them. Omitting the setting sends no effort flag or config override.

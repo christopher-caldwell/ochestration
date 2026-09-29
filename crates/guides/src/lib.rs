@@ -113,6 +113,9 @@ mod tests {
         assert!(BUILD.contains("schema 5"));
         assert!(BUILD.contains("ultracode"));
         assert!(BUILD.contains("does not support the first-class `effort` setting"));
+        assert!(
+            BUILD.contains("# adapter = \"cursor\"\n# model = \"claude-opus-4-8-thinking-high\"")
+        );
     }
 
     #[test]
