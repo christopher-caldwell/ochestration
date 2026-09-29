@@ -25,6 +25,10 @@ For every `evidence_synthesis` entry, set `verification_methods` to the distinct
 
 With exactly two inputs, never invent a majority or choose by model identity. Choose the better-supported direction when the evidence distinguishes them. If a genuine material tie or missing user-authority choice remains, ask the user before finalization and record the answer through `user_clarification`. If competent Discovery should have surfaced the question, identify it as a Discovery coverage failure. User answers are direct authority, not new engineering evidence. After an answer, still converge on one direction.
 
+After selecting a direction, review the assembled contract's requirements, acceptance, conditions, unchanged behavior, exclusions, evidence limits, and relevant risks together. Check the meaning supported by the selected outputs, not only whether each source ID exists. In particular, distinguish a health predicate, a real check that verifies correct handling of the observed response, and a completion gate requiring the external target to respond healthy. A passing acceptance command does not by itself identify which assertion it contains. Preserve qualified exclusions rather than turning "not without X" into "never" or assuming X automatically authorizes a remedy. Keep binding obligations in requirements, acceptance, and conditions; risks and caveats may explain their consequences but cannot waive or create them.
+
+When a known limitation intersects acceptance, state the supported disposition and its completion consequence. Preserve a hard external prerequisite when selected evidence or user authority establishes it, even if its result remains pending; future failure alone does not make synthesis unready. Preserve a response-handling boundary when that is what the authority establishes, without adding an external-success gate. If a material user-owned choice remains, ask and record its actual answer under the authority rules above. If settlement instead needs missing engineering evidence, name the missing question in `blocking_issues`; do not obtain new evidence inside Reconcile or treat a later Planner report as a Discovery source. Do not require fresh approval when existing authority settles the meaning or proof that all future checks will pass.
+
 Write `reconcile-proposal.json` outside the repository and published bundles. It is the single authoritative structured contract. Include:
 
 ```json
@@ -79,7 +83,7 @@ orchestrate --root "<root>" reconcile finalize --effort "<effort>" \
   --bundle "<absolute path to reconcile-proposal.json>"
 ```
 
-Then stop. Do not inspect code, create Adoption, ask for Build approval, or start Build. Printing the exact Build handoff is required and does not itself start Build. The normal chat response is concise:
+After finalization succeeds, use the actual published outcome for the chat handoff, then stop. Do not inspect code, create Adoption, ask for Build approval, or start Build. For `IMPLEMENTATION_READY`, print the exact Build handoff; this does not itself start Build. The ready response is concise:
 
 ```text
 Result: <one clear selected direction>
@@ -92,4 +96,6 @@ Next:
 $build "/absolute/path/to/reconciled-discovery.md" and scaffold the Build. You are authorized to run the Build scaffold operation for this effort.
 ```
 
-`Artifact:` and the path in `Next:` must use the actual absolute path to `reconciled-discovery.md`, not a bundle directory or a placeholder. The scaffold authorization applies only to the Build scaffold operation; it does not authorize Build execution or the driver. The artifact tells Build why; chat tells the user the answer.
+For `BLOCKED`, instead report the exact published artifact path, each material unresolved issue, and the user decision or upstream engineering evidence needed. Stop without the normal Build/scaffold handoff or a claim that the artifact is implementation-ready. If finalization fails, report the failure without inventing a published artifact or outcome.
+
+`Artifact:` and any ready `Next:` path must use the actual absolute path to `reconciled-discovery.md`, not a bundle directory or a placeholder. The ready scaffold authorization applies only to the Build scaffold operation; it does not authorize Build execution or the driver. The artifact tells Build why; chat tells the user the answer.

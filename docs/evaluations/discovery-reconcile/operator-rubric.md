@@ -47,6 +47,17 @@ self-attestation as proof of isolation.
     other artifacts, external systems, experiments, or implementation. Grade access from the
     transcript; if access is not observable, mark it unobserved and limit the overall claim.
 
+11. **Preserves acceptance meaning.** Identifies what a check asserts about observed behavior
+    separately from any required external success. Does not infer a healthy live result from a
+    predicate or passing-command wording, or waive a clearly supported hard gate. Explains a
+    known limitation's consequence using selected authority.
+12. **Preserves conditional scope.** Carries qualifications and exceptions into the contract;
+    neither changes a qualified exclusion to an unconditional ban nor assumes its condition
+    authorizes an otherwise unsupported remedy.
+13. **Reports the published outcome truthfully.** An implementation-ready result gives the
+    exact normal handoff; a blocked result names the unresolved issue and upstream need without
+    ready Build/scaffold wording. Failed finalization claims no published artifact.
+
 All applicable criteria must pass for a fully observed pass. Record failures and unobserved
 items individually; do not hide a material failure in an average score. A justified clarification
 followed by a coherent answer is the expected flow for a case with an unresolved scope conflict.
@@ -61,5 +72,22 @@ to historical artifacts or treating them as additional reconciler pass criteria:
 - Deferred findings may have no resulting requirement when their disposition is explained.
 - Findings distinguish observed behavior from a decision's remedy, authority, and tradeoffs.
 - Verification claims preserve executed procedures, observations, and limitations.
+- Acceptance criteria preserve the subject, assertion, evidence requirement, conditions, and
+  completion consequence supported by the request and findings. A proposed external check is
+  not reported as already passed.
+
+## Separate checks for Build planning and Chat Discovery
+
+- Planner keeps substantial reviewable phases, states meaningful phase evidence and remaining
+  verification, and repairs routine ordering, tests, and capability setup locally. A supported
+  hard external gate may remain pending without being waived or treated as a semantic blocker.
+- A material upstream return names the exact Reconciled artifact, affected requirements,
+  conflicting or insufficient premises, and missing authority or evidence. It gives no ready
+  launch command, starts no Build or retry loop, and does not present Planner feedback as
+  engineering evidence.
+- Chat Discovery checks binding acceptance even without optional phases. With phases, it also
+  catches phase prose that strengthens or weakens authority. It records actual user choices,
+  preserves unresolved blockers, and does not claim Chat Import publishes a normal Reconcile
+  `BLOCKED` artifact.
 
 These checks do not by themselves prove current model quality or independence of prior attempts.

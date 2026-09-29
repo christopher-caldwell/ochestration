@@ -37,13 +37,15 @@ Open a fresh model window:
 $reconcile "/path/discovery-1" "/path/discovery-2" "/path/discovery-3" ...
 ```
 
-Review the Reconciled Discovery. Reconcile stops after reporting the selected direction and artifact.
+Review the Reconciled Discovery. Reconcile stops after reporting the selected direction, artifact,
+and outcome. A `BLOCKED` artifact needs its stated upstream decision or evidence; only
+`IMPLEMENTATION_READY` proceeds to the normal Build handoff.
 
 Keep the reconciled document path and effort ID.
 
 ## 4. Build
 
-Later, use `$build` to prepare the ordered phases and their implementation documents. This does not
+For `IMPLEMENTATION_READY`, use `$build` to prepare the ordered phases and their implementation documents. This does not
 start the driver. Explicitly authorize the exact Build launch when ready.
 
 After launch, Rust runs Work ↔ Review across the phases. Once every phase passes, it registers the

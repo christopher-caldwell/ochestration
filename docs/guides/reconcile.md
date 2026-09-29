@@ -31,6 +31,12 @@ Only the directories you explicitly pass are part of this Reconcile run.
 ## What it does
 
 Reconcile compares the selected Discoveries and produces one **Reconciled Discovery**.
+It also checks that combining their requirements, acceptance criteria, exclusions, and known
+limitations preserves the meaning the selected outputs support. A passing live acceptance command
+does not alone say whether an external target must respond healthy or whether its observed response
+must be classified correctly. A supported hard gate can remain pending without making synthesis
+blocked; an unresolved material decision or missing engineering evidence cannot be filled in by
+Reconcile's own investigation.
 
 The result must converge on one leading direction and may:
 
@@ -75,8 +81,10 @@ A blocked result cannot be built.
 
 ## Stop boundary
 
-The skill shows you the final `reconciled-discovery.md`, reports the selected direction and path,
-and stops. It does not ask for Build approval, create Adoption, or begin Build.
+The skill reports the final outcome and stops. An `IMPLEMENTATION_READY` result includes the exact
+`reconciled-discovery.md` path and normal Build-scaffold handoff. A `BLOCKED` result includes its
+published artifact, unresolved issue, and needed upstream decision or evidence, without a ready
+Build handoff. It does not ask for Build approval, create Adoption, or begin Build.
 
 Before closing the window, keep:
 
@@ -85,6 +93,7 @@ Effort ID
 Reconciled document path
 ```
 
-Later, an explicit Build invocation uses these to authorize Build.
+Only an implementation-ready artifact can enter Build. A later explicit Build invocation uses
+its exact artifact and effort to authorize Build.
 
-Next: [Build and Audit](build-and-audit.md).
+For `IMPLEMENTATION_READY`, next: [Build and Audit](build-and-audit.md).

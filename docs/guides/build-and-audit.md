@@ -12,6 +12,8 @@ Omitting `effort` adds no first-class effort setting; Build does not choose a de
 
 Start a new Build only from a clean Git-visible checkout. The Discovery baseline must be an ancestor of `HEAD`. The current `HEAD` becomes the first checkpoint. Build runs until it completes or reaches a durable stop.
 
+During prelaunch planning, make each substantial phase's review evidence and remaining verification clear. Resolve ordering, phase boundaries, and routine test planning locally. If a phase would silently change binding acceptance or require missing material authority or engineering evidence, return the exact Reconciled artifact and affected requirements upstream for a supported correction; do not present the plan as launch-ready. A supported external acceptance gate may remain pending for a later phase. Phase prose cannot amend published authority or rebind an initialized Build.
+
 ## Unattended controller routing
 
 - Work implements the entire current phase (or final Audit correction), commits, and reports that exact `HEAD`.

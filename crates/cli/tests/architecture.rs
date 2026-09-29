@@ -248,7 +248,10 @@ fn reconcile_guide_is_closed_world_convergent_and_stops_before_build() {
     assert!(guide.contains("vendor documentation, or the web"));
     assert!(guide.contains("Produce one leading direction"));
     assert!(guide.contains("experiment` is not an automatic winner"));
-    assert!(guide.contains("Then stop"));
+    assert!(guide.contains("After finalization succeeds, use the actual published outcome"));
+    assert!(guide.contains("For `IMPLEMENTATION_READY`, print the exact Build handoff"));
+    assert!(guide.contains("For `BLOCKED`, instead report"));
+    assert!(guide.contains("If finalization fails, report the failure"));
     assert!(!guide.contains("reconcile adopt"));
     assert!(!guide.contains("approve Build"));
 

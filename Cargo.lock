@@ -306,7 +306,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "orchestrate"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrate-audit"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "orchestrate-contracts",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrate-build"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "orchestrate-audit",
@@ -351,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrate-contracts"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrate-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "orchestrate-discovery"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "orchestrate-contracts",
@@ -388,11 +388,11 @@ dependencies = [
 
 [[package]]
 name = "orchestrate-guides"
-version = "0.0.1"
+version = "0.1.0"
 
 [[package]]
 name = "orchestrate-reconcile"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "orchestrate-contracts",

@@ -144,8 +144,10 @@ The binding requirements answer: **what must Build actually accomplish?**
 
 Technical suggestions are implementation guidance only.
 
-Read the reconciled document. Reconcile reports the result and stops; it does not ask for Build
-approval or create Adoption.
+Read the reconciled document. Reconcile reports the published outcome and stops; it does not ask
+for Build approval or create Adoption. If the outcome is `BLOCKED`, resolve the reported issue
+through the appropriate upstream workflow before planning Build. Only `IMPLEMENTATION_READY`
+receives the normal Build handoff.
 
 Before closing the Reconcile window, keep:
 
@@ -166,7 +168,7 @@ For more detail, see [Reconcile](reconcile.md).
 
 ## 4. Build, then independent Audit
 
-Later, use `$build` to prepare the ordered phases and their implementation documents for the exact
+After `IMPLEMENTATION_READY`, use `$build` to prepare the ordered phases and their implementation documents for the exact
 Reconciled Discovery. Preparation does not run a CLI command, start the driver, or dispatch provider
 work. See [Build and Audit](build-and-audit.md) for setup details. When ready, explicitly authorize
 the Build launch:
@@ -211,9 +213,10 @@ Once installed:
 
 3. $reconcile "/path/discovery-1" "/path/discovery-2" ...
 
-4. Review the Reconciled Discovery; Reconcile stops.
+4. Review the Reconciled Discovery and its outcome; Reconcile stops. Resolve a `BLOCKED` result
+   upstream before Build planning.
 
-5. Later, use $build to prepare the phase implementation documents. Explicitly authorize the Build
+5. For `IMPLEMENTATION_READY`, use $build to prepare the phase implementation documents. Explicitly authorize the Build
    launch when ready; Rust runs Work ↔ Review across phases, registers the exact Implementation,
    and invokes independent Audit.
 ```
