@@ -6,7 +6,7 @@ use std::{fs, path::Path};
 
 pub const STATE_VERSION: u32 = 5;
 pub const PLAN_VERSION: u32 = 4;
-pub const CONFIG_VERSION: u32 = 4;
+pub const CONFIG_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +32,8 @@ pub struct RoleConfig {
     pub adapter: String,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
     #[serde(default)]
     pub args: Option<Vec<String>>,
 }

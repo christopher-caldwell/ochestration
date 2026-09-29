@@ -23,6 +23,7 @@ pub struct RuntimeSessions {
 pub struct InvocationRecord {
     pub adapter: String,
     pub model: Option<String>,
+    pub effort: Option<String>,
     pub args: Vec<String>,
     pub argv: Vec<String>,
     pub cwd: String,
@@ -96,6 +97,7 @@ pub fn prepare_invocation(
                 argv.push("--model".into());
                 argv.push(model.clone());
             }
+            append_effort_args(&config.adapter, config.effort.as_deref(), &mut argv)?;
             argv.extend(args.iter().cloned());
             argv.push(prompt.into());
         }
@@ -112,6 +114,7 @@ pub fn prepare_invocation(
             if let Some(model) = &config.model {
                 argv.extend(["--model".into(), model.clone()]);
             }
+            append_effort_args(&config.adapter, config.effort.as_deref(), &mut argv)?;
             argv.extend(args.iter().cloned());
             // --add-dir accepts variadic directories; stop option parsing so
             // the prompt is not consumed as another directory.
@@ -126,6 +129,7 @@ pub fn prepare_invocation(
             if let Some(model) = &config.model {
                 argv.extend(["--model".into(), model.clone()]);
             }
+            append_effort_args(&config.adapter, config.effort.as_deref(), &mut argv)?;
             argv.extend(args.iter().cloned());
             argv.push(prompt.into());
         }
@@ -140,6 +144,7 @@ pub fn prepare_invocation(
     let record = InvocationRecord {
         adapter: config.adapter.clone(),
         model: config.model.clone(),
+        effort: config.effort.clone(),
         args,
         argv: argv.clone(),
         cwd: cwd.to_string_lossy().into_owned(),
@@ -150,6 +155,41 @@ pub fn prepare_invocation(
         program,
         argv,
     })
+}
+
+fn append_effort_args(adapter: &str, effort: Option<&str>, argv: &mut Vec<String>) -> Result<()> {
+    let Some(effort) = effort else {
+        return Ok(());
+    };
+
+    match adapter {
+        "codex" => {
+            ensure!(
+                matches!(
+                    effort,
+                    "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+                ),
+                "unsupported Codex effort {effort:?}; expected none, minimal, low, medium, high, xhigh, max, or ultra"
+            );
+            argv.push("-c".into());
+            argv.push(format!("model_reasoning_effort=\"{effort}\""));
+        }
+        "claude" => {
+            ensure!(
+                matches!(
+                    effort,
+                    "low" | "medium" | "high" | "xhigh" | "max" | "ultracode"
+                ),
+                "unsupported Claude effort {effort:?}; expected low, medium, high, xhigh, max, or ultracode"
+            );
+            argv.extend(["--effort".into(), effort.into()]);
+        }
+        "cursor" => bail!(
+            "Build adapter \"cursor\" does not support first-class effort; select an effort-bearing provider-native model with the model setting instead"
+        ),
+        other => bail!("unsupported Build adapter {other:?}"),
+    }
+    Ok(())
 }
 
 fn invoke_process(
@@ -353,6 +393,7 @@ mod tests {
         let codex = RoleConfig {
             adapter: "codex".into(),
             model: Some("native-model".into()),
+            effort: None,
             args: Some(vec!["--search".into()]),
         };
         let codex_session = Session {
@@ -374,6 +415,7 @@ mod tests {
         let claude = RoleConfig {
             adapter: "claude".into(),
             model: None,
+            effort: None,
             args: None,
         };
         let claude_call =
@@ -405,5 +447,156 @@ mod tests {
             claude_resumed.record.argv[claude_resumed.record.argv.len() - 2],
             "--"
         );
+    }
+
+    #[test]
+    fn codex_effort_values_map_before_opaque_native_args() {
+        for effort in [
+            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ] {
+            let native_override = "model_reasoning_effort=\"low\"";
+            let config = RoleConfig {
+                adapter: "codex".into(),
+                model: Some("model-that-build-does-not-inspect".into()),
+                effort: Some(effort.into()),
+                args: Some(vec!["-c".into(), native_override.into()]),
+            };
+            let invocation =
+                prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap();
+            let translated = format!("model_reasoning_effort=\"{effort}\"");
+            let effort_positions = invocation
+                .record
+                .argv
+                .windows(2)
+                .enumerate()
+                .filter_map(|(index, pair)| {
+                    (pair[0] == "-c" && pair[1].starts_with("model_reasoning_effort="))
+                        .then_some(index)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(effort_positions.len(), 2, "{effort}");
+            assert!(effort_positions[0] < effort_positions[1], "{effort}");
+            let model_index = invocation
+                .record
+                .argv
+                .windows(2)
+                .position(|pair| pair == ["--model", "model-that-build-does-not-inspect"])
+                .unwrap();
+            assert!(model_index < effort_positions[0], "{effort}");
+            assert_eq!(invocation.record.argv[effort_positions[0] + 1], translated);
+            assert_eq!(
+                invocation.record.argv[effort_positions[1] + 1],
+                native_override
+            );
+            assert_eq!(invocation.record.effort.as_deref(), Some(effort));
+            let recorded = serde_json::to_value(&invocation.record).unwrap();
+            assert_eq!(recorded["effort"], effort);
+        }
+    }
+
+    #[test]
+    fn claude_effort_values_map_before_opaque_native_args() {
+        for effort in ["low", "medium", "high", "xhigh", "max", "ultracode"] {
+            let config = RoleConfig {
+                adapter: "claude".into(),
+                model: Some("model-that-build-does-not-inspect".into()),
+                effort: Some(effort.into()),
+                args: Some(vec!["--effort".into(), "low".into()]),
+            };
+            let invocation =
+                prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap();
+            let effort_positions = invocation
+                .record
+                .argv
+                .windows(2)
+                .enumerate()
+                .filter_map(|(index, pair)| (pair[0] == "--effort").then_some(index))
+                .collect::<Vec<_>>();
+            assert_eq!(effort_positions.len(), 2, "{effort}");
+            assert!(effort_positions[0] < effort_positions[1], "{effort}");
+            let model_index = invocation
+                .record
+                .argv
+                .windows(2)
+                .position(|pair| pair == ["--model", "model-that-build-does-not-inspect"])
+                .unwrap();
+            assert!(model_index < effort_positions[0], "{effort}");
+            assert_eq!(invocation.record.argv[effort_positions[0] + 1], effort);
+            assert_eq!(invocation.record.argv[effort_positions[1] + 1], "low");
+            assert_eq!(invocation.record.effort.as_deref(), Some(effort));
+        }
+    }
+
+    #[test]
+    fn unsupported_effort_values_fail_exactly_and_cursor_keeps_opaque_models() {
+        for adapter in ["codex", "claude"] {
+            for effort in ["HIGH", "High", "custom"] {
+                let config = RoleConfig {
+                    adapter: adapter.into(),
+                    model: None,
+                    effort: Some(effort.into()),
+                    args: None,
+                };
+                let error =
+                    prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap_err();
+                assert!(error.to_string().contains("unsupported"));
+                assert!(error.to_string().contains(effort));
+            }
+        }
+
+        let cursor_effort = RoleConfig {
+            adapter: "cursor".into(),
+            model: Some("claude-opus-4-8-thinking-high".into()),
+            effort: Some("high".into()),
+            args: None,
+        };
+        let error =
+            prepare_invocation(&cursor_effort, "prompt", Path::new("/repo"), None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not support first-class effort")
+        );
+
+        let cursor_native_model = RoleConfig {
+            adapter: "cursor".into(),
+            model: Some("claude-opus-4-8-thinking-high".into()),
+            effort: None,
+            args: None,
+        };
+        let invocation =
+            prepare_invocation(&cursor_native_model, "prompt", Path::new("/repo"), None).unwrap();
+        assert!(
+            invocation
+                .record
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--model", "claude-opus-4-8-thinking-high"])
+        );
+        assert_eq!(invocation.record.effort, None);
+        assert!(serde_json::to_value(&invocation.record).unwrap()["effort"].is_null());
+    }
+
+    #[test]
+    fn omitted_effort_adds_no_provider_effort_arguments() {
+        for adapter in ["codex", "claude", "cursor"] {
+            let config = RoleConfig {
+                adapter: adapter.into(),
+                model: None,
+                effort: None,
+                args: None,
+            };
+            let invocation =
+                prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap();
+            assert!(!invocation.record.argv.iter().any(|arg| arg == "--effort"));
+            assert!(
+                !invocation
+                    .record
+                    .argv
+                    .iter()
+                    .any(|arg| arg.starts_with("model_reasoning_effort="))
+            );
+            assert_eq!(invocation.record.effort, None);
+        }
     }
 }

@@ -435,7 +435,7 @@ fn initialize(store: &Store, effort: &Effort, repo: &Path, build_dir: &Path) -> 
         store,
         effort,
         plan.reconciled.clone(),
-        provenance("build-adoption", None),
+        provenance("build-adoption", None, None),
     )?;
     let state = BuildState {
         schema_version: STATE_VERSION,
@@ -685,7 +685,11 @@ fn execute_gate(
                         store,
                         effort,
                         assessment.clone(),
-                        provenance(role.adapter.as_str(), role.model.as_deref()),
+                        provenance(
+                            role.adapter.as_str(),
+                            role.model.as_deref(),
+                            role.effort.as_deref(),
+                        ),
                         format!("build-audit-{action_id}"),
                     )?;
                     let (_, report): (_, AuditReport) =
@@ -938,7 +942,7 @@ fn ensure_audit_implementation(
                     &state.checkpoint_commit,
                     "Completed by the Build deterministic gate runner".into(),
                     ImplementationStatus::Submitted,
-                    provenance("build", None),
+                    provenance("build", None, None),
                     format!(
                         "build-implementation-{}",
                         &state.checkpoint_commit[..state.checkpoint_commit.len().min(12)]
@@ -952,13 +956,13 @@ fn ensure_audit_implementation(
     Ok(())
 }
 
-fn provenance(provider: &str, model: Option<&str>) -> Provenance {
+fn provenance(provider: &str, model: Option<&str>, model_effort: Option<&str>) -> Provenance {
     let guide = orchestrate_guides::FINAL_AUDIT;
     Provenance {
         host: "orchestrate-build".into(),
         provider: Some(provider.into()),
         model: model.map(str::to_owned),
-        model_effort: None,
+        model_effort: model_effort.map(str::to_owned),
         guide_digest: digest_bytes(guide.as_bytes()),
         independence: Independence::Unknown,
     }
@@ -1303,6 +1307,102 @@ mod tests {
     }
 
     #[test]
+    fn invocation_records_and_provider_audit_provenance_keep_neutral_effort() {
+        let fixture = make_fixture(one_phase());
+        let mut config = load_config(&fixture.build_dir.join(CONFIG_FILE)).unwrap();
+        config.worker.effort = Some("high".into());
+        config.worker.args = Some(vec![
+            "--search".into(),
+            "-c".into(),
+            "model_reasoning_effort=\"low\"".into(),
+        ]);
+        config.reviewer = RoleConfig {
+            adapter: "claude".into(),
+            model: None,
+            effort: Some("ultracode".into()),
+            args: Some(vec!["--effort".into(), "low".into()]),
+        };
+        fs::write(
+            fixture.build_dir.join(CONFIG_FILE),
+            toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let fake = FakeInvoker::new(
+            [Step::WorkComplete, Step::ReviewPass, Step::AuditPass],
+            &fixture.repo,
+        );
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Completed(_)
+        ));
+        let records = fake.records();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].effort.as_deref(), Some("high"));
+        assert_eq!(records[1].effort.as_deref(), Some("ultracode"));
+        assert_eq!(records[2].effort.as_deref(), Some("ultracode"));
+        assert!(
+            records[0]
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["-c", "model_reasoning_effort=\"high\""])
+        );
+        assert!(
+            records[0]
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["-c", "model_reasoning_effort=\"low\""])
+        );
+        assert!(
+            records[1]
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--effort", "ultracode"])
+        );
+        assert!(
+            records[1]
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--effort", "low"])
+        );
+
+        for record in &records {
+            let packet = packet_from_record(record);
+            let action_id = packet["action_id"].as_str().unwrap();
+            let invocation_path = fixture
+                .build_dir
+                .join("actions")
+                .join(action_id)
+                .join("invocation.json");
+            let persisted: serde_json::Value =
+                serde_json::from_slice(&fs::read(invocation_path).unwrap()).unwrap();
+            assert_eq!(persisted["effort"], record.effort.as_deref().unwrap());
+            assert_eq!(
+                persisted["argv"],
+                serde_json::to_value(&record.argv).unwrap()
+            );
+        }
+
+        let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
+        let completion = state.completion.unwrap();
+        let adoption = fixture
+            .store
+            .load_envelope(&fixture.effort, &state.adoption)
+            .unwrap();
+        assert_eq!(adoption.provenance.model_effort, None);
+        let implementation = fixture
+            .store
+            .load_envelope(&fixture.effort, &completion.implementation)
+            .unwrap();
+        assert_eq!(implementation.provenance.model_effort, None);
+        let audit = fixture
+            .store
+            .load_envelope(&fixture.effort, &completion.audit)
+            .unwrap();
+        assert_eq!(audit.provenance.model_effort.as_deref(), Some("ultracode"));
+    }
+
+    #[test]
     fn worker_and_evaluator_sessions_follow_phase_and_final_scope_boundaries() {
         let phases = vec!["phase_01".into(), "phase_02".into()];
         let fixture = make_fixture(phases);
@@ -1310,6 +1410,7 @@ mod tests {
         config.reviewer = RoleConfig {
             adapter: "claude".into(),
             model: Some("reviewer-model".into()),
+            effort: None,
             args: Some(vec!["--permission-mode".into(), "plan".into()]),
         };
         fs::write(

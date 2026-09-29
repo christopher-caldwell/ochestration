@@ -15,7 +15,7 @@ The non-executing `orchestrate build prepare` command prints this guide. After s
 - `plan.json` schema 4 binds the exact Reconciled artifact and an ordered list of phase directory names, such as `phases: ["phase_01_foundation", "phase_02_delivery"]`. A phase is the dispatch, review, and checkpoint unit: a substantial, coherent implementation slice that can be built, meaningfully verified, and reviewed efficiently as one unit. Optimize boundaries for efficient Work → Review cycles and useful accepted checkpoints. Tasks are model-facing documents, never controller state.
 - Each phase directory requires `phase.md`, describing its purpose, expected outcome, boundaries, implementation guidance, dependencies, and deliberate exclusions. Additional immediate `.md` files contain task/context guidance. Rust loads `phase.md` first, then the others in stable filename order, without recursion or prose parsing. The Planner chooses phases and task ordering/dependencies and makes each phase self-contained. Every role receives the complete binding Reconciled contract.
 - Plan phases at a meaningful size between one task per Review and a near-whole-project mega-phase. Include related work and the tests or verification naturally associated with the slice; group multiple related tasks when together they form a better Work → Review unit. Task enumeration alone is not a reason to add another phase, and phase count follows the shape of the work rather than a numeric target. When substantial reviewable implementation has a natural checkpoint before later independently blocking work, such as external credentials, environment-specific integration, or real-service acceptance, separate that later work. This is conditional guidance, not a requirement to create extra phases in every plan.
-- `config.toml` schema 4 names `worker` and `reviewer`, with optional `unblocker`. Each role has an `adapter` (`codex`, `claude`, or `cursor`) and optional native `model` and opaque `args`.
+- `config.toml` schema 5 names `worker` and `reviewer`, with optional `unblocker`. Each role has an `adapter` (`codex`, `claude`, or `cursor`) plus optional native `model`, neutral `effort`, and opaque `args`.
 - The controller hashes only the exact `plan.json` bytes at initialization. Each explicit Build launch validates the machine plan and phase documents and loads configuration. Do not edit plan files while Rust is running. After a semantic blocked stop, the operator may refine phase Markdown before launching again; those documents are not hashed into durable state. Each provider invocation records the exact settings and arguments it used.
 
 Example phase layout (task filenames are the Planner's choice):
@@ -36,12 +36,13 @@ build/
 Example config:
 
 ```toml
-schema_version = 4
+schema_version = 5
 
 [worker]
 adapter = "codex"
 model = "native-model-name" # optional
-args = ["--search"]         # optional native arguments
+effort = "high"             # optional; omission adds no first-class effort setting
+args = ["--search"]         # optional native arguments, appended after any first-class effort
 
 [reviewer]
 adapter = "claude"
@@ -49,7 +50,16 @@ adapter = "claude"
 # Optional; absent means Unblock uses reviewer settings, without a session.
 # [unblocker]
 # adapter = "cursor"
+# model = "claude-opus-4-8-thinking-high" # provider-native effort variant; omit first-class effort
 ```
+
+`effort` records provider-neutral intent, while accepted values depend on the selected adapter. Values must use their exact lowercase spelling; Build validates them against provider-level adapter support and does not check whether a particular model supports them. Omitting it adds no first-class effort setting; Build does not choose a default.
+
+- Codex accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, translated through its `model_reasoning_effort` config override.
+- Claude accepts `low`, `medium`, `high`, `xhigh`, `max`, and `ultracode`, translated as `--effort <value>`.
+- Cursor does not support the first-class `effort` setting. Set an effort-bearing provider-native value through `model`, for example `model = "claude-opus-4-8-thinking-high"`; Build passes that string through unchanged.
+
+Accepted opaque `args` are appended unchanged after any translated first-class effort arguments. They may independently contain provider-native effort settings; Build does not inspect, normalize, reconcile, or prevent those settings. The invocation record preserves both the neutral configured effort and the exact translated argv.
 
 After the Build is fully scaffolded and ready to launch, print the exact launch command using the actual resolved Orchestrate root and effort:
 

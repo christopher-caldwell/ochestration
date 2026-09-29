@@ -2163,7 +2163,8 @@ fn build_scaffold_status_and_removed_commands_match_the_small_surface() {
         fs::read_to_string(phase_file).unwrap(),
         "Keep operator phase guidance"
     );
-    assert!(config.contains("schema_version = 4"));
+    assert!(config.contains("schema_version = 5"));
+    assert!(config.contains("effort = \"high\""));
     let status = command(&root, &["build", "status", "--effort", &effort]);
     assert_eq!(status["details"]["status"], "uninitialized");
     for removed in [
