@@ -47,6 +47,23 @@ For example:
 
 Optional `build/phase_XX_name/phase.md` files use two decimal digits and a nonempty name. They provide implementation guidance and ordering, not binding authority. Use Build planning for phase count and order, phase boundaries, Work → Review grouping, checkpoints, implementation sequencing, dependencies, and phase-local verification. When the user asks for phases, represent that request through the optional phase directories in the intended order; describe the work within each phase in its `phase.md`. For example, “Use two substantial reviewed phases” belongs in the phase decomposition, not in `requirements[]` or `constraints[]`.
 
+Follow the [Build guide's phase-authoring semantics](../crates/guides/resources/guides/build.md#authority-and-preparation) when writing these optional files. The requirements and constraints in `discovery.json` become the binding Reconciled contract; phase Markdown must not become a second product specification or present planning prose as binding authority. Prefer references to relevant requirement IDs over rewriting their behavior when practical. For example, a phase for a hypothetical first-class role setting with requirement R-7 could say:
+
+```md
+## Relevant contract
+- R-7
+
+## Implementation
+- Add the optional setting to role configuration.
+- Translate supported values at the adapter boundary; preserve opaque native args.
+
+## Verification
+- Config parsing and adapter tests.
+- Check provider-specific documentation examples.
+```
+
+Before packaging `chat-discovery.zip`, read `discovery.json` and every optional phase document and example together. Check that phase prose does not add, remove, strengthen, or weaken any requirement or constraint, create alternate acceptance conditions, or lose conditions and exceptions. Check provider-specific examples and omission/default wording against the precise binding behavior. Correct conflicting phase guidance before packaging; if the authority itself is malformed, use the correction path below. This is a semantic consistency review, not a requirement-to-phase coverage exercise.
+
 Provider and runtime choices belong to later Build configuration: Worker or Reviewer provider, model, reasoning/effort setting, and provider-native arguments. Chat Discovery intentionally does not emit `config.toml`; do not add configuration fields to the ZIP or encode these preferences in implementation authority or phase guidance. If the user states a provider/runtime preference, keep it outside the portable Chat Discovery artifact and report it separately in the surrounding chat/handoff message for later Build setup. The chat also cannot know the local Reconciled artifact ID; do not include `plan.json`.
 
 Split a user statement that combines implementation authority and process direction according to what each part governs. For example:
