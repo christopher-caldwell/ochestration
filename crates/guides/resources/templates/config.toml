@@ -2,6 +2,9 @@ schema_version = 5
 
 [worker]
 adapter = "codex"
+# Claude workers automatically receive acceptEdits plus Bash access. Native
+# permission arguments below own that policy and suppress the automatic baseline.
+# Select a Claude-native model when adapter = "claude"; model names are passed through unchanged.
 # Optional provider-native model.
 # model = "native-model-name"
 # Optional provider-neutral effort. Omit to add no first-class effort setting;

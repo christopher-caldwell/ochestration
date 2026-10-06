@@ -1,4 +1,4 @@
-use crate::state::RoleConfig;
+use crate::state::{Gate, RoleConfig};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -75,6 +75,7 @@ impl InvocationApi for ProcessInvocationApi {
 
 pub fn prepare_invocation(
     config: &RoleConfig,
+    gate: &Gate,
     prompt: &str,
     cwd: &Path,
     session: Option<&Session>,
@@ -115,6 +116,14 @@ pub fn prepare_invocation(
                 argv.extend(["--model".into(), model.clone()]);
             }
             append_effort_args(&config.adapter, config.effort.as_deref(), &mut argv)?;
+            if *gate == Gate::Work && !has_explicit_claude_permission_policy(&args) {
+                argv.extend([
+                    "--permission-mode".into(),
+                    "acceptEdits".into(),
+                    "--allowedTools".into(),
+                    "Bash".into(),
+                ]);
+            }
             argv.extend(args.iter().cloned());
             // --add-dir accepts variadic directories; stop option parsing so
             // the prompt is not consumed as another directory.
@@ -154,6 +163,19 @@ pub fn prepare_invocation(
         record,
         program,
         argv,
+    })
+}
+
+fn has_explicit_claude_permission_policy(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        let flag = arg.split_once('=').map_or(arg.as_str(), |(flag, _)| flag);
+        matches!(
+            flag,
+            "--permission-mode"
+                | "--allowedTools"
+                | "--allowed-tools"
+                | "--dangerously-skip-permissions"
+        )
     })
 }
 
@@ -400,8 +422,14 @@ mod tests {
             adapter: "codex".into(),
             id: "thread-1".into(),
         };
-        let codex_call =
-            prepare_invocation(&codex, "prompt", Path::new("/repo"), Some(&codex_session)).unwrap();
+        let codex_call = prepare_invocation(
+            &codex,
+            &Gate::Work,
+            "prompt",
+            Path::new("/repo"),
+            Some(&codex_session),
+        )
+        .unwrap();
         assert_eq!(codex_call.record.session_in.as_deref(), Some("thread-1"));
         assert_eq!(codex_call.record.argv[0], "exec");
         assert_eq!(codex_call.record.argv[1], "--json");
@@ -418,11 +446,23 @@ mod tests {
             effort: None,
             args: None,
         };
-        let claude_call =
-            prepare_invocation(&claude, "prompt", Path::new("/repo"), Some(&codex_session))
-                .unwrap();
+        let claude_call = prepare_invocation(
+            &claude,
+            &Gate::Review,
+            "prompt",
+            Path::new("/repo"),
+            Some(&codex_session),
+        )
+        .unwrap();
         assert_eq!(claude_call.record.session_in, None);
         assert!(!claude_call.record.argv.iter().any(|arg| arg == "--resume"));
+        assert!(
+            !claude_call
+                .record
+                .argv
+                .iter()
+                .any(|arg| arg == "--permission-mode")
+        );
 
         let same_claude_session = Session {
             adapter: "claude".into(),
@@ -430,6 +470,7 @@ mod tests {
         };
         let claude_resumed = prepare_invocation(
             &claude,
+            &Gate::Work,
             "prompt",
             Path::new("/repo"),
             Some(&same_claude_session),
@@ -447,6 +488,126 @@ mod tests {
             claude_resumed.record.argv[claude_resumed.record.argv.len() - 2],
             "--"
         );
+        assert_eq!(claude_resumed.record.args, Vec::<String>::new());
+        assert_eq!(
+            claude_resumed.record.argv
+                [claude_resumed.record.argv.len() - 6..claude_resumed.record.argv.len() - 2],
+            ["--permission-mode", "acceptEdits", "--allowedTools", "Bash"]
+        );
+    }
+
+    #[test]
+    fn claude_worker_permissions_are_defaulted_only_for_work_and_respect_explicit_policy() {
+        let restricted = RoleConfig {
+            adapter: "claude".into(),
+            model: Some("claude-native-model".into()),
+            effort: Some("high".into()),
+            args: Some(vec!["--disallowedTools".into(), "Bash(git push *)".into()]),
+        };
+        let work = prepare_invocation(&restricted, &Gate::Work, "prompt", Path::new("/repo"), None)
+            .unwrap();
+        assert_eq!(work.record.args, ["--disallowedTools", "Bash(git push *)"]);
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--effort", "high"])
+        );
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-mode", "acceptEdits"])
+        );
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--allowedTools", "Bash"])
+        );
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--disallowedTools", "Bash(git push *)"])
+        );
+        let prompt_separator = work.record.argv.iter().position(|arg| arg == "--").unwrap();
+        let defaults_end = work
+            .record
+            .argv
+            .windows(2)
+            .position(|pair| pair == ["--allowedTools", "Bash"])
+            .unwrap()
+            + 2;
+        assert!(defaults_end < prompt_separator);
+        assert_eq!(work.record.argv.last().unwrap(), "prompt");
+
+        let explicit_policies = [
+            vec!["--permission-mode".into(), "plan".into()],
+            vec!["--permission-mode=plan".into()],
+            vec!["--allowedTools".into(), "Read".into()],
+            vec!["--allowedTools=Read".into()],
+            vec!["--allowed-tools".into(), "Read".into()],
+            vec!["--allowed-tools=Read".into()],
+            vec!["--dangerously-skip-permissions".into()],
+        ];
+        for args in explicit_policies {
+            let config = RoleConfig {
+                adapter: "claude".into(),
+                model: None,
+                effort: None,
+                args: Some(args.clone()),
+            };
+            let invocation =
+                prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                    .unwrap();
+            assert_eq!(invocation.record.args, args);
+            for default_pair in [
+                ["--permission-mode", "acceptEdits"],
+                ["--allowedTools", "Bash"],
+            ] {
+                let configured_count = args
+                    .windows(2)
+                    .filter(|pair| pair[0] == default_pair[0] && pair[1] == default_pair[1])
+                    .count();
+                let invocation_count = invocation
+                    .record
+                    .argv
+                    .windows(2)
+                    .filter(|pair| pair[0] == default_pair[0] && pair[1] == default_pair[1])
+                    .count();
+                assert_eq!(invocation_count, configured_count, "{args:?}");
+            }
+            let separator = invocation
+                .record
+                .argv
+                .iter()
+                .position(|arg| arg == "--")
+                .unwrap();
+            assert_eq!(
+                &invocation.record.argv[separator - args.len()..separator],
+                args
+            );
+        }
+
+        for gate in [Gate::Review, Gate::Audit, Gate::Unblock] {
+            let invocation =
+                prepare_invocation(&restricted, &gate, "prompt", Path::new("/repo"), None).unwrap();
+            assert!(
+                !invocation
+                    .record
+                    .argv
+                    .iter()
+                    .any(|arg| { matches!(arg.as_str(), "--permission-mode" | "--allowedTools") })
+            );
+            assert!(
+                invocation
+                    .record
+                    .argv
+                    .windows(2)
+                    .any(|pair| pair == ["--disallowedTools", "Bash(git push *)"])
+            );
+        }
     }
 
     #[test]
@@ -462,7 +623,8 @@ mod tests {
                 args: Some(vec!["-c".into(), native_override.into()]),
             };
             let invocation =
-                prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap();
+                prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                    .unwrap();
             let translated = format!("model_reasoning_effort=\"{effort}\"");
             let effort_positions = invocation
                 .record
@@ -504,7 +666,8 @@ mod tests {
                 args: Some(vec!["--effort".into(), "low".into()]),
             };
             let invocation =
-                prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap();
+                prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                    .unwrap();
             let effort_positions = invocation
                 .record
                 .argv
@@ -538,7 +701,8 @@ mod tests {
                     args: None,
                 };
                 let error =
-                    prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap_err();
+                    prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                        .unwrap_err();
                 assert!(error.to_string().contains("unsupported"));
                 assert!(error.to_string().contains(effort));
             }
@@ -550,8 +714,14 @@ mod tests {
             effort: Some("high".into()),
             args: None,
         };
-        let error =
-            prepare_invocation(&cursor_effort, "prompt", Path::new("/repo"), None).unwrap_err();
+        let error = prepare_invocation(
+            &cursor_effort,
+            &Gate::Work,
+            "prompt",
+            Path::new("/repo"),
+            None,
+        )
+        .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -564,8 +734,14 @@ mod tests {
             effort: None,
             args: None,
         };
-        let invocation =
-            prepare_invocation(&cursor_native_model, "prompt", Path::new("/repo"), None).unwrap();
+        let invocation = prepare_invocation(
+            &cursor_native_model,
+            &Gate::Work,
+            "prompt",
+            Path::new("/repo"),
+            None,
+        )
+        .unwrap();
         assert!(
             invocation
                 .record
@@ -587,7 +763,8 @@ mod tests {
                 args: None,
             };
             let invocation =
-                prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap();
+                prepare_invocation(&config, &Gate::Review, "prompt", Path::new("/repo"), None)
+                    .unwrap();
             assert!(!invocation.record.argv.iter().any(|arg| arg == "--effort"));
             assert!(
                 !invocation
