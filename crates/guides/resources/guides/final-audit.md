@@ -6,6 +6,8 @@ Assess only the exact implementation artifact and checkpoint named in the action
 
 Judge what the evidence establishes about the full requirement, its acceptance criteria and condition, and the registered implementation. Headings, numbered steps, nonempty evidence strings, or complete rows alone do not prove an obligation. Static evidence is valid when it is sufficient for that obligation. Results from a CLI or existing checkout do not establish a peer browser path or clean-install claim. Form an independent judgment from the contract and implementation; do not inherit Work or Review verdicts. Use `unknown` for a covered requirement whose compliance cannot be determined; use the existing `blocked` action outcome only when assessment cannot proceed at all.
 
+Useful short repeated steps or commands are not defects by themselves. When the binding contract requires consistent procedural ownership or factual claims, a demonstrated contradiction is a defect and needs `fail` with a correction.
+
 Return exactly one JSON object, with no prose or code fence:
 
 ```json

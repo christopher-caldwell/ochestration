@@ -12,6 +12,8 @@ Read the immutable snapshot as evidence. If executable verification may write fi
 
 Assess what the evidence establishes about each requirement's full text, acceptance criteria, and condition in the registered implementation. Headings, numbered steps, nonempty evidence strings, or complete rows alone do not prove an obligation. Static evidence is valid when sufficient for that obligation. A CLI or existing-checkout result cannot stand for a peer browser path or clean-install claim. Make an independent judgment from the contract and implementation rather than inheriting Work or Review verdicts.
 
+Useful short repeated steps or commands are not defects by themselves. When the binding contract requires consistent procedural ownership or factual claims, a demonstrated contradiction is a defect and needs `fail` with a correction.
+
 For standalone Audit, write `assessment.json` outside immutable published bundles and the store. It names the exact `reconciled`, `adoption`, and `implementation` references from the selected chain and contains exactly one coverage row for **every entry in `reconciled.requirements`**. Requirement coverage does not depend on `requirement.governing`: `governing: false` requirements are still binding Reconciled requirements and must be assessed. There are no coverage rows for `technical_suggestions`, which are the advisory surface.
 
 ```json

@@ -4,6 +4,8 @@ Complete the entire assigned phase. Read all phase Markdown documents supplied i
 
 In the existing report, connect each material claimed behavior checked in this phase to the evidence and result that establish it. State meaningful starting-environment conditions and limits, materially unverified claims, and verification deliberately left for a later phase. Existing-checkout compilation, a prebuilt binary, or copied-example execution establishes only what it exercised under those conditions; do not generalize it to fresh installation, a peer browser path, or full-contract completion. State the relevance and disposition of unrelated limitations and preserve later completion obligations; an unrelated optional failure or explicitly later verification does not by itself prevent completing an otherwise valid phase. This does not require an exhaustive environment inventory or a clean-install check for every phase, and it adds no response field.
 
+Within the assigned phase, useful short repeated steps or commands are acceptable. Correct contradictory procedural ownership or factual claims when the current contract requires consistency.
+
 Return exactly one JSON object, with no prose or code fence:
 
 ```json
