@@ -6,7 +6,10 @@ use orchestrate_build::{
 use std::{
     collections::HashSet,
     io::{self, IsTerminal, Write},
+    path::{Path, PathBuf},
 };
+
+use crate::command_display::{command_prefix, shell_quote};
 
 const RULE: &str = "────────────────────────────────────";
 const EMPTY: &str = "—";
@@ -75,6 +78,7 @@ pub(crate) struct Display<W> {
     seen: Vec<(BuildEvent, Option<String>)>,
     reviewed: HashSet<usize>,
     failed: bool,
+    root: Option<PathBuf>,
 }
 
 impl<W: Write> Display<W> {
@@ -87,7 +91,13 @@ impl<W: Write> Display<W> {
             seen: Vec::new(),
             reviewed: HashSet::new(),
             failed: false,
+            root: None,
         }
+    }
+
+    pub(crate) fn with_root(mut self, root: Option<PathBuf>) -> Self {
+        self.root = root;
+        self
     }
 
     fn paint(&self, tone: Tone, text: &str) -> String {
@@ -272,13 +282,11 @@ impl<W: Write> Display<W> {
                 Status::Complete => self.paint(Tone::Pass, "✓ Build complete"),
                 Status::Stopped => self.paint(
                     Tone::Stop,
-                    &format!(
-                        "! Build stopped — {}\n  Details: orchestrate build status --effort <id>",
-                        state
-                            .stop
-                            .as_ref()
-                            .map(|stop| stop_kind(&stop.kind))
-                            .unwrap_or("unavailable")
+                    &terminal_stop(
+                        observation.effort_id,
+                        state,
+                        observation.plan,
+                        self.root.as_deref(),
                     ),
                 ),
                 _ => return Vec::new(),
@@ -365,13 +373,116 @@ fn counts(scope: &Scope, plan: Option<&BuildPlan>) -> Option<(usize, usize)> {
     }
 }
 
-fn phase_label(id: &str) -> &str {
-    if let Some(rest) = id.strip_prefix("phase_") {
-        if let Some((digits, name)) = rest.split_once('_') {
-            if digits.len() >= 2 && digits.bytes().all(|byte| byte.is_ascii_digit()) {
-                return name;
+pub(crate) fn status_report(
+    effort_id: &str,
+    build_dir: &Path,
+    state: Option<&BuildState>,
+    plan: Option<&BuildPlan>,
+    root: Option<&Path>,
+) -> String {
+    let mut output = format!("Build status — {}\n\n", visible(effort_id));
+    let Some(state) = state else {
+        output.push_str(&format!(
+            "Status: Uninitialized\nBuild directory: {}\n",
+            shell_quote(&build_dir.display().to_string())
+        ));
+        return output;
+    };
+
+    let display = Display::new(Vec::new(), Mode::Plain);
+    output.push_str(&display.frame(state, plan));
+    if let Some(stop) = &state.stop {
+        output.push_str(&format!(
+            "\nStop detail:\n{}\n",
+            visible_multiline(&stop.detail)
+        ));
+        if !state.feedback.is_empty() {
+            output.push_str("\nRecorded feedback:\n");
+            for feedback in &state.feedback {
+                output.push_str(&format!(
+                    "  {} — {}\n",
+                    visible(&feedback.path),
+                    visible(&feedback.purpose)
+                ));
             }
         }
+        if let Some(action_id) = state.current_action_id.as_deref()
+            && orchestrate_build::state::current_action_dir(build_dir, action_id).is_ok()
+            && build_dir
+                .join("actions")
+                .join(action_id)
+                .join("stderr.txt")
+                .is_file()
+        {
+            output.push_str(&format!(
+                "\nProvider stderr:\n  actions/{action_id}/stderr.txt\n"
+            ));
+        }
+        output.push('\n');
+        output.push_str(&recovery_guidance(&stop.kind, effort_id, root));
+    }
+    output
+}
+
+fn terminal_stop(
+    effort_id: &str,
+    state: &BuildState,
+    plan: Option<&BuildPlan>,
+    root: Option<&Path>,
+) -> String {
+    let kind = state
+        .stop
+        .as_ref()
+        .map(|stop| stop_kind(&stop.kind))
+        .unwrap_or("unavailable");
+    let mut output = format!("! Build stopped — {kind}\n");
+    if let Some(stop) = &state.stop {
+        output.push_str(&recovery_guidance(&stop.kind, effort_id, root));
+    }
+    if let Some((reviewed, total)) = counts(&state.scope, plan) {
+        output.push_str(&format!(
+            "  Progress: {reviewed} / {total} phases reviewed\n"
+        ));
+    }
+    output
+}
+
+fn recovery_guidance(kind: &StopKind, effort_id: &str, root: Option<&Path>) -> String {
+    let prefix = command_prefix(root);
+    let effort = shell_quote(effort_id);
+    let status = format!("{prefix} build status --effort {effort}");
+    let launch = format!("{prefix} build --effort {effort}");
+    match kind {
+        StopKind::ResetRequired => {
+            let reset = format!("{prefix} build reset --effort {effort}");
+            format!(
+                "Next steps:\n  1. Inspect the failed action and its evidence with `{status}`.\n  2. Check `git status --short` and save any work you need before reset.\n  3. Run `{reset}`. Reset restores the recorded checkpoint, discards tracked edits, removes non-ignored untracked files and directories, preserves ignored files, and requeues the same gate.\n  4. Run `{launch}` to continue.\n"
+            )
+        }
+        StopKind::Blocked => format!(
+            "Next steps:\n  1. Review the recorded blocker and feedback with `{status}`.\n  2. Address the blocker described in the feedback.\n  3. Run `{launch}` to continue.\n"
+        ),
+    }
+}
+
+fn visible_multiline(text: &str) -> String {
+    text.chars()
+        .map(|character| match character {
+            '\n' => "\n".to_owned(),
+            '\t' => "\t".to_owned(),
+            character if character.is_control() => character.escape_default().to_string(),
+            character => character.to_string(),
+        })
+        .collect()
+}
+
+fn phase_label(id: &str) -> &str {
+    if let Some(rest) = id.strip_prefix("phase_")
+        && let Some((digits, name)) = rest.split_once('_')
+        && digits.len() >= 2
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return name;
     }
     id
 }

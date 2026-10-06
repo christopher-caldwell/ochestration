@@ -55,6 +55,111 @@ fn chat_input() -> &'static str {
     }"#
 }
 
+fn import_command(
+    root: &Path,
+    repo: &Path,
+    bundle: &Path,
+    visual: Option<&str>,
+    editor: Option<&str>,
+    json: bool,
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orchestrate"));
+    command
+        .arg("--root")
+        .arg(root)
+        .arg("import")
+        .arg(bundle)
+        .current_dir(repo)
+        .env_remove("VISUAL")
+        .env_remove("EDITOR");
+    if let Some(visual) = visual {
+        command.env("VISUAL", visual);
+    }
+    if let Some(editor) = editor {
+        command.env("EDITOR", editor);
+    }
+    if json {
+        command.arg("--json");
+    }
+    command.output().unwrap()
+}
+
+#[test]
+fn chat_import_human_output_resolves_editor_quotes_paths_and_explains_empty_plans() {
+    let root = temporary("chat-import's store with spaces");
+    let repo = create_repo("chat-import-human");
+    let bundle = temporary("chat-import-effort-named-bundle").join("do-cool-feature.zip");
+    chat_zip(&bundle, chat_input(), None);
+    let output = import_command(
+        &root,
+        &repo,
+        &bundle,
+        Some("code --wait"),
+        Some("nano"),
+        false,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let success_line = text.lines().next().unwrap();
+    assert!(success_line.starts_with("Successfully imported "));
+    let imported_effort = success_line
+        .strip_prefix("Successfully imported ")
+        .unwrap()
+        .strip_suffix('.')
+        .unwrap();
+    assert!(text.contains("To edit the agent config:\n-> code --wait '"));
+    assert!(text.contains("config.toml'"));
+    assert!(text.contains("To start the build:\n-> orchestrate --root '"));
+    assert!(text.contains("'\\''s store with spaces"));
+    assert!(text.contains("Add phases to plan.json before launching Build."));
+    assert!(text.contains(&format!("build --effort {imported_effort}")));
+    assert!(!text.trim_start().starts_with('{'));
+
+    let fallback_root = temporary("chat-import-editor-fallback-store");
+    let fallback_repo = create_repo("chat-import-editor-fallback");
+    let fallback_bundle =
+        temporary("chat-import-editor-fallback-bundle").join("arbitrary-name.zip");
+    chat_zip(&fallback_bundle, chat_input(), Some("# Delivery\n"));
+    let fallback = import_command(
+        &fallback_root,
+        &fallback_repo,
+        &fallback_bundle,
+        Some("  "),
+        Some("cursor --wait"),
+        false,
+    );
+    assert!(fallback.status.success());
+    let fallback = String::from_utf8(fallback.stdout).unwrap();
+    assert!(fallback.contains("-> cursor --wait "), "{fallback}");
+    assert!(!fallback.contains("no Build phases"));
+
+    let no_editor_root = temporary("chat-import-no-editor-store");
+    let no_editor_repo = create_repo("chat-import-no-editor");
+    let no_editor_bundle = temporary("chat-import-no-editor-bundle").join("input.zip");
+    chat_zip(&no_editor_bundle, chat_input(), Some("# Delivery\n"));
+    let no_editor = import_command(
+        &no_editor_root,
+        &no_editor_repo,
+        &no_editor_bundle,
+        Some(""),
+        Some("  "),
+        false,
+    );
+    assert!(no_editor.status.success());
+    let no_editor = String::from_utf8(no_editor.stdout).unwrap();
+    assert!(no_editor.contains("To edit the agent config:\n-> "));
+    assert!(
+        no_editor
+            .lines()
+            .any(|line| { line.starts_with("-> ") && line.ends_with("config.toml") })
+    );
+    assert!(!no_editor.contains("code ") && !no_editor.contains("cursor "));
+}
+
 #[test]
 fn chat_import_stops_at_exact_single_source_reconciled_boundary() {
     let root = temporary("chat-import-store");
@@ -69,7 +174,7 @@ fn chat_import_stops_at_exact_single_source_reconciled_boundary() {
     let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
         .arg("--root")
         .arg(&root)
-        .args(["import", bundle.to_str().unwrap()])
+        .args(["import", bundle.to_str().unwrap(), "--json"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -210,7 +315,7 @@ fn chat_import_rejects_incomplete_bundle_before_creating_effort() {
     let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
         .arg("--root")
         .arg(&root)
-        .args(["import", bundle.to_str().unwrap()])
+        .args(["import", bundle.to_str().unwrap(), "--json"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -228,7 +333,7 @@ fn chat_import_without_phases_stops_before_build_planning() {
     let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
         .arg("--root")
         .arg(&root)
-        .args(["import", bundle.to_str().unwrap()])
+        .args(["import", bundle.to_str().unwrap(), "--json"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -308,7 +413,7 @@ fn chat_import_rejects_invalid_requirement_authority_before_creating_effort() {
         let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
             .arg("--root")
             .arg(&root)
-            .args(["import", bundle.to_str().unwrap()])
+            .args(["import", bundle.to_str().unwrap(), "--json"])
             .current_dir(&repo)
             .output()
             .unwrap();
@@ -333,7 +438,7 @@ fn chat_import_orders_two_digit_phase_names_and_rejects_short_numbers() {
     let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
         .arg("--root")
         .arg(&root)
-        .args(["import", bundle.to_str().unwrap()])
+        .args(["import", bundle.to_str().unwrap(), "--json"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -357,7 +462,7 @@ fn chat_import_orders_two_digit_phase_names_and_rejects_short_numbers() {
     let rejected = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
         .arg("--root")
         .arg(&invalid_root)
-        .args(["import", invalid_bundle.to_str().unwrap()])
+        .args(["import", invalid_bundle.to_str().unwrap(), "--json"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -2165,7 +2270,7 @@ fn build_scaffold_status_and_removed_commands_match_the_small_surface() {
     );
     assert!(config.contains("schema_version = 5"));
     assert!(config.contains("effort = \"high\""));
-    let status = command(&root, &["build", "status", "--effort", &effort]);
+    let status = command(&root, &["build", "status", "--effort", &effort, "--json"]);
     assert_eq!(status["details"]["status"], "uninitialized");
     for removed in [
         "preflight",
@@ -2183,6 +2288,37 @@ fn build_scaffold_status_and_removed_commands_match_the_small_surface() {
     }
     let error = command_error(&root, &["once-over", "guide"]);
     assert!(error.contains("unrecognized subcommand"), "{error}");
+}
+
+#[test]
+fn build_status_defaults_to_human_text_and_keeps_json_as_an_explicit_option() {
+    let (root, repo, effort) = new_effort("build-human-status");
+    let human = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .args(["build", "status", "--effort", &effort])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(human.contains(&format!("Build status — {effort}")));
+    assert!(human.contains("Status: Uninitialized"));
+    assert!(human.contains("Build directory:"));
+    assert!(!human.trim_start().starts_with('{'));
+
+    let json = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .args(["build", "status", "--effort", &effort, "--json"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["operation_status"], "SUCCESS");
+    assert_eq!(json["semantic_outcome"], "READ_ONLY");
+    assert_eq!(json["details"]["status"], "uninitialized");
 }
 
 #[test]
@@ -2407,6 +2543,28 @@ fn build_live_streams_keep_one_json_result_on_nonexecuting_fixture_paths() {
             assert!(!build_dir.join("actions").exists());
         }
     }
+    let inferred = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
+        .arg("--root")
+        .arg(&root)
+        .arg("build")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(inferred.status.success());
+    let _result: serde_json::Value = serde_json::from_slice(&inferred.stdout).unwrap();
+    let inferred_stderr = String::from_utf8(inferred.stderr).unwrap();
+    let canonical_root = fs::canonicalize(&root).unwrap();
+    assert!(
+        inferred_stderr.contains(&format!(
+            "orchestrate --root {} build status --effort {effort_id}",
+            canonical_root.display()
+        )),
+        "{inferred_stderr}"
+    );
+    assert!(inferred_stderr.contains(&format!(
+        "orchestrate --root {} build reset --effort {effort_id}",
+        canonical_root.display()
+    )));
     let bare = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
         .args(["--effort", &effort_id])
         .output()
@@ -2420,7 +2578,7 @@ fn one_shot_build_surfaces_keep_stderr_and_json_contracts_with_forced_color() {
     for args in [
         vec!["status", "--effort", &effort_id],
         vec!["build", "scaffold", "--effort", &effort_id],
-        vec!["build", "status", "--effort", &effort_id],
+        vec!["build", "status", "--effort", &effort_id, "--json"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_orchestrate"))
             .arg("--root")

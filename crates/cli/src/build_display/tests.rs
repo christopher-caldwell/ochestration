@@ -41,7 +41,12 @@ fn observe(
     plan: Option<&BuildPlan>,
     event: BuildEvent,
 ) {
-    display.observe(BuildObservation { state, plan, event });
+    display.observe(BuildObservation {
+        state,
+        plan,
+        event,
+        effort_id: "effort-fixture",
+    });
 }
 
 fn text(display: &Display<Vec<u8>>) -> String {
@@ -105,6 +110,78 @@ fn frames_show_reviewed_progress_and_actual_scope_gate_status() {
         state.current_action_id.as_deref(),
         Some("a-full-action-id-1234567890123456789")
     );
+}
+
+#[test]
+fn standalone_status_uses_recorded_facts_and_stop_specific_recovery() {
+    let (mut state, plan) = fixture(2);
+    let build_dir = std::env::temp_dir().join(format!("orchestrate-status-{}", unique_id()));
+    let stderr = build_dir.join("actions/a-action-1/stderr.txt");
+    std::fs::create_dir_all(stderr.parent().unwrap()).unwrap();
+    std::fs::write(&stderr, "provider diagnostic\n").unwrap();
+
+    for status in [Status::Ready, Status::Running, Status::Complete] {
+        state.status = status.clone();
+        let output = status_report(
+            "effort-resolved",
+            &build_dir,
+            Some(&state),
+            Some(&plan),
+            None,
+        );
+        assert!(output.contains("Build status — effort-resolved"));
+        assert!(output.contains(&format!("Status:       {}", super::status(&status))));
+        assert!(output.contains("0 / 2 phases reviewed"));
+    }
+
+    state.status = Status::Stopped;
+    state.current_action_id = Some("a-action-1".into());
+    state.feedback = vec![orchestrate_build::state::FeedbackRef {
+        path: "actions/a-action-1/report.md".into(),
+        purpose: "Reviewer feedback".into(),
+    }];
+    state.stop = Some(Stop {
+        kind: StopKind::ResetRequired,
+        detail: "Provider failed.\nInspect actions/a-action-1/stderr.txt\u{1b}[2J".into(),
+    });
+    let root = std::path::Path::new("/tmp/user's orchestration store");
+    let output = status_report(
+        "effort-resolved",
+        &build_dir,
+        Some(&state),
+        Some(&plan),
+        Some(root),
+    );
+    assert!(output.contains(
+        "Stop detail:\nProvider failed.\nInspect actions/a-action-1/stderr.txt\\u{1b}[2J"
+    ));
+    assert!(output.contains("actions/a-action-1/report.md — Reviewer feedback"));
+    assert!(output.contains("Provider stderr:\n  actions/a-action-1/stderr.txt"));
+    assert!(output.contains("git status --short"));
+    assert!(output.contains("orchestrate --root '/tmp/user'\\''s orchestration store' build reset --effort effort-resolved"));
+    assert!(output.contains("discards tracked edits"));
+    assert!(!output.contains('\x1b'));
+
+    state.stop.as_mut().unwrap().kind = StopKind::Blocked;
+    state.stop.as_mut().unwrap().detail = "Address this report".into();
+    let output = status_report("effort-resolved", &build_dir, Some(&state), None, None);
+    assert!(output.contains("Phases reviewed: unavailable"));
+    assert!(output.contains("Address this report"));
+    assert!(output.contains("Address the blocker described in the feedback"));
+    assert!(!output.contains("build reset"));
+
+    let empty = status_report("effort-empty", &build_dir, None, None, None);
+    assert!(empty.contains("Status: Uninitialized"));
+    assert!(empty.contains("Build directory:"));
+    assert!(!empty.contains("Action:") && !empty.contains("Checkpoint:"));
+    std::fs::remove_dir_all(build_dir).unwrap();
+}
+
+fn unique_id() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
 }
 
 #[test]
@@ -325,7 +402,16 @@ fn events_distinguish_corrections_unblock_stops_and_recorded_completion() {
         observe(&mut stopped, &state, Some(&plan), BuildEvent::Terminal);
         let output = text(&stopped);
         assert!(output.contains(&format!("Build stopped — {}", stop_kind(&kind))));
-        assert!(output.contains("orchestrate build status --effort <id>"));
+        assert!(output.contains("orchestrate build status --effort effort-fixture"));
+        assert!(output.contains("Next steps:"));
+        assert!(output.contains("orchestrate build --effort effort-fixture"));
+        if kind == StopKind::ResetRequired {
+            assert!(output.contains("git status --short"));
+            assert!(output.contains("preserves ignored files"));
+        } else {
+            assert!(output.contains("recorded blocker and feedback"));
+            assert!(!output.contains("build reset"));
+        }
         assert!(output.contains("Action:       a-retained-stopped-id"));
         assert!(!output.contains("SECRET") && !output.contains("Build complete"));
     }
@@ -479,6 +565,7 @@ fn each_observation_flushes_before_returning_in_both_modes() {
             event: BuildEvent::Initialized,
             state: &state,
             plan: Some(&plan),
+            effort_id: "effort-fixture",
         });
         state.status = Status::Running;
         state.current_action_id = Some("a-paused".into());
@@ -486,6 +573,7 @@ fn each_observation_flushes_before_returning_in_both_modes() {
             event: BuildEvent::ActionStarted,
             state: &state,
             plan: Some(&plan),
+            effort_id: "effort-fixture",
         });
         assert_eq!(display.writer.flushes, 2);
         assert_eq!(display.writer.flushed, display.writer.bytes.len());
@@ -516,12 +604,14 @@ fn output_errors_are_local_and_identifiers_cannot_inject_terminal_controls() {
         event: BuildEvent::Initialized,
         state: &state,
         plan: Some(&plan),
+        effort_id: "effort-fixture",
     });
     assert!(display.failed);
     display.observe(BuildObservation {
         event: BuildEvent::Terminal,
         state: &state,
         plan: None,
+        effort_id: "effort-fixture",
     });
     plan.phases[0] = "phase_01_name\x1b[2J\nline".into();
     let frame = Display::new(Vec::new(), Mode::Plain).frame(&state, Some(&plan));
