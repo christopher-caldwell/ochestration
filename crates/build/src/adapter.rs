@@ -133,8 +133,6 @@ pub fn prepare_invocation(
                 argv.extend([
                     "--permission-mode".into(),
                     "acceptEdits".into(),
-                    "--allowedTools".into(),
-                    "Bash".into(),
                     "--permission-prompts".into(),
                     "none".into(),
                     "--settings".into(),
@@ -419,9 +417,13 @@ mod tests {
             argv.windows(2)
                 .any(|pair| pair == ["--permission-prompts", "none"])
         );
+        // Sandboxed Bash is auto-allowed by `autoAllowBashIfSandboxed`. A blanket
+        // allow rule would also approve `sandbox.excludedCommands`, which run
+        // outside the sandbox (verified live against Claude Code 2.1.289).
         assert!(
-            argv.windows(2)
-                .any(|pair| pair == ["--allowedTools", "Bash"])
+            !argv
+                .iter()
+                .any(|arg| { matches!(arg.as_str(), "--allowedTools" | "--allowed-tools") })
         );
         let sandbox = worker_settings(argv)["sandbox"].clone();
         assert_eq!(sandbox["enabled"], true);
@@ -592,10 +594,11 @@ mod tests {
                 .any(|pair| pair[0] == "--settings")
         );
         assert!(
-            work.record
+            !work
+                .record
                 .argv
-                .windows(2)
-                .any(|pair| pair == ["--allowedTools", "Bash"])
+                .iter()
+                .any(|arg| matches!(arg.as_str(), "--allowedTools" | "--allowed-tools"))
         );
         assert!(
             work.record

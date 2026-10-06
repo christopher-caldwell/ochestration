@@ -1686,10 +1686,10 @@ mod tests {
             assert_eq!(sandbox["allowUnsandboxedCommands"], false);
             assert_eq!(sandbox["failIfUnavailable"], true);
             assert!(
-                records[index]
+                !records[index]
                     .argv
-                    .windows(2)
-                    .any(|pair| pair == ["--allowedTools", "Bash"])
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "--allowedTools" | "--allowed-tools"))
             );
         }
         for index in [1, 3, 4] {
