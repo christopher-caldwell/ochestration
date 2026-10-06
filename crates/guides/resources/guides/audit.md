@@ -10,7 +10,7 @@ Run `orchestrate status --effort "<effort>"` and identify one exact Reconciled D
 
 Read the immutable snapshot as evidence. If executable verification may write files, create or use a disposable checkout or copy of the exact registered target commit and run tests there. Never mutate the stored immutable snapshot. Audit must not invent product requirements, turn advisory technical suggestions into requirements, or fail implementation details that the binding Reconciled Discovery did not require. Do not edit source or authority.
 
-For standalone Audit, write `assessment.json` outside immutable published bundles and the store. It names the exact `reconciled`, `adoption`, and `implementation` references from the selected chain and contains exactly one coverage row for every binding requirement. There are no coverage rows for technical suggestions.
+For standalone Audit, write `assessment.json` outside immutable published bundles and the store. It names the exact `reconciled`, `adoption`, and `implementation` references from the selected chain and contains exactly one coverage row for **every entry in `reconciled.requirements`**. Requirement coverage does not depend on `requirement.governing`: `governing: false` requirements are still binding Reconciled requirements and must be assessed. There are no coverage rows for `technical_suggestions`, which are the advisory surface.
 
 ```json
 {
