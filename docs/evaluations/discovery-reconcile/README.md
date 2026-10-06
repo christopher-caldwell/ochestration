@@ -4,8 +4,10 @@ This procedure tests whether models preserve meaning while authoring Discovery, 
 selected outputs, planning Build, and preparing Chat Discovery. Its original Reconcile exercise
 tests synthesis without reopening source. These are manual model evaluations, not CLI admission
 tests, production reconciliation, or Build requests. This directory contains no selected project
-or expected product solution. Keep project-specific inputs, scope answers, and results outside
-this repository.
+or expected product solution. Keep project-specific inputs, scope answers, case sheets, prompts,
+transcripts, raw outputs, and access records outside this repository. The issue-29 effort is the
+recording exception: its sanitized per-case status summary is checked in, while all raw and
+project-specific records remain external.
 
 ## Select a Reconcile case
 
@@ -108,3 +110,63 @@ embedded guides from a binary built at the intended revision; edited Markdown is
 older installed binary. If isolated model sessions or their inputs are unavailable, mark those
 cases **not run** and state the limitation. Manual walkthroughs, guide-string tests, and prior
 incident reports are not executed model evaluations.
+
+## Chat Discovery and role-level evidence cases
+
+The eight bounded case families below extend the existing evaluation convention. The short
+descriptions and expected distinctions are operator guidance, not model inputs. Keep the exact
+case sheet, expected answers, rubric, prior attempts, and incident diagnosis out of each evaluated
+session. An evaluated session receives only its selected guide and the case's bounded input
+packet. For Chat Discovery, that packet is the specified synthetic conversation/evidence plus the
+optional phase documents named by the variant. For Work, Review, Final Audit, public Audit, and
+Unblock, it is the exact role packet or packet-equivalent handoff and fixture checkout listed for
+that case. Do not give any role another role's report unless the case explicitly includes it.
+
+Retain the exact input bytes and fixtures in a private external evaluation directory. Identify
+each case by an input SHA-256 or exact external path; identify a fixture by its archive/tree hash
+or exact path. Use synthetic inputs when the original conversation or private historical packet
+is unavailable, label them synthetic, and do not imply historical replay. If an input needed for a
+historical replay is unavailable, record that replay as not run; an incident summary is not a
+substitute. Do not check in synthetic transcripts, fixtures, raw results, private archives, or
+project-specific content.
+
+| ID | Case family | Applicable roles and variants | Bounded input supplied to the evaluated role | Operator-only distinction |
+| --- | --- | --- | --- | --- |
+| R-17 | Manual tutorial, optional copy shortcut, withdrawn generator | Chat Discovery, with phases and without phases | Synthetic settled conversation with the manual empty-directory tutorial decision, optional reuse of a ready example, and later withdrawal of only the generator; selected Chat Discovery guide; phase variant only when named | Preserve the manual construction and its starting conditions, keep copying optional, and do not add a generator or duplicate fixture. A copy-only canonical walkthrough fails once manual construction is binding. |
+| R-18 | Later verifier rechecks an earlier invariant | Chat Discovery, with phases and without phases | Synthetic settled conversation and teaching examples about observing an earlier invariant at the current transition; selected Chat Discovery guide; phase variant only when named | Preserve the broader observation permission and teaching intent without inventing an arbitrary-earlier-verifier command or mandatory live HTTP integration. |
+| R-19 | Existing-checkout success and fresh-checkout failure on an undocumented generated prerequisite | Work, Review, Final Audit, public Audit | One synthetic packet-equivalent contract; the role's exact packet; a fixture with an existing-build/copied-example success, a fresh-checkout failure on an undocumented generated prerequisite, documented setup facts, and peer UI/browser acceptance; selected role guide | Bound each observation to its starting state. Review connects the relevant failure to runnable onboarding; Audit requires evidence for the full claim rather than headings. Proper documented dependency setup is not presumed to fail. |
+| R-20 | Documented setup succeeds or an unrelated optional check cannot run | Work, Review, Final Audit, public Audit | Synthetic packet-equivalent contract and fixture showing the documented prerequisite setup succeeds, plus a separate failed optional check unrelated to the claimed behavior; selected role guide | Accept the supported claim with bounded evidence, record the unrelated limitation, and do not impose a universal failed-command or dependency blocker. |
+| R-21 | Meaningful current-phase result with explicitly later-phase proof | Work, Review | Synthetic Reconciled contract, current-phase packet and fixture showing valid phase acceptance while a named final-completion check remains assigned to a later phase; selected Work or Review guide | Accept the valid current phase, preserve and explicitly disposition the later obligation, and neither add a gate nor silently waive final completion. |
+| R-22 | Overlapping guides | Review, Final Audit, public Audit | Synthetic documentation fixture with one concrete contradictory factual/procedural claim plus useful short repeated setup instructions; packet states the applicable consistency requirement; selected role guide | Correct the contradiction required by the contract and allow useful repetition. Do not invent a zero-duplication rule. |
+| R-23 | Post-build discovery of omitted source intent | Chat Discovery, with phases and without phases | Synthetic post-build conversation and original binding contract that omit one newly reported intent; implementation evidence showing what the contract already requires; selected Chat Discovery guide; phase variant only when named | Classify existing-contract defects, lost/malformed authority, and new suggestions separately. Restore missing binding intent only through supported publication; do not smuggle it into unchanged-authority feedback or phase prose. |
+| R-24 | Mixed governing and non-governing requirements | Final Audit, public Audit, Unblock | Synthetic Reconciled contract with governing and `governing: false` requirements, advisory technical suggestions, a conditional requirement, and an incomplete assessment/feedback packet; selected role guide | Require one evidence-supported row for every Reconciled requirement regardless of `governing`, no rows for technical suggestions, and preserve #28. Coverage is not substantive proof; `not_applicable` requires a false stated condition and justification. |
+
+The role guide and product commit used for each comparison must be recorded separately. Work,
+Review, and Final Audit are embedded strings: capture them from a binary built at the tested
+revision. Public Audit is captured with that binary's `orchestrate audit guide`; Chat Discovery
+uses the document at the tested revision. Never evaluate an old installed guide as if it were the
+revised one. Keep the operator-only distinctions above out of the evaluated session.
+
+Compare baseline `8cbd94efaf19d80112810077d1fb13950b7d0da4` with the revised implementation using
+the same bounded input in fresh sessions and matched model/settings where available. Retain every
+attempt, including initial failures and recovery, and assess both detection behavior and valid-case
+false positives. Record setting differences instead of attributing unmatched results to the guide.
+For each case, record an attempt status (`pass`, `fail`, `unobserved`, or `not run`), a specific
+reason for every `not run`, observed or unobserved detection and false-positive results, and what
+the comparison cannot establish. An authored case, keyword check, fixture-only result, routing
+experiment, or not-run entry is not a behavioral model result. Execution and a particular score
+are not completion gates; faithful guidance, retained cases, complete truthful records, and the
+separate repository checks remain required.
+
+## Issue-29 result recording
+
+For this effort, check in one sanitized summary at
+[`guidance-evidence-fidelity-summary.md`](guidance-evidence-fidelity-summary.md). For all eight
+cases it records historical/synthetic status, exact external input identity or explicit
+unavailability, old/revised guide provenance, roles and model settings (or `unknown`), each
+attempt's actual status, specific not-run reasons, detection and false-positive status, differences,
+and limitations. The summary records status; it does not authenticate inaccessible private runs.
+Keep exact inputs, fixtures, prompts, transcripts, tool-access records, raw outputs, and
+project-specific material external. Use the [result template](result-template.md) and apply the
+[operator rubric](operator-rubric.md); never treat the expected distinctions in this README as
+results.

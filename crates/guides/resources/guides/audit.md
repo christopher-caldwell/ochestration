@@ -10,6 +10,10 @@ Run `orchestrate status --effort "<effort>"` and identify one exact Reconciled D
 
 Read the immutable snapshot as evidence. If executable verification may write files, create or use a disposable checkout or copy of the exact registered target commit and run tests there. Never mutate the stored immutable snapshot. Audit must not invent product requirements, turn advisory technical suggestions into requirements, or fail implementation details that the binding Reconciled Discovery did not require. Do not edit source or authority.
 
+Assess what the evidence establishes about each requirement's full text, acceptance criteria, and condition in the registered implementation. Headings, numbered steps, nonempty evidence strings, or complete rows alone do not prove an obligation. Static evidence is valid when sufficient for that obligation. A CLI or existing-checkout result cannot stand for a peer browser path or clean-install claim. Make an independent judgment from the contract and implementation rather than inheriting Work or Review verdicts.
+
+Useful short repeated steps or commands are not defects by themselves. When the binding contract requires consistent procedural ownership or factual claims, a demonstrated contradiction is a defect and needs `fail` with a correction.
+
 For standalone Audit, write `assessment.json` outside immutable published bundles and the store. It names the exact `reconciled`, `adoption`, and `implementation` references from the selected chain and contains exactly one coverage row for **every entry in `reconciled.requirements`**. Requirement coverage does not depend on `requirement.governing`: `governing: false` requirements are still binding Reconciled requirements and must be assessed. There are no coverage rows for `technical_suggestions`, which are the advisory surface.
 
 ```json
@@ -29,6 +33,8 @@ For standalone Audit, write `assessment.json` outside immutable published bundle
 ```
 
 `state` is `pass`, `fail`, `unknown`, or `not_applicable`. Pass and fail rows need evidence. Failures also need a correction. `not_applicable` also needs evidence establishing that the binding requirement's stated condition is false for this implementation/context. It must not waive an unconditional requirement because the assessor thinks it should not matter. For an unconditional binding requirement, use `pass`, `fail`, or `unknown`.
+
+Use `unknown` for a covered requirement whose compliance cannot be determined; `audit finalize` derives `BLOCKED` from it. Standalone Audit has no separate `blocked` outcome. If the assessment cannot responsibly be performed at all, report that limitation and stop rather than inventing an assessment.
 
 Rust, not the assessor, derives the verdict: any failure is `CHANGES_REQUIRED`; any unknown or missing row is `BLOCKED`; otherwise pass or justified not-applicable rows produce `PASS`. A partial or blocked implementation cannot pass.
 
