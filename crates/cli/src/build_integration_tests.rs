@@ -31,6 +31,7 @@ fn drive(fixture: &Fixture, fake: &dyn InvocationApi, mode: Mode) -> (String, se
                 *observation.state,
                 load_state(&fixture.build_dir.join("state.json")).unwrap()
             );
+            assert_eq!(observation.effort_id, fixture.effort.id);
             display.observe(observation);
         },
     )
@@ -336,7 +337,7 @@ fn integrated_errors_restarts_and_early_returns_preserve_known_facts() {
                 &[
                     "WORK started",
                     "Build stopped — reset_required",
-                    "orchestrate build status",
+                    "orchestrate build status --effort effort-",
                 ],
             );
             assert!(!output.contains("WORK complete"));

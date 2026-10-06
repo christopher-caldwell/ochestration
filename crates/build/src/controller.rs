@@ -220,6 +220,7 @@ pub fn run_with_invoker_and_observer(
         } else {
             BuildEvent::Snapshot
         },
+        effort_id: &effort.id,
         state: &state,
         plan: snapshot_plan.as_ref(),
     });
@@ -229,6 +230,7 @@ pub fn run_with_invoker_and_observer(
         Status::Complete => {
             observer.observe(BuildObservation {
                 event: BuildEvent::Terminal,
+                effort_id: &effort.id,
                 state: &state,
                 plan: snapshot_plan.as_ref(),
             });
@@ -244,7 +246,12 @@ pub fn run_with_invoker_and_observer(
                 .as_ref()
                 .is_some_and(|stop| stop.kind == StopKind::Blocked)
             {
-                inputs = Some(load_execution_inputs(&build_dir, &state)?);
+                inputs = Some(load_execution_inputs(
+                    &build_dir,
+                    &state,
+                    &effort,
+                    &project.canonical_locator,
+                )?);
                 prepare_continuation(
                     &project.canonical_locator,
                     &build_dir,
@@ -253,12 +260,14 @@ pub fn run_with_invoker_and_observer(
                 )?;
                 observer.observe(BuildObservation {
                     event: BuildEvent::Continued,
+                    effort_id: &effort.id,
                     state: &state,
                     plan: inputs.as_ref().map(|inputs| &inputs.plan),
                 });
             } else {
                 observer.observe(BuildObservation {
                     event: BuildEvent::Terminal,
+                    effort_id: &effort.id,
                     state: &state,
                     plan: snapshot_plan.as_ref(),
                 });
@@ -277,6 +286,7 @@ pub fn run_with_invoker_and_observer(
             save_state(&state_path, &state)?;
             observer.observe(BuildObservation {
                 event: BuildEvent::Terminal,
+                effort_id: &effort.id,
                 state: &state,
                 plan: snapshot_plan.as_ref(),
             });
@@ -290,13 +300,14 @@ pub fn run_with_invoker_and_observer(
 
     let inputs = match inputs {
         Some(inputs) => inputs,
-        None => load_execution_inputs(&build_dir, &state)?,
+        None => load_execution_inputs(&build_dir, &state, &effort, &project.canonical_locator)?,
     };
 
     loop {
         if state.status == Status::Complete {
             observer.observe(BuildObservation {
                 event: BuildEvent::Terminal,
+                effort_id: &effort.id,
                 state: &state,
                 plan: Some(&inputs.plan),
             });
@@ -310,6 +321,7 @@ pub fn run_with_invoker_and_observer(
         if state.status == Status::Stopped {
             observer.observe(BuildObservation {
                 event: BuildEvent::Terminal,
+                effort_id: &effort.id,
                 state: &state,
                 plan: Some(&inputs.plan),
             });
@@ -323,8 +335,6 @@ pub fn run_with_invoker_and_observer(
         }
         let operation = execute_gate(
             store,
-            &effort,
-            &project.canonical_locator,
             &build_dir,
             &mut state,
             &mut sessions,
@@ -344,6 +354,7 @@ pub fn run_with_invoker_and_observer(
             save_state(&state_path, &state)?;
             observer.observe(BuildObservation {
                 event: BuildEvent::Terminal,
+                effort_id: &effort.id,
                 state: &state,
                 plan: Some(&inputs.plan),
             });
@@ -357,7 +368,7 @@ pub fn run_with_invoker_and_observer(
 
 // Presentation may be unavailable, but must not reject a previously valid
 // complete/stopped launch or display a changed plan as the accepted plan.
-fn observation_plan(build_dir: &Path, state: &BuildState) -> Option<BuildPlan> {
+pub fn observation_plan(build_dir: &Path, state: &BuildState) -> Option<BuildPlan> {
     let path = build_dir.join(PLAN_FILE);
     let plan = load_plan(&path).ok()?;
     if digest_bytes(&fs::read(path).ok()?) != state.plan_digest
@@ -370,11 +381,18 @@ fn observation_plan(build_dir: &Path, state: &BuildState) -> Option<BuildPlan> {
 }
 
 struct ExecutionInputs {
+    effort: Effort,
+    repo: PathBuf,
     plan: BuildPlan,
     config: BuildConfig,
 }
 
-fn load_execution_inputs(build_dir: &Path, state: &BuildState) -> Result<ExecutionInputs> {
+fn load_execution_inputs(
+    build_dir: &Path,
+    state: &BuildState,
+    effort: &Effort,
+    repo: &Path,
+) -> Result<ExecutionInputs> {
     let plan_path = build_dir.join(PLAN_FILE);
     let plan = load_plan(&plan_path)?;
     ensure!(
@@ -383,7 +401,12 @@ fn load_execution_inputs(build_dir: &Path, state: &BuildState) -> Result<Executi
         "Build machine plan changed after initialization; restore the accepted plan.json or start a new Build according to current authority"
     );
     let config = load_config(&build_dir.join(CONFIG_FILE))?;
-    Ok(ExecutionInputs { plan, config })
+    Ok(ExecutionInputs {
+        effort: effort.clone(),
+        repo: repo.to_path_buf(),
+        plan,
+        config,
+    })
 }
 
 fn select_effort(store: &Store, request: &BuildRequest) -> Result<Effort> {
@@ -460,8 +483,6 @@ fn initialize(store: &Store, effort: &Effort, repo: &Path, build_dir: &Path) -> 
 
 fn execute_gate(
     store: &Store,
-    effort: &Effort,
-    repo: &Path,
     build_dir: &Path,
     state: &mut BuildState,
     sessions: &mut RuntimeSessions,
@@ -469,6 +490,8 @@ fn execute_gate(
     invoker: &dyn adapter::InvocationApi,
     observer: &mut dyn BuildObserver,
 ) -> Result<()> {
+    let effort = &inputs.effort;
+    let repo = &inputs.repo;
     if state.gate == Gate::Audit {
         ensure_audit_implementation(store, effort, repo, state)?;
     }
@@ -514,6 +537,7 @@ fn execute_gate(
     save_state(&build_dir.join(STATE_FILE), state)?;
     observer.observe(BuildObservation {
         event: BuildEvent::ActionStarted,
+        effort_id: &effort.id,
         state,
         plan: Some(&inputs.plan),
     });
@@ -792,6 +816,7 @@ fn execute_gate(
             scope,
             outcome,
         }),
+        effort_id: &effort.id,
         state,
         plan: Some(&inputs.plan),
     });
@@ -2343,7 +2368,9 @@ mod tests {
         .unwrap();
         let state_path = fixture.build_dir.join(STATE_FILE);
         let mut state = load_state(&state_path).unwrap();
-        let inputs = load_execution_inputs(&fixture.build_dir, &state).unwrap();
+        let inputs =
+            load_execution_inputs(&fixture.build_dir, &state, &fixture.effort, &fixture.repo)
+                .unwrap();
         let fake = FakeInvoker::new(
             [
                 Step::WorkComplete,
@@ -2358,8 +2385,6 @@ mod tests {
         for _ in 0..2 {
             execute_gate(
                 &fixture.store,
-                &fixture.effort,
-                &fixture.repo,
                 &fixture.build_dir,
                 &mut state,
                 &mut sessions,
@@ -2818,7 +2843,13 @@ mod tests {
                 )
                 .unwrap();
                 let mut state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
-                let inputs = load_execution_inputs(&fixture.build_dir, &state).unwrap();
+                let inputs = load_execution_inputs(
+                    &fixture.build_dir,
+                    &state,
+                    &fixture.effort,
+                    &fixture.repo,
+                )
+                .unwrap();
                 let fake = FakeInvoker::new(
                     [
                         Step::WorkComplete,
@@ -2832,8 +2863,6 @@ mod tests {
                 for _ in 0..gates {
                     execute_gate(
                         &fixture.store,
-                        &fixture.effort,
-                        &fixture.repo,
                         &fixture.build_dir,
                         &mut state,
                         &mut RuntimeSessions::default(),

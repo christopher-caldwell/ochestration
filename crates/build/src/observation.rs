@@ -45,6 +45,8 @@ pub enum BuildEvent {
 #[derive(Clone, Debug)]
 pub struct BuildObservation<'a> {
     pub event: BuildEvent,
+    /// The resolved effort ID used for this invocation, even when selected implicitly.
+    pub effort_id: &'a str,
     pub state: &'a BuildState,
     /// Valid ordered plan facts matching this state's authority and digest.
     /// Unavailable facts must not be replaced with invented progress. Loading

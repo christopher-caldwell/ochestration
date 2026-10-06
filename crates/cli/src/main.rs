@@ -17,6 +17,8 @@ mod build_integration_tests;
 #[path = "../../build/test_support/mod.rs"]
 mod build_test_support;
 mod chat_import;
+mod command_display;
+mod import_display;
 mod prepared_request;
 
 #[derive(Parser)]
@@ -37,6 +39,8 @@ enum Command {
     /// Import a collaborative Chat Discovery ZIP into the current repository; stop before Build.
     Import {
         bundle: PathBuf,
+        #[arg(long, help = "Print the structured import result as JSON")]
+        json: bool,
     },
     Discovery {
         #[command(subcommand)]
@@ -143,6 +147,8 @@ enum BuildCommand {
     Status {
         #[arg(long)]
         effort: String,
+        #[arg(long, help = "Print the structured Build status as JSON")]
+        json: bool,
     },
     /// Restore the checkpoint and requeue the same gate after an explicit reset.
     Reset {
@@ -270,6 +276,7 @@ fn main() {
 }
 fn run() -> Result<()> {
     let Cli { root, command } = Cli::parse();
+    let include_store_root = root.is_some();
     if let Some(action) = command.guide_action() {
         print!(
             "{}",
@@ -278,13 +285,33 @@ fn run() -> Result<()> {
         return Ok(());
     }
     match command {
-        Command::Import { bundle } => {
+        Command::Import { bundle, json } => {
             let repo = std::env::current_dir()?;
             let canonical_repo = fs::canonicalize(&repo)?;
             let store_root = normalized_absolute_path(&root.unwrap_or_else(default_root))?;
             ensure_outside_project(&store_root, &canonical_repo, "orchestration store root")?;
-            let result = chat_import::import(&Store::open(store_root)?, &repo, &bundle)?;
-            output("SUCCESS", "IMPLEMENTATION_READY", result);
+            let store = Store::open(store_root)?;
+            let result = chat_import::import(&store, &repo, &bundle)?;
+            if json {
+                output("SUCCESS", "IMPLEMENTATION_READY", result);
+            } else {
+                let editor = std::env::var("VISUAL")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| {
+                        std::env::var("EDITOR")
+                            .ok()
+                            .filter(|value| !value.trim().is_empty())
+                    });
+                print!(
+                    "{}",
+                    import_display::render(
+                        &result,
+                        editor.as_deref(),
+                        include_store_root.then(|| store.root())
+                    )?
+                );
+            }
             Ok(())
         }
         Command::Init(args) => {
@@ -296,7 +323,7 @@ fn run() -> Result<()> {
             ensure_outside_project(&store_root, &canonical_repo, "orchestration store root")?;
             initialize(&Store::open(&input.root)?, input)
         }
-        command => execute(store(root)?, command),
+        command => execute(store(root)?, command, include_store_root),
     }
 }
 struct InitInput {
@@ -391,7 +418,7 @@ fn initialize(store: &Store, input: InitInput) -> Result<()> {
     Ok(())
 }
 
-fn execute(store: Store, command: Command) -> Result<()> {
+fn execute(store: Store, command: Command, include_store_root: bool) -> Result<()> {
     match command {
         Command::Init(_)
         | Command::Import { .. }
@@ -596,15 +623,41 @@ fn execute(store: Store, command: Command) -> Result<()> {
                     effort,
                     project: std::env::current_dir()?,
                 },
-                &mut build_display::Display::new(std::io::stderr(), build_display::Mode::stderr()),
+                &mut build_display::Display::new(std::io::stderr(), build_display::Mode::stderr())
+                    .with_root(include_store_root.then(|| store.root().to_path_buf())),
             )?)
         ),
         Command::Build {
-            command: Some(BuildCommand::Status { effort }),
+            command: Some(BuildCommand::Status { effort, json }),
             ..
         } => {
             let status = orchestrate_build::status(&store, &effort)?;
-            output("SUCCESS", "READ_ONLY", status);
+            if json {
+                output("SUCCESS", "READ_ONLY", status);
+            } else {
+                let resolved_effort = store.load_effort(&effort)?;
+                let build_dir = store.effort_dir(&resolved_effort).join("build");
+                let state = if status["status"] == "uninitialized" {
+                    None
+                } else {
+                    Some(serde_json::from_value::<orchestrate_build::BuildState>(
+                        status,
+                    )?)
+                };
+                let plan = state.as_ref().and_then(|state| {
+                    orchestrate_build::controller::observation_plan(&build_dir, state)
+                });
+                print!(
+                    "{}",
+                    build_display::status_report(
+                        &resolved_effort.id,
+                        &build_dir,
+                        state.as_ref(),
+                        plan.as_ref(),
+                        include_store_root.then(|| store.root())
+                    )
+                );
+            }
         }
         Command::Build {
             command: Some(BuildCommand::Reset { effort }),

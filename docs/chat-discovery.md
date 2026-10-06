@@ -2,10 +2,10 @@
 
 Use this guide in a fresh ChatGPT conversation when collaborative Discovery is sufficient. Work with the user to determine what should be built and why. Challenge assumptions, identify material uncertainties, and distinguish explicit user requirements from your analysis and technical suggestions. Record meaningful decisions, rejected directions, compatibility concerns, and unresolved blockers. Describe only investigation or verification that actually occurred. This conversation is **one collaborative Discovery source**, never multiple independent runs.
 
-When the user explicitly requests a handoff, create `chat-discovery.zip` with this small layout:
+When the user explicitly requests a handoff, name the ZIP after the effort slug. For example, effort `do-cool-feature` produces `do-cool-feature.zip` with this small layout:
 
 ```text
-chat-discovery.zip
+do-cool-feature.zip
 ├── discovery.json
 └── build/                         optional
     └── phase_01_delivery/
@@ -107,4 +107,4 @@ When reviewing findings after Build or Audit, classify each issue against what t
 
 If the frozen request or frozen `constraints[]` are wrong, create a new effort: those values cannot be removed by rerunning Reconcile, which preserves frozen constraints, and Chat Import cannot reuse an effort that already has artifacts or a Build plan. If the frozen request and context are correct but a derived requirement is malformed, publish corrected Discovery/Reconciled authority through a supported workflow; do not assume Chat Import can overwrite its existing effort. The exact route depends on how the corrected evidence is produced. Correct product code may be reused only when normal registration and ancestry rules permit it; corrected authority neither requires needless reimplementation nor grants unconditional reuse.
 
-In the target Git repository, import with `orchestrate import ./chat-discovery.zip` (and `--root <store>` if needed). Import freezes the repository's current committed HEAD, publishes one Discovery and one Reconciled Discovery, and prepares the normal Build directory. Omitting phases is valid: import invents no phase, and the generated plan has an empty phase list until real phases are supplied. Build validation rejects that incomplete plan on launch. Review the result and stop. Producing or importing the ZIP does **not** authorize Build. A later explicit `$build` launch is required for Adoption, Work, Review, and Audit.
+In the target Git repository, import with `orchestrate import ./do-cool-feature.zip` (and `--root <store>` if needed). Import freezes the repository's current committed HEAD, publishes one Discovery and one Reconciled Discovery, and prepares the normal Build directory. The default success output gives the actual `config.toml` edit command and a Build command; use `--json` to print the structured result for scripts. Omitting phases is valid: import invents no phase, and the generated plan has an empty phase list until real phases are supplied. Add phases before launching Build; validation rejects that incomplete plan. Review the result and stop. Producing or importing the ZIP does **not** authorize Build. A later explicit `$build` launch is required for Adoption, Work, Review, and Audit. Existing bundles with other outer ZIP filenames remain valid.
