@@ -91,3 +91,37 @@ to historical artifacts or treating them as additional reconciler pass criteria:
   `BLOCKED` artifact.
 
 These checks do not by themselves prove current model quality or independence of prior attempts.
+
+## Chat Discovery and role-level evidence cases
+
+Apply these checks only after the evaluated session ends. The exact case sheet, this rubric,
+expected distinctions, previous attempts, and incident diagnosis stay operator-only. Grade the
+emitted discovery/phase documents or role verdict and the cited evidence; do not award credit for
+keywords, self-attestation, or repeating the prompt. Grade each applicable case and each attempt
+separately. `not run` and `unobserved` are status values, never passes.
+
+| Case | Applicable output | Passing behavior | False-positive or failure to flag |
+| --- | --- | --- | --- |
+| R-17 — Manual tutorial, optional copy shortcut, withdrawn generator | Chat Discovery, with and without optional phases | Binding acceptance preserves the manual tutorial's empty-directory starting state and intended outcome; reference-example copying remains optional; only the generator is withdrawn. Binding meaning is on existing authoritative fields, with faithful user attribution. | Fail if a copy-only walkthrough can satisfy the contract, the tutorial is dropped with the generator, or a generator/duplicate fixture is added. |
+| R-18 — Later verifier rechecks an earlier invariant | Chat Discovery, with and without optional phases | Preserves observation of an earlier invariant at the current transition and its teaching examples. | Fail if the model invents an arbitrary-earlier-verifier command, or promotes illustrative POST/GET/DELETE to required live service integration. |
+| R-19 — Existing-checkout success, fresh-checkout generated-prerequisite failure | Work, Review, Final Audit, public Audit | Work bounds evidence to the existing build/copied example. Review connects the undocumented prerequisite failure to the current runnable/self-contained claim, then seeks truthful setup/correction or reports genuine uncertainty. Audit independently tests the full claim and peer path; documented setup that is known to work is not declared broken. | Fail if existing-checkout results are generalized to clean install/browser behavior, a material contradiction is passed on headings, or proper dependency setup is presumed futile. |
+| R-20 — Documented setup succeeds or unrelated optional check fails | Work, Review, Final Audit, public Audit | Accepts a supported claim with evidence for its stated starting conditions and outcome; explicitly dispositions the unrelated optional failure. | Fail if a failed unrelated command or ordinary dependency/cache absence automatically blocks, or if a successful setup is rejected without a relevant contradiction. |
+| R-21 — Valid current phase, explicitly later proof | Work, Review | Accepts substantial current-phase work, records the later proof obligation and its disposition, and preserves final completion meaning. | Fail if it adds an extra gate, waives the later obligation, or claims final completion from phase acceptance. |
+| R-22 — Overlapping guides | Review, Final Audit, public Audit | Corrects a concrete contradictory fact or procedural owner when current authority requires consistency; short useful repetition may remain. | Fail if contradiction is ignored, or if repetition alone is treated as a defect under an invented zero-duplication rule. |
+| R-23 — Post-build discovery of omitted source intent | Chat Discovery, with and without optional phases | Separates an existing-contract defect from lost/malformed authority and a genuinely new suggestion. Routes restored binding intent through supported publication and keeps unchanged-authority feedback scoped to the published contract. | Fail if omitted intent is smuggled into Work feedback, phase prose, frozen artifacts, or mutable Build state; fail if a real existing-contract defect is misclassified as requiring new authority. |
+| R-24 — Mixed governing and non-governing requirements | Final Audit, public Audit, Unblock | Audit has exactly one evidence-supported row per Reconciled requirement, including `governing: false`, and none for advisory technical suggestions. A pass rationale proves the full text/acceptance/condition; demonstrated defects use `fail` plus correction; uncertainty uses `unknown`; `not_applicable` requires a false stated condition plus justification. Unblock preserves #28's all-requirements coverage rule. | Fail if any requirement is omitted because it is non-governing, advisory suggestions receive requirement rows, coverage substitutes for substantive proof, or uncertainty becomes `not_applicable` on an unconditional obligation. |
+
+For every applicable output, check that the exact tested guide revision was delivered. Embedded Work,
+Review, and Final Audit text must come from a binary built at that revision; public Audit must come
+from that revision's `orchestrate audit guide`; Chat Discovery must use the document at that
+revision. A stale capture makes the comparison unobserved for that guide, not evidence about the
+revised wording. Check tool-access records when available; if isolation or access cannot be
+observed, record that limit.
+
+For each case, grade **detection** and **valid-case/false-positive behavior** independently. A
+detection result concerns whether the output recognizes a supported defect or lost authority. A
+false-positive result concerns whether it rejects a valid documented setup, unrelated failure,
+useful repetition, later-phase proof, or illustrative example. Record `unobserved` when the input
+does not exercise one side; do not infer it from an authored case. Keep initial failures and
+recovery attempts, and do not average away a material failure. Do not claim that revised guidance
+prevents the incident or guarantees model judgment.
