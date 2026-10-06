@@ -41,7 +41,7 @@ For each item, record pass/fail/unobserved, the response passage or tool access,
 
 - Discovery publication: acceptance meaning, known limitation, clarification, and evidence status:
 - Planner: phase evidence, local repairs, capability setup, or precise upstream return:
-- Chat Discovery with phases / without phases: coherent authority, phase consistency, blockers:
+- Chat Discovery with / without supplied phase documents: coherent authority, generated phase plan, phase consistency, blockers:
 - Exact input boundary and any unobserved access for each role:
 
 ## Result
@@ -65,7 +65,7 @@ transcripts, private fixture contents, model outputs, or project-specific materi
 - Input label: synthetic / historical:
 - Exact external input SHA-256 or path, with section/variant:
 - Exact fixture archive/tree SHA-256 or path (or explicit unavailable):
-- Role(s) and variant (include Chat Discovery with/without phases where applicable):
+- Role(s) and variant (include Chat Discovery with/without supplied phase documents where applicable):
 - Exact bounded inputs supplied (conversation/evidence, selected guide, phase documents,
   packet-equivalent handoff, fixture checkout):
 - Inputs withheld from the evaluated session (rubric, expected behavior, previous outputs,

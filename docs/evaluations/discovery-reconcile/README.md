@@ -92,9 +92,12 @@ and failures; neither guide edits nor synthesis of older outputs proves current 
 Run fresh, isolated sessions for these roles when their inputs are available. Give Planner the
 exact Reconciled contract and Build guide, plus phase drafts only for a phase-consistency case;
 do not give it private Discovery evidence or ask it to perform Reconcile. Give Chat Discovery its
-own supplied conversation and evidence, Chat Discovery guide, and optional phase documents when
-the case includes them. Exercise Chat Discovery both with phases and without phases. A no-phase
-import still needs coherent binding acceptance; it does not need a fabricated phase plan. Grade
+own supplied conversation and evidence, Chat Discovery guide, and any prewritten phase documents
+explicitly included for a phase-consistency case. Exercise Chat Discovery both with and without
+prewritten phase documents. When a case asks for an implementation-ready handoff, both variants
+must produce a real phase plan from the settled contract; absence of supplied phase documents is
+not permission to omit planning. Do not grade against a predetermined decomposition unless the
+case itself supplies authoritative phase instructions. Grade
 the outputs with the separate role checks in the rubric. Record phase repairs, upstream returns, blockers,
 and launch/readiness wording actually observed. Do not use these sessions as production imports
 or launches.
@@ -117,8 +120,8 @@ The eight bounded case families below extend the existing evaluation convention.
 descriptions and expected distinctions are operator guidance, not model inputs. Keep the exact
 case sheet, expected answers, rubric, prior attempts, and incident diagnosis out of each evaluated
 session. An evaluated session receives only its selected guide and the case's bounded input
-packet. For Chat Discovery, that packet is the specified synthetic conversation/evidence plus the
-optional phase documents named by the variant. For Work, Review, Final Audit, public Audit, and
+packet. For Chat Discovery, that packet is the specified synthetic conversation/evidence plus any
+prewritten phase documents named by the variant. For Work, Review, Final Audit, public Audit, and
 Unblock, it is the exact role packet or packet-equivalent handoff and fixture checkout listed for
 that case. Do not give any role another role's report unless the case explicitly includes it.
 
@@ -132,13 +135,13 @@ project-specific content.
 
 | ID | Case family | Applicable roles and variants | Bounded input supplied to the evaluated role | Operator-only distinction |
 | --- | --- | --- | --- | --- |
-| R-17 | Manual tutorial, optional copy shortcut, withdrawn generator | Chat Discovery, with phases and without phases | Synthetic settled conversation with the manual empty-directory tutorial decision, optional reuse of a ready example, and later withdrawal of only the generator; selected Chat Discovery guide; phase variant only when named | Preserve the manual construction and its starting conditions, keep copying optional, and do not add a generator or duplicate fixture. A copy-only canonical walkthrough fails once manual construction is binding. |
-| R-18 | Later verifier rechecks an earlier invariant | Chat Discovery, with phases and without phases | Synthetic settled conversation and teaching examples about observing an earlier invariant at the current transition; selected Chat Discovery guide; phase variant only when named | Preserve the broader observation permission and teaching intent without inventing an arbitrary-earlier-verifier command or mandatory live HTTP integration. |
+| R-17 | Manual tutorial, optional copy shortcut, withdrawn generator | Chat Discovery, with a supplied phase draft and without a supplied phase draft | Synthetic settled conversation with the manual empty-directory tutorial decision, optional reuse of a ready example, and later withdrawal of only the generator; selected Chat Discovery guide; phase variant only when named | Preserve the manual construction and its starting conditions, keep copying optional, and do not add a generator or duplicate fixture. A copy-only canonical walkthrough fails once manual construction is binding. |
+| R-18 | Later verifier rechecks an earlier invariant | Chat Discovery, with a supplied phase draft and without a supplied phase draft | Synthetic settled conversation and teaching examples about observing an earlier invariant at the current transition; selected Chat Discovery guide; phase variant only when named | Preserve the broader observation permission and teaching intent without inventing an arbitrary-earlier-verifier command or mandatory live HTTP integration. |
 | R-19 | Existing-checkout success and fresh-checkout failure on an undocumented generated prerequisite | Work, Review, Final Audit, public Audit | One synthetic packet-equivalent contract; the role's exact packet; a fixture with an existing-build/copied-example success, a fresh-checkout failure on an undocumented generated prerequisite, documented setup facts, and peer UI/browser acceptance; selected role guide | Bound each observation to its starting state. Review connects the relevant failure to runnable onboarding; Audit requires evidence for the full claim rather than headings. Proper documented dependency setup is not presumed to fail. |
 | R-20 | Documented setup succeeds or an unrelated optional check cannot run | Work, Review, Final Audit, public Audit | Synthetic packet-equivalent contract and fixture showing the documented prerequisite setup succeeds, plus a separate failed optional check unrelated to the claimed behavior; selected role guide | Accept the supported claim with bounded evidence, record the unrelated limitation, and do not impose a universal failed-command or dependency blocker. |
 | R-21 | Meaningful current-phase result with explicitly later-phase proof | Work, Review | Synthetic Reconciled contract, current-phase packet and fixture showing valid phase acceptance while a named final-completion check remains assigned to a later phase; selected Work or Review guide | Accept the valid current phase, preserve and explicitly disposition the later obligation, and neither add a gate nor silently waive final completion. |
 | R-22 | Overlapping guides | Review, Final Audit, public Audit | Synthetic documentation fixture with one concrete contradictory factual/procedural claim plus useful short repeated setup instructions; packet states the applicable consistency requirement; selected role guide | Correct the contradiction required by the contract and allow useful repetition. Do not invent a zero-duplication rule. |
-| R-23 | Post-build discovery of omitted source intent | Chat Discovery, with phases and without phases | Synthetic post-build conversation and original binding contract that omit one newly reported intent; implementation evidence showing what the contract already requires; selected Chat Discovery guide; phase variant only when named | Classify existing-contract defects, lost/malformed authority, and new suggestions separately. Restore missing binding intent only through supported publication; do not smuggle it into unchanged-authority feedback or phase prose. |
+| R-23 | Post-build discovery of omitted source intent | Chat Discovery, with a supplied phase draft and without a supplied phase draft | Synthetic post-build conversation and original binding contract that omit one newly reported intent; implementation evidence showing what the contract already requires; selected Chat Discovery guide; phase variant only when named | Classify existing-contract defects, lost/malformed authority, and new suggestions separately. Restore missing binding intent only through supported publication; do not smuggle it into unchanged-authority feedback or phase prose. |
 | R-24 | Mixed governing and non-governing requirements | Final Audit, public Audit, Unblock | Synthetic Reconciled contract with governing and `governing: false` requirements, advisory technical suggestions, a conditional requirement, and an incomplete assessment/feedback packet; selected role guide | Require one evidence-supported row for every Reconciled requirement regardless of `governing`, no rows for technical suggestions, and preserve #28. Coverage is not substantive proof; `not_applicable` requires a false stated condition and justification. |
 
 The role guide and product commit used for each comparison must be recorded separately. Work,
