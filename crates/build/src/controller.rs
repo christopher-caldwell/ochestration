@@ -526,7 +526,7 @@ fn execute_gate(
         Gate::Work => sessions.worker.as_ref(),
         Gate::Review | Gate::Audit | Gate::Unblock => None,
     };
-    let invocation = adapter::prepare_invocation(role, &packet.prompt, &cwd, session)?;
+    let invocation = adapter::prepare_invocation(role, &gate, &packet.prompt, &cwd, session)?;
     write_bytes_sync(
         &packet.action_dir.join("invocation.json"),
         &encode(&invocation.record)?,
@@ -1192,6 +1192,14 @@ mod tests {
     use crate::adapter::InvocationOutcome;
     use std::sync::Mutex;
 
+    fn claude_worker_sandbox_settings(argv: &[String]) -> serde_json::Value {
+        let settings = argv
+            .windows(2)
+            .find(|pair| pair[0] == "--settings")
+            .expect("Claude Worker baseline has --settings");
+        serde_json::from_str(&settings[1]).expect("Claude Worker settings are valid JSON")
+    }
+
     #[test]
     fn gate_results_require_the_exact_action_and_report() {
         let good = r#"{"action_id":"a-1","outcome":"complete","report":"done","commit":"abc"}"#;
@@ -1634,6 +1642,16 @@ mod tests {
     #[test]
     fn one_unblock_retry_restores_checkpoint_and_repeated_block_stops() {
         let fixture = make_fixture(one_phase());
+        let mut config = load_config(&fixture.build_dir.join(CONFIG_FILE)).unwrap();
+        config.worker.adapter = "claude".into();
+        config.worker.model = Some("claude-native-model".into());
+        config.reviewer.adapter = "claude".into();
+        config.reviewer.model = Some("claude-native-model".into());
+        fs::write(
+            fixture.build_dir.join(CONFIG_FILE),
+            toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
         let fake = FakeInvoker::new(
             [
                 Step::WorkBlocked,
@@ -1648,7 +1666,41 @@ mod tests {
         assert!(matches!(result, BuildResult::Completed(_)));
         assert!(!fixture.repo.join("partial-untracked.txt").exists());
         assert_eq!(fake.remaining(), 0);
-        let unblock = packet_from_record(&fake.records()[1]);
+        let records = fake.records();
+        for index in [0, 2] {
+            assert!(
+                records[index]
+                    .argv
+                    .windows(2)
+                    .any(|pair| { pair == ["--permission-mode", "acceptEdits"] })
+            );
+            assert!(
+                records[index]
+                    .argv
+                    .windows(2)
+                    .any(|pair| pair == ["--permission-prompts", "none"])
+            );
+            let sandbox = claude_worker_sandbox_settings(&records[index].argv)["sandbox"].clone();
+            assert_eq!(sandbox["enabled"], true);
+            assert_eq!(sandbox["autoAllowBashIfSandboxed"], true);
+            assert_eq!(sandbox["allowUnsandboxedCommands"], false);
+            assert_eq!(sandbox["failIfUnavailable"], true);
+            assert!(
+                !records[index]
+                    .argv
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "--allowedTools" | "--allowed-tools"))
+            );
+        }
+        for index in [1, 3, 4] {
+            assert!(!records[index].argv.iter().any(|arg| {
+                matches!(
+                    arg.as_str(),
+                    "--permission-mode" | "--permission-prompts" | "--settings"
+                )
+            }));
+        }
+        let unblock = packet_from_record(&records[1]);
         assert_eq!(unblock["unblock_context"]["gate"], "work");
         assert_eq!(unblock["unblock_context"]["scope"]["kind"], "phase");
         assert!(
@@ -1931,6 +1983,45 @@ mod tests {
             assert_eq!(state.status, Status::Stopped);
             assert_eq!(state.stop.unwrap().kind, StopKind::ResetRequired);
         }
+    }
+
+    #[test]
+    fn claude_worker_provider_failure_keeps_reset_required_routing() {
+        let fixture = make_fixture(one_phase());
+        let mut config = load_config(&fixture.build_dir.join(CONFIG_FILE)).unwrap();
+        config.worker.adapter = "claude".into();
+        config.worker.model = Some("claude-native-model".into());
+        fs::write(
+            fixture.build_dir.join(CONFIG_FILE),
+            toml::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let fake = FakeInvoker::new([Step::ProviderFailure], &fixture.repo);
+        assert!(matches!(
+            run_with_invoker(&fixture.store, request(&fixture), &fake).unwrap(),
+            BuildResult::Blocked { .. }
+        ));
+        assert!(
+            fake.records()[0]
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-mode", "acceptEdits"])
+        );
+        assert!(
+            fake.records()[0]
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-prompts", "none"])
+        );
+        let sandbox = claude_worker_sandbox_settings(&fake.records()[0].argv)["sandbox"].clone();
+        assert_eq!(sandbox["enabled"], true);
+        assert_eq!(sandbox["autoAllowBashIfSandboxed"], true);
+        assert_eq!(sandbox["allowUnsandboxedCommands"], false);
+        assert_eq!(sandbox["failIfUnavailable"], true);
+        let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
+        assert_eq!(state.status, Status::Stopped);
+        assert_eq!(state.stop.unwrap().kind, StopKind::ResetRequired);
     }
 
     #[test]

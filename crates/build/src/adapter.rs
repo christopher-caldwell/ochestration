@@ -1,4 +1,4 @@
-use crate::state::RoleConfig;
+use crate::state::{Gate, RoleConfig};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -47,6 +47,19 @@ pub struct InvocationPlan {
     argv: Vec<String>,
 }
 
+// Claude's sandbox is the shell boundary; the Bash tool grant only avoids
+// CLI approval requests, including for linked-worktree Git writes. Do not set
+// blockReadsOutsideWorkingDirectories here: it also hid the user's installed
+// Rust toolchain from sandboxed Cargo commands in a live probe.
+const CLAUDE_WORKER_SANDBOX_SETTINGS: &str = r#"{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true
+  }
+}"#;
+
 /// The sole provider seam: invoke one prepared call and return process and
 /// provider-observed final-response facts. It makes deterministic controller
 /// tests possible without adding policy callbacks to the adapter boundary.
@@ -75,6 +88,7 @@ impl InvocationApi for ProcessInvocationApi {
 
 pub fn prepare_invocation(
     config: &RoleConfig,
+    gate: &Gate,
     prompt: &str,
     cwd: &Path,
     session: Option<&Session>,
@@ -115,6 +129,16 @@ pub fn prepare_invocation(
                 argv.extend(["--model".into(), model.clone()]);
             }
             append_effort_args(&config.adapter, config.effort.as_deref(), &mut argv)?;
+            if *gate == Gate::Work && !has_explicit_claude_permission_policy(&args) {
+                argv.extend([
+                    "--permission-mode".into(),
+                    "acceptEdits".into(),
+                    "--permission-prompts".into(),
+                    "none".into(),
+                    "--settings".into(),
+                    CLAUDE_WORKER_SANDBOX_SETTINGS.into(),
+                ]);
+            }
             argv.extend(args.iter().cloned());
             // --add-dir accepts variadic directories; stop option parsing so
             // the prompt is not consumed as another directory.
@@ -154,6 +178,24 @@ pub fn prepare_invocation(
         record,
         program,
         argv,
+    })
+}
+
+fn has_explicit_claude_permission_policy(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        let flag = arg.split_once('=').map_or(arg.as_str(), |(flag, _)| flag);
+        matches!(
+            flag,
+            "--permission-mode"
+                | "--allowedTools"
+                | "--allowed-tools"
+                | "--dangerously-skip-permissions"
+                | "--allow-dangerously-skip-permissions"
+                | "--permission-prompts"
+                | "--permission-prompt-tool"
+                | "--settings"
+                | "--setting-sources"
+        )
     })
 }
 
@@ -358,6 +400,51 @@ fn content_text(value: Option<&Value>) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn worker_settings(argv: &[String]) -> Value {
+        let settings = argv
+            .windows(2)
+            .find(|pair| pair[0] == "--settings")
+            .expect("Claude Worker baseline has --settings");
+        serde_json::from_str(&settings[1]).expect("Claude Worker settings are valid JSON")
+    }
+
+    fn assert_claude_worker_baseline(argv: &[String]) {
+        assert!(
+            argv.windows(2)
+                .any(|pair| pair == ["--permission-mode", "acceptEdits"])
+        );
+        assert!(
+            argv.windows(2)
+                .any(|pair| pair == ["--permission-prompts", "none"])
+        );
+        // Sandboxed Bash is auto-allowed by `autoAllowBashIfSandboxed`. A blanket
+        // allow rule would also approve `sandbox.excludedCommands`, which run
+        // outside the sandbox (verified live against Claude Code 2.1.289).
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| { matches!(arg.as_str(), "--allowedTools" | "--allowed-tools") })
+        );
+        let sandbox = worker_settings(argv)["sandbox"].clone();
+        assert_eq!(sandbox["enabled"], true);
+        assert_eq!(sandbox["autoAllowBashIfSandboxed"], true);
+        assert_eq!(sandbox["allowUnsandboxedCommands"], false);
+        assert_eq!(sandbox["failIfUnavailable"], true);
+    }
+
+    fn assert_no_claude_worker_baseline(argv: &[String]) {
+        assert!(
+            !argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-mode", "acceptEdits"])
+        );
+        assert!(
+            !argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-prompts", "none"])
+        );
+    }
+
     #[test]
     fn extracts_final_responses_and_sessions_from_native_json_streams() {
         for (body, expected) in [
@@ -400,8 +487,14 @@ mod tests {
             adapter: "codex".into(),
             id: "thread-1".into(),
         };
-        let codex_call =
-            prepare_invocation(&codex, "prompt", Path::new("/repo"), Some(&codex_session)).unwrap();
+        let codex_call = prepare_invocation(
+            &codex,
+            &Gate::Work,
+            "prompt",
+            Path::new("/repo"),
+            Some(&codex_session),
+        )
+        .unwrap();
         assert_eq!(codex_call.record.session_in.as_deref(), Some("thread-1"));
         assert_eq!(codex_call.record.argv[0], "exec");
         assert_eq!(codex_call.record.argv[1], "--json");
@@ -418,11 +511,24 @@ mod tests {
             effort: None,
             args: None,
         };
-        let claude_call =
-            prepare_invocation(&claude, "prompt", Path::new("/repo"), Some(&codex_session))
-                .unwrap();
+        let claude_call = prepare_invocation(
+            &claude,
+            &Gate::Review,
+            "prompt",
+            Path::new("/repo"),
+            Some(&codex_session),
+        )
+        .unwrap();
         assert_eq!(claude_call.record.session_in, None);
         assert!(!claude_call.record.argv.iter().any(|arg| arg == "--resume"));
+        assert!(
+            !claude_call
+                .record
+                .argv
+                .iter()
+                .any(|arg| arg == "--permission-mode")
+        );
+        assert_no_claude_worker_baseline(&claude_call.record.argv);
 
         let same_claude_session = Session {
             adapter: "claude".into(),
@@ -430,6 +536,7 @@ mod tests {
         };
         let claude_resumed = prepare_invocation(
             &claude,
+            &Gate::Work,
             "prompt",
             Path::new("/repo"),
             Some(&same_claude_session),
@@ -447,6 +554,180 @@ mod tests {
             claude_resumed.record.argv[claude_resumed.record.argv.len() - 2],
             "--"
         );
+        assert_eq!(claude_resumed.record.args, Vec::<String>::new());
+        assert_claude_worker_baseline(&claude_resumed.record.argv);
+    }
+
+    #[test]
+    fn claude_worker_permissions_are_defaulted_only_for_work_and_respect_explicit_policy() {
+        let restricted = RoleConfig {
+            adapter: "claude".into(),
+            model: Some("claude-native-model".into()),
+            effort: Some("high".into()),
+            args: Some(vec!["--disallowedTools".into(), "Bash(git push *)".into()]),
+        };
+        let work = prepare_invocation(&restricted, &Gate::Work, "prompt", Path::new("/repo"), None)
+            .unwrap();
+        assert_eq!(work.record.args, ["--disallowedTools", "Bash(git push *)"]);
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--effort", "high"])
+        );
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-mode", "acceptEdits"])
+        );
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-prompts", "none"])
+        );
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair[0] == "--settings")
+        );
+        assert!(
+            !work
+                .record
+                .argv
+                .iter()
+                .any(|arg| matches!(arg.as_str(), "--allowedTools" | "--allowed-tools"))
+        );
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--disallowedTools", "Bash(git push *)"])
+        );
+        let prompt_separator = work.record.argv.iter().position(|arg| arg == "--").unwrap();
+        let defaults_end = work
+            .record
+            .argv
+            .iter()
+            .position(|arg| arg == "--settings")
+            .unwrap()
+            + 2;
+        assert!(defaults_end < prompt_separator);
+        assert_eq!(work.record.argv.last().unwrap(), "prompt");
+
+        let explicit_policies = [
+            vec!["--permission-mode".into(), "plan".into()],
+            vec!["--permission-mode=plan".into()],
+            vec!["--allowedTools".into(), "Read".into()],
+            vec!["--allowedTools=Read".into()],
+            vec!["--allowed-tools".into(), "Read".into()],
+            vec!["--allowed-tools=Read".into()],
+            vec!["--dangerously-skip-permissions".into()],
+            vec!["--allow-dangerously-skip-permissions".into()],
+            vec!["--permission-prompts".into(), "host".into()],
+            vec![
+                "--permission-prompt-tool".into(),
+                "permissions.approve".into(),
+            ],
+            vec![
+                "--settings".into(),
+                r#"{"sandbox":{"enabled":false}}"#.into(),
+            ],
+            vec!["--settings={\"sandbox\":{\"enabled\":false}}".into()],
+            vec!["--setting-sources".into(), "project".into()],
+            vec!["--setting-sources=project".into()],
+        ];
+        for args in explicit_policies {
+            let config = RoleConfig {
+                adapter: "claude".into(),
+                model: None,
+                effort: None,
+                args: Some(args.clone()),
+            };
+            let invocation =
+                prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                    .unwrap();
+            assert_eq!(invocation.record.args, args);
+            assert_no_claude_worker_baseline(&invocation.record.argv);
+            let separator = invocation
+                .record
+                .argv
+                .iter()
+                .position(|arg| arg == "--")
+                .unwrap();
+            let native_args_start = separator - args.len();
+            assert!(
+                !invocation.record.argv[..native_args_start]
+                    .iter()
+                    .any(|arg| matches!(
+                        arg.as_str(),
+                        "--permission-mode"
+                            | "--allowedTools"
+                            | "--allowed-tools"
+                            | "--dangerously-skip-permissions"
+                            | "--allow-dangerously-skip-permissions"
+                            | "--permission-prompts"
+                            | "--permission-prompt-tool"
+                            | "--settings"
+                            | "--setting-sources"
+                    )),
+                "native policy args should suppress every injected Worker setting: {args:?}"
+            );
+            assert_eq!(
+                &invocation.record.argv[separator - args.len()..separator],
+                args
+            );
+        }
+
+        for gate in [Gate::Review, Gate::Audit, Gate::Unblock] {
+            let invocation =
+                prepare_invocation(&restricted, &gate, "prompt", Path::new("/repo"), None).unwrap();
+            assert!(!invocation.record.argv.iter().any(|arg| {
+                matches!(arg.as_str(), "--permission-mode" | "--permission-prompts")
+            }));
+            assert_no_claude_worker_baseline(&invocation.record.argv);
+            assert!(
+                invocation
+                    .record
+                    .argv
+                    .windows(2)
+                    .any(|pair| pair == ["--disallowedTools", "Bash(git push *)"])
+            );
+        }
+    }
+
+    #[test]
+    fn worker_permission_baseline_does_not_change_codex_or_cursor_invocations() {
+        for adapter in ["codex", "cursor"] {
+            let config = RoleConfig {
+                adapter: adapter.into(),
+                model: None,
+                effort: None,
+                args: None,
+            };
+            let invocation =
+                prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                    .unwrap();
+            assert_no_claude_worker_baseline(&invocation.record.argv);
+            assert!(!invocation.record.argv.iter().any(|arg| {
+                matches!(
+                    arg.as_str(),
+                    "--permission-mode" | "--permission-prompts" | "--settings"
+                )
+            }));
+            if adapter == "codex" {
+                assert_eq!(&invocation.record.argv[..2], ["exec", "--json"]);
+                assert_eq!(invocation.record.argv.last().unwrap(), "prompt");
+            } else {
+                assert_eq!(
+                    &invocation.record.argv[..3],
+                    ["-p", "--output-format", "stream-json"]
+                );
+                assert_eq!(invocation.record.argv.last().unwrap(), "prompt");
+            }
+        }
     }
 
     #[test]
@@ -462,7 +743,8 @@ mod tests {
                 args: Some(vec!["-c".into(), native_override.into()]),
             };
             let invocation =
-                prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap();
+                prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                    .unwrap();
             let translated = format!("model_reasoning_effort=\"{effort}\"");
             let effort_positions = invocation
                 .record
@@ -504,7 +786,8 @@ mod tests {
                 args: Some(vec!["--effort".into(), "low".into()]),
             };
             let invocation =
-                prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap();
+                prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                    .unwrap();
             let effort_positions = invocation
                 .record
                 .argv
@@ -538,7 +821,8 @@ mod tests {
                     args: None,
                 };
                 let error =
-                    prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap_err();
+                    prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                        .unwrap_err();
                 assert!(error.to_string().contains("unsupported"));
                 assert!(error.to_string().contains(effort));
             }
@@ -550,8 +834,14 @@ mod tests {
             effort: Some("high".into()),
             args: None,
         };
-        let error =
-            prepare_invocation(&cursor_effort, "prompt", Path::new("/repo"), None).unwrap_err();
+        let error = prepare_invocation(
+            &cursor_effort,
+            &Gate::Work,
+            "prompt",
+            Path::new("/repo"),
+            None,
+        )
+        .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -564,8 +854,14 @@ mod tests {
             effort: None,
             args: None,
         };
-        let invocation =
-            prepare_invocation(&cursor_native_model, "prompt", Path::new("/repo"), None).unwrap();
+        let invocation = prepare_invocation(
+            &cursor_native_model,
+            &Gate::Work,
+            "prompt",
+            Path::new("/repo"),
+            None,
+        )
+        .unwrap();
         assert!(
             invocation
                 .record
@@ -587,7 +883,8 @@ mod tests {
                 args: None,
             };
             let invocation =
-                prepare_invocation(&config, "prompt", Path::new("/repo"), None).unwrap();
+                prepare_invocation(&config, &Gate::Review, "prompt", Path::new("/repo"), None)
+                    .unwrap();
             assert!(!invocation.record.argv.iter().any(|arg| arg == "--effort"));
             assert!(
                 !invocation
