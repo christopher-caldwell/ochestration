@@ -2,8 +2,13 @@ schema_version = 5
 
 [worker]
 adapter = "codex"
-# Claude workers automatically receive acceptEdits plus Bash access. Native
-# permission arguments below own that policy and suppress the automatic baseline.
+# Claude Workers automatically get acceptEdits and Bash inside Claude's strict
+# OS sandbox. Git commits also work in linked worktrees. Review, Audit, and
+# Unblock do not receive these defaults. Network access or other external
+# filesystem writes may need explicit Claude settings.
+# Permission/sandbox args (including --settings) suppress the whole Worker
+# baseline; Claude's native args/settings then decide the policy. Include any
+# defaults you still need.
 # Select a Claude-native model when adapter = "claude"; model names are passed through unchanged.
 # Optional provider-native model.
 # model = "native-model-name"

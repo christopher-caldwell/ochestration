@@ -47,6 +47,19 @@ pub struct InvocationPlan {
     argv: Vec<String>,
 }
 
+// Claude's sandbox is the shell boundary; the Bash tool grant only avoids
+// CLI approval requests, including for linked-worktree Git writes. Do not set
+// blockReadsOutsideWorkingDirectories here: it also hid the user's installed
+// Rust toolchain from sandboxed Cargo commands in a live probe.
+const CLAUDE_WORKER_SANDBOX_SETTINGS: &str = r#"{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true
+  }
+}"#;
+
 /// The sole provider seam: invoke one prepared call and return process and
 /// provider-observed final-response facts. It makes deterministic controller
 /// tests possible without adding policy callbacks to the adapter boundary.
@@ -122,6 +135,10 @@ pub fn prepare_invocation(
                     "acceptEdits".into(),
                     "--allowedTools".into(),
                     "Bash".into(),
+                    "--permission-prompts".into(),
+                    "none".into(),
+                    "--settings".into(),
+                    CLAUDE_WORKER_SANDBOX_SETTINGS.into(),
                 ]);
             }
             argv.extend(args.iter().cloned());
@@ -175,6 +192,11 @@ fn has_explicit_claude_permission_policy(args: &[String]) -> bool {
                 | "--allowedTools"
                 | "--allowed-tools"
                 | "--dangerously-skip-permissions"
+                | "--allow-dangerously-skip-permissions"
+                | "--permission-prompts"
+                | "--permission-prompt-tool"
+                | "--settings"
+                | "--setting-sources"
         )
     })
 }
@@ -380,6 +402,47 @@ fn content_text(value: Option<&Value>) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn worker_settings(argv: &[String]) -> Value {
+        let settings = argv
+            .windows(2)
+            .find(|pair| pair[0] == "--settings")
+            .expect("Claude Worker baseline has --settings");
+        serde_json::from_str(&settings[1]).expect("Claude Worker settings are valid JSON")
+    }
+
+    fn assert_claude_worker_baseline(argv: &[String]) {
+        assert!(
+            argv.windows(2)
+                .any(|pair| pair == ["--permission-mode", "acceptEdits"])
+        );
+        assert!(
+            argv.windows(2)
+                .any(|pair| pair == ["--permission-prompts", "none"])
+        );
+        assert!(
+            argv.windows(2)
+                .any(|pair| pair == ["--allowedTools", "Bash"])
+        );
+        let sandbox = worker_settings(argv)["sandbox"].clone();
+        assert_eq!(sandbox["enabled"], true);
+        assert_eq!(sandbox["autoAllowBashIfSandboxed"], true);
+        assert_eq!(sandbox["allowUnsandboxedCommands"], false);
+        assert_eq!(sandbox["failIfUnavailable"], true);
+    }
+
+    fn assert_no_claude_worker_baseline(argv: &[String]) {
+        assert!(
+            !argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-mode", "acceptEdits"])
+        );
+        assert!(
+            !argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-prompts", "none"])
+        );
+    }
+
     #[test]
     fn extracts_final_responses_and_sessions_from_native_json_streams() {
         for (body, expected) in [
@@ -463,6 +526,7 @@ mod tests {
                 .iter()
                 .any(|arg| arg == "--permission-mode")
         );
+        assert_no_claude_worker_baseline(&claude_call.record.argv);
 
         let same_claude_session = Session {
             adapter: "claude".into(),
@@ -489,11 +553,7 @@ mod tests {
             "--"
         );
         assert_eq!(claude_resumed.record.args, Vec::<String>::new());
-        assert_eq!(
-            claude_resumed.record.argv
-                [claude_resumed.record.argv.len() - 6..claude_resumed.record.argv.len() - 2],
-            ["--permission-mode", "acceptEdits", "--allowedTools", "Bash"]
-        );
+        assert_claude_worker_baseline(&claude_resumed.record.argv);
     }
 
     #[test]
@@ -523,6 +583,18 @@ mod tests {
             work.record
                 .argv
                 .windows(2)
+                .any(|pair| pair == ["--permission-prompts", "none"])
+        );
+        assert!(
+            work.record
+                .argv
+                .windows(2)
+                .any(|pair| pair[0] == "--settings")
+        );
+        assert!(
+            work.record
+                .argv
+                .windows(2)
                 .any(|pair| pair == ["--allowedTools", "Bash"])
         );
         assert!(
@@ -535,8 +607,8 @@ mod tests {
         let defaults_end = work
             .record
             .argv
-            .windows(2)
-            .position(|pair| pair == ["--allowedTools", "Bash"])
+            .iter()
+            .position(|arg| arg == "--settings")
             .unwrap()
             + 2;
         assert!(defaults_end < prompt_separator);
@@ -550,6 +622,19 @@ mod tests {
             vec!["--allowed-tools".into(), "Read".into()],
             vec!["--allowed-tools=Read".into()],
             vec!["--dangerously-skip-permissions".into()],
+            vec!["--allow-dangerously-skip-permissions".into()],
+            vec!["--permission-prompts".into(), "host".into()],
+            vec![
+                "--permission-prompt-tool".into(),
+                "permissions.approve".into(),
+            ],
+            vec![
+                "--settings".into(),
+                r#"{"sandbox":{"enabled":false}}"#.into(),
+            ],
+            vec!["--settings={\"sandbox\":{\"enabled\":false}}".into()],
+            vec!["--setting-sources".into(), "project".into()],
+            vec!["--setting-sources=project".into()],
         ];
         for args in explicit_policies {
             let config = RoleConfig {
@@ -562,28 +647,31 @@ mod tests {
                 prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
                     .unwrap();
             assert_eq!(invocation.record.args, args);
-            for default_pair in [
-                ["--permission-mode", "acceptEdits"],
-                ["--allowedTools", "Bash"],
-            ] {
-                let configured_count = args
-                    .windows(2)
-                    .filter(|pair| pair[0] == default_pair[0] && pair[1] == default_pair[1])
-                    .count();
-                let invocation_count = invocation
-                    .record
-                    .argv
-                    .windows(2)
-                    .filter(|pair| pair[0] == default_pair[0] && pair[1] == default_pair[1])
-                    .count();
-                assert_eq!(invocation_count, configured_count, "{args:?}");
-            }
+            assert_no_claude_worker_baseline(&invocation.record.argv);
             let separator = invocation
                 .record
                 .argv
                 .iter()
                 .position(|arg| arg == "--")
                 .unwrap();
+            let native_args_start = separator - args.len();
+            assert!(
+                !invocation.record.argv[..native_args_start]
+                    .iter()
+                    .any(|arg| matches!(
+                        arg.as_str(),
+                        "--permission-mode"
+                            | "--allowedTools"
+                            | "--allowed-tools"
+                            | "--dangerously-skip-permissions"
+                            | "--allow-dangerously-skip-permissions"
+                            | "--permission-prompts"
+                            | "--permission-prompt-tool"
+                            | "--settings"
+                            | "--setting-sources"
+                    )),
+                "native policy args should suppress every injected Worker setting: {args:?}"
+            );
             assert_eq!(
                 &invocation.record.argv[separator - args.len()..separator],
                 args
@@ -593,13 +681,10 @@ mod tests {
         for gate in [Gate::Review, Gate::Audit, Gate::Unblock] {
             let invocation =
                 prepare_invocation(&restricted, &gate, "prompt", Path::new("/repo"), None).unwrap();
-            assert!(
-                !invocation
-                    .record
-                    .argv
-                    .iter()
-                    .any(|arg| { matches!(arg.as_str(), "--permission-mode" | "--allowedTools") })
-            );
+            assert!(!invocation.record.argv.iter().any(|arg| {
+                matches!(arg.as_str(), "--permission-mode" | "--permission-prompts")
+            }));
+            assert_no_claude_worker_baseline(&invocation.record.argv);
             assert!(
                 invocation
                     .record
@@ -607,6 +692,38 @@ mod tests {
                     .windows(2)
                     .any(|pair| pair == ["--disallowedTools", "Bash(git push *)"])
             );
+        }
+    }
+
+    #[test]
+    fn worker_permission_baseline_does_not_change_codex_or_cursor_invocations() {
+        for adapter in ["codex", "cursor"] {
+            let config = RoleConfig {
+                adapter: adapter.into(),
+                model: None,
+                effort: None,
+                args: None,
+            };
+            let invocation =
+                prepare_invocation(&config, &Gate::Work, "prompt", Path::new("/repo"), None)
+                    .unwrap();
+            assert_no_claude_worker_baseline(&invocation.record.argv);
+            assert!(!invocation.record.argv.iter().any(|arg| {
+                matches!(
+                    arg.as_str(),
+                    "--permission-mode" | "--permission-prompts" | "--settings"
+                )
+            }));
+            if adapter == "codex" {
+                assert_eq!(&invocation.record.argv[..2], ["exec", "--json"]);
+                assert_eq!(invocation.record.argv.last().unwrap(), "prompt");
+            } else {
+                assert_eq!(
+                    &invocation.record.argv[..3],
+                    ["-p", "--output-format", "stream-json"]
+                );
+                assert_eq!(invocation.record.argv.last().unwrap(), "prompt");
+            }
         }
     }
 

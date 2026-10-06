@@ -1192,6 +1192,14 @@ mod tests {
     use crate::adapter::InvocationOutcome;
     use std::sync::Mutex;
 
+    fn claude_worker_sandbox_settings(argv: &[String]) -> serde_json::Value {
+        let settings = argv
+            .windows(2)
+            .find(|pair| pair[0] == "--settings")
+            .expect("Claude Worker baseline has --settings");
+        serde_json::from_str(&settings[1]).expect("Claude Worker settings are valid JSON")
+    }
+
     #[test]
     fn gate_results_require_the_exact_action_and_report() {
         let good = r#"{"action_id":"a-1","outcome":"complete","report":"done","commit":"abc"}"#;
@@ -1670,16 +1678,27 @@ mod tests {
                 records[index]
                     .argv
                     .windows(2)
+                    .any(|pair| pair == ["--permission-prompts", "none"])
+            );
+            let sandbox = claude_worker_sandbox_settings(&records[index].argv)["sandbox"].clone();
+            assert_eq!(sandbox["enabled"], true);
+            assert_eq!(sandbox["autoAllowBashIfSandboxed"], true);
+            assert_eq!(sandbox["allowUnsandboxedCommands"], false);
+            assert_eq!(sandbox["failIfUnavailable"], true);
+            assert!(
+                records[index]
+                    .argv
+                    .windows(2)
                     .any(|pair| pair == ["--allowedTools", "Bash"])
             );
         }
         for index in [1, 3, 4] {
-            assert!(
-                !records[index]
-                    .argv
-                    .iter()
-                    .any(|arg| { matches!(arg.as_str(), "--permission-mode" | "--allowedTools") })
-            );
+            assert!(!records[index].argv.iter().any(|arg| {
+                matches!(
+                    arg.as_str(),
+                    "--permission-mode" | "--permission-prompts" | "--settings"
+                )
+            }));
         }
         let unblock = packet_from_record(&records[1]);
         assert_eq!(unblock["unblock_context"]["gate"], "work");
@@ -1989,6 +2008,17 @@ mod tests {
                 .windows(2)
                 .any(|pair| pair == ["--permission-mode", "acceptEdits"])
         );
+        assert!(
+            fake.records()[0]
+                .argv
+                .windows(2)
+                .any(|pair| pair == ["--permission-prompts", "none"])
+        );
+        let sandbox = claude_worker_sandbox_settings(&fake.records()[0].argv)["sandbox"].clone();
+        assert_eq!(sandbox["enabled"], true);
+        assert_eq!(sandbox["autoAllowBashIfSandboxed"], true);
+        assert_eq!(sandbox["allowUnsandboxedCommands"], false);
+        assert_eq!(sandbox["failIfUnavailable"], true);
         let state = load_state(&fixture.build_dir.join(STATE_FILE)).unwrap();
         assert_eq!(state.status, Status::Stopped);
         assert_eq!(state.stop.unwrap().kind, StopKind::ResetRequired);
