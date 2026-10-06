@@ -34,7 +34,7 @@ For standalone Audit, write `assessment.json` outside immutable published bundle
 
 `state` is `pass`, `fail`, `unknown`, or `not_applicable`. Pass and fail rows need evidence. Failures also need a correction. `not_applicable` also needs evidence establishing that the binding requirement's stated condition is false for this implementation/context. It must not waive an unconditional requirement because the assessor thinks it should not matter. For an unconditional binding requirement, use `pass`, `fail`, or `unknown`.
 
-Use `unknown` for a covered requirement whose compliance cannot be determined. Keep that row-level status distinct from the existing `blocked` action envelope, which is only for when assessment cannot proceed at all.
+Use `unknown` for a covered requirement whose compliance cannot be determined; `audit finalize` derives `BLOCKED` from it. Standalone Audit has no separate `blocked` outcome. If the assessment cannot responsibly be performed at all, report that limitation and stop rather than inventing an assessment.
 
 Rust, not the assessor, derives the verdict: any failure is `CHANGES_REQUIRED`; any unknown or missing row is `BLOCKED`; otherwise pass or justified not-applicable rows produce `PASS`. A partial or blocked implementation cannot pass.
 
