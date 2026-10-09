@@ -20,7 +20,8 @@ orchestrate --root /absolute/orchestration/root investigate inspect --run invest
 ```
 
 Fresh lanes run concurrently in separate directories under the orchestration root. Like Discovery,
-they have frozen source checkouts and scratch space; tests and experiments belong in scratch.
+they have frozen source checkouts and scratch space. Tests and experiments require authorization
+in the frozen request and belong in scratch; inspection-only requests grant no execution authority.
 Lane instructions prohibit source/Git changes, peer-report access and production mutation. This
 uses the existing local-agent trust model, with no added OS sandbox or lock system.
 
@@ -29,6 +30,17 @@ normalized command receipts, graph validation, manifests, reconciliation and rep
 captured execution and testimony remain distinct. Mechanical validation establishes graph integrity,
 not semantic truth. Native tool records without complete exit/completion facts cannot establish a
 passing runtime check.
+
+Each lane and reconciler call has a positive `provider_timeout_seconds` limit (default 1800 seconds).
+Timed-out calls retain partial transport and count as failed attempts, so stalled providers cannot
+indefinitely block aggregation. Build retains its existing execution behavior.
+
+Git submodule paths and pinned commits appear in `repository.submodules`. Dependency contents are
+not fetched or frozen; evidence about those contents remains unavailable.
+
+A lane's `validation.json` describes graph validation before cohort checks. Final eligibility lives
+in `cohort-validation.json` and `result.lanes`; a valid graph can be excluded for a duplicate session.
+Sealed lane artifacts remain unchanged, and offline inspection verifies both stages.
 
 Runs have no automatic retry or resume. A fresh retry creates a separate cohort/run. Partial files
 survive failures; offline inspect reports an unfinished run as INCOMPLETE/INCONCLUSIVE. All output

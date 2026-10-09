@@ -401,6 +401,7 @@ impl adapter::InvocationApi for FakeInvoker {
             Some(format!("session-{gate}"))
         };
         Ok(InvocationOutcome {
+            timed_out: false,
             success: !failure,
             exit_code: Some(if failure { 7 } else { 0 }),
             final_response: if failure || missing {

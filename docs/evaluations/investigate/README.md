@@ -45,3 +45,49 @@ Live wide aggregation, live conformance against a real effort, and a full Cursor
 not exercised. Wide/open-ended and conformance behavior were verified with scripted provider
 outputs. These smoke checks establish transport/controller interoperability on a small fixture;
 semantic evidence quality remains attributed to the assessing agents.
+
+## Focused correction review
+
+The correction pass independently reviewed feature baseline `ead11bc991ee040e2e08a4c0ad2664fa77218754`
+against `main` and the current issue brief. Classification and corrections:
+
+- **Stalled providers — confirmed.** A scripted three-lane run sealed two valid graphs but never
+  aggregated while the third provider stayed active, despite `min_completed = 1`. Investigation
+  native calls now have a positive `provider_timeout_seconds` limit, default 1800 seconds, for
+  both lanes and reconciliation. Deadline handling includes blocked stdin delivery. Timed-out
+  calls fail without votes and retain partial native transport. Unix invocation process groups
+  are stopped so ordinary tool children cannot continue writing. Build does not opt into the
+  deadline or process-group policy; its wait and session behavior remain unchanged. No retry,
+  resume, cancellation service or scheduler was added.
+- **Execution authority — guidance ambiguity confirmed.** The blanket permission to run tests
+  freely did not distinguish inspection-only requests. No unauthorized live execution was
+  established by this review. Embedded guidance now makes the frozen request authoritative:
+  tests/builds/executable probes require relevant bounded authorization, and absent or unclear
+  authority means inspection plus an explicit verification limitation. The default conformance
+  question and example request explicitly use inspection-only authority. Native permission flags
+  do not expand it. This remains an instruction boundary, without a new security architecture.
+- **Submodules — confirmed.** A minimal local parent repository with a committed submodule failed
+  freezing with `source is not a file: deps/component`. Inventory now separates blob contents from
+  gitlinks. Parent files remain frozen; exact submodule path/commit identities are retained in
+  `repository.submodules`, with dependency contents explicitly unavailable to both agents and
+  in the report. There is no fetch, recursive checkout or dependency manager.
+- **Lane versus cohort eligibility — intentional stages, ambiguous label.** Duplicate-session
+  lanes were correctly excluded and offline inspection recomputed that exclusion. Counts were
+  not wrong. Sealed lane records now say `stage = lane_graph` and `graph_valid`; cohort records
+  and result lanes retain final eligibility and its rejection reason. Old lane `eligible` fields
+  remain readable as lane-stage validation. Immutable graphs and manifests are not rewritten.
+- **Skill count — confirmed documentation omission.** README now lists `investigate`. A staging
+  installation produced seven dispatchers, and the README list exactly matched the installed set.
+
+Regression checks exercised real scripted subprocesses for stalled lanes, unmet completion minima,
+stalled reconciliation, retained transport and offline inspection; a blocked-input/process-group
+probe; a pinned local submodule; graph-valid but cohort-invalid duplicate sessions; and legacy
+configuration encoding. Full workspace tests, formatting and strict all-target Clippy pass,
+including existing Audit and Build regressions. Parallel test fixture directory names now include
+an atomic sequence after an observed timestamp collision.
+
+The original sealed five-lane live smoke was inspected offline with providers unavailable and
+returned an identical structured result, without rewriting its records. No fresh live model run
+was performed in this correction pass. Unix timeout cleanup was exercised on macOS; Windows
+termination and descendants deliberately escaping their process group were not exercised or
+claimed as an isolation guarantee. No remaining merge blocker was identified by these checks.

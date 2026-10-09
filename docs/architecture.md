@@ -87,4 +87,11 @@ Native transport and argv mechanics live in core's provider module; Build retain
 policy and worker session continuity. Lanes are concurrent, single-invocation trusted local agents
 following Discovery's source/scratch instructions. There is no new OS sandbox, file-lock system,
 automatic retry or resume. Retained native receipts establish actual execution facts where the
-adapter supplies them; missing facts remain testimony/unknown.
+adapter supplies them; missing facts remain testimony/unknown. The frozen request governs execution
+authority; inspection-only requests do not permit executable verification. Parent repository files
+are frozen while submodule gitlink identities are recorded without fetching dependency contents.
+
+Only investigation calls opt into a per-provider deadline (default 30 minutes). Expired calls retain
+partial transport and fail without a vote; ordinary subprocesses in their Unix process group are
+stopped too. Build retains its existing wait/session policy. Sealed lane graph validation precedes
+cohort eligibility checks; final eligibility is recorded separately, without rewriting valid graphs.

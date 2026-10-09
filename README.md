@@ -69,6 +69,7 @@ discovery
 reconcile
 audit
 build
+investigate
 ```
 
 See the [installation guide](docs/guides/agent-installation.md) for the manual fallback.

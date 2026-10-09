@@ -20,13 +20,15 @@ struct Fixture {
 }
 impl Fixture {
     fn new(mode: &str, question: &str, go_threshold: usize, min_completed: usize) -> Self {
+        static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
         let base = std::env::temp_dir().join(format!(
-            "orchestrate-investigate-test-{}-{}",
+            "orchestrate-investigate-test-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&base).unwrap();
         let root = base.join("store");
@@ -209,6 +211,7 @@ impl InvocationApi for Fake {
         }
         if self.malformed == Some(number) {
             return Ok(InvocationOutcome {
+                timed_out: false,
                 success: true,
                 exit_code: Some(0),
                 final_response: Some("{malformed".into()),
@@ -267,6 +270,7 @@ impl InvocationApi for Fake {
 }
 fn outcome(value: Value, transport: String) -> InvocationOutcome {
     InvocationOutcome {
+        timed_out: false,
         success: true,
         exit_code: Some(0),
         final_response: Some(serde_json::to_string(&value).unwrap()),
@@ -495,6 +499,15 @@ fn configuration_rejects_wrong_modes_thresholds_and_native_options_before_launch
     bad.max_parallel = Some(0);
     assert!(bad.validate().is_err());
     let mut bad = valid.clone();
+    bad.provider_timeout_seconds = 0;
+    assert!(bad.validate().is_err());
+    assert_eq!(valid.provider_timeout_seconds, 1800);
+    let legacy_config = encode(&valid).unwrap();
+    assert!(!String::from_utf8_lossy(&legacy_config).contains("provider_timeout_seconds"));
+    let decoded: Config = decode(&legacy_config).unwrap();
+    assert_eq!(decoded.provider_timeout_seconds, 1800);
+    assert_eq!(encode(&decoded).unwrap(), legacy_config);
+    let mut bad = valid.clone();
     bad.completion.min_completed = Some(6);
     assert!(bad.validate().is_err());
     let mut bad = valid.clone();
@@ -711,6 +724,23 @@ fn reused_observed_sessions_are_ineligible_without_duplicate_votes() {
     });
     assert_eq!(result.invalid, 5);
     assert_eq!(result.votes.as_ref().unwrap().go, 0);
+    let validation: Value = decode(
+        &fs::read(
+            fixture
+                .run_dir(&result)
+                .join("lanes/lane-0001/validation.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(validation["stage"], "lane_graph");
+    assert_eq!(validation["graph_valid"], true);
+    assert!(validation.get("eligible").is_none());
+    let cohort: Vec<LaneRecord> =
+        decode(&fs::read(fixture.run_dir(&result).join("cohort-validation.json")).unwrap())
+            .unwrap();
+    assert_eq!(cohort[0].state, LaneState::Invalid);
+    assert!(cohort[0].detail.contains("repeated observed"));
     assert_eq!(inspect(&fixture.root, &result.run_id).unwrap().invalid, 5);
 }
 #[test]
@@ -827,4 +857,99 @@ fn wide_keeps_scopes_contradictions_and_rejection_history_without_inventing_orig
     );
     reconciliation.findings[negative].origins = vec!["lane-0005/invented-finding".into()];
     assert!(aggregation::validate(&reconciliation, &result.input_digest, &graphs).is_err());
+}
+
+#[test]
+fn repository_submodules_freeze_gitlink_identity_without_claiming_dependency_contents() {
+    let mut fixture = Fixture::new("wide", "binary", 0, 5);
+    let component = fixture.base.join("component");
+    fs::create_dir(&component).unwrap();
+    storage::git(&component, &["init", "-q"]).unwrap();
+    storage::git(
+        &component,
+        &["config", "user.email", "fixture@example.test"],
+    )
+    .unwrap();
+    storage::git(&component, &["config", "user.name", "Fixture"]).unwrap();
+    fs::write(
+        component.join("lib.txt"),
+        "dependency bytes are not frozen\n",
+    )
+    .unwrap();
+    storage::git(&component, &["add", "."]).unwrap();
+    storage::git(&component, &["commit", "-qm", "component"]).unwrap();
+    let component_commit = storage::git(&component, &["rev-parse", "HEAD"]).unwrap();
+    storage::git(
+        &fixture.repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            component.to_str().unwrap(),
+            "deps/component space",
+        ],
+    )
+    .unwrap();
+    storage::git(&fixture.repo, &["commit", "-qam", "pin component"]).unwrap();
+    fixture.commit = storage::git(&fixture.repo, &["rev-parse", "HEAD"]).unwrap();
+    let (mut config, _) = config::load(&fixture.config).unwrap();
+    config.revision = Some(fixture.commit.clone());
+    fs::write(&fixture.config, toml::to_string(&config).unwrap()).unwrap();
+    let fake = Fake::default();
+    let result = fixture.run(&fake);
+    assert_eq!(result.completion, Completion::Complete);
+    assert_eq!(result.completed, 5);
+    assert!(
+        result
+            .limitations
+            .iter()
+            .any(|l| l.contains("deps/component space") && l.contains("not frozen"))
+    );
+    let frozen = fixture.run_dir(&result).join("frozen");
+    let identity: InputIdentity = decode(&fs::read(frozen.join("identity.json")).unwrap()).unwrap();
+    let repository = identity.repository.unwrap();
+    assert_eq!(
+        repository.submodules["deps/component space"],
+        component_commit
+    );
+    assert!(repository.files.contains_key(".gitmodules"));
+    assert!(!repository.files.contains_key("deps/component space"));
+    assert!(!frozen.join("source/deps/component space/lib.txt").exists());
+    for (_, lane_input) in fake.calls.lock().unwrap().iter() {
+        assert_eq!(
+            lane_input["repository"]["submodules"]["deps/component space"],
+            component_commit
+        );
+    }
+    let reconciliation_input: Value =
+        decode(&fs::read(fixture.run_dir(&result).join("reconciler/evidence.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        reconciliation_input["repository"]["submodules"]["deps/component space"],
+        component_commit
+    );
+    let mut graph = base_graph();
+    graph.observations[0].kind = ObservationKind::Inspection;
+    graph.observations[0].source = Some(SourceLocation {
+        source_id: "repository".into(),
+        path: "deps/component space/lib.txt".into(),
+        line: Some(1),
+    });
+    assert!(
+        evidence::validate_graph(
+            &mut graph,
+            "lane",
+            "digest",
+            &QuestionKind::Binary,
+            &BTreeMap::from([(
+                "repository".into(),
+                (frozen.join("source"), repository.files)
+            )]),
+            &[],
+            None
+        )
+        .is_err()
+    );
+    assert_eq!(inspect(&fixture.root, &result.run_id).unwrap().completed, 5);
 }

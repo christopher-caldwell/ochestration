@@ -56,13 +56,32 @@ pub fn read(root: &Path, relative: &str) -> Result<Vec<u8>> {
     }
     Ok(fs::read(path)?)
 }
-pub fn inventory(repo: &Path, commit: &str) -> Result<BTreeMap<String, String>> {
-    let listing = git(repo, &["ls-tree", "-r", "--name-only", "-z", commit])?;
-    listing
-        .split('\0')
-        .filter(|p| !p.is_empty())
-        .map(|path| Ok((path.to_owned(), digest_bytes(&read(repo, path)?))))
-        .collect()
+pub struct Inventory {
+    pub files: BTreeMap<String, String>,
+    pub submodules: BTreeMap<String, String>,
+}
+pub fn inventory(repo: &Path, commit: &str) -> Result<Inventory> {
+    let listing = git(repo, &["ls-tree", "-r", "-z", commit])?;
+    let mut inventory = Inventory {
+        files: BTreeMap::new(),
+        submodules: BTreeMap::new(),
+    };
+    for entry in listing.split('\0').filter(|e| !e.is_empty()) {
+        let (metadata, path) = entry.split_once('\t').context("invalid Git tree entry")?;
+        ensure!(safe(path), "unsafe source path {path:?}");
+        let fields: Vec<_> = metadata.split_whitespace().collect();
+        ensure!(fields.len() == 3, "invalid Git tree metadata");
+        if fields[0] == "160000" && fields[1] == "commit" {
+            // A gitlink pins a dependency commit, not file bytes. Do not fetch or recurse.
+            inventory.submodules.insert(path.into(), fields[2].into());
+        } else {
+            ensure!(fields[1] == "blob", "unsupported Git tree entry {path}");
+            inventory
+                .files
+                .insert(path.into(), digest_bytes(&read(repo, path)?));
+        }
+    }
+    Ok(inventory)
 }
 pub fn verify_inventory(root: &Path, files: &BTreeMap<String, String>) -> Result<()> {
     for (path, digest) in files {

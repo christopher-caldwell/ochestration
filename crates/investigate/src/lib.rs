@@ -22,7 +22,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 type Sources = BTreeMap<String, (PathBuf, BTreeMap<String, String>)>;
@@ -32,6 +32,8 @@ struct RepositoryIdentity {
     commit: String,
     tree: String,
     files: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    submodules: BTreeMap<String, String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -143,6 +145,11 @@ pub fn run_with_invoker(
     let mut lanes = Vec::new();
     let mut graphs = Vec::new();
     let mut limitations = Vec::new();
+    if let Some(repository) = &frozen.identity.repository {
+        for (path, commit) in &repository.submodules {
+            limitations.push(format!("Submodule {path} is pinned at {commit}; its contents were not frozen or made available for inspection."));
+        }
+    }
     for (batch, group) in providers.chunks(parallel).enumerate() {
         let outcomes = std::thread::scope(|scope| {
             let handles: Vec<_> = group
@@ -283,7 +290,10 @@ struct Prepared {
     implementation: Option<Implementation>,
 }
 fn prepare_inputs(store: &Store, config: &Config) -> Result<Prepared> {
-    let request = match &config.request { Some(path)=>String::from_utf8(fs::read(path).context("cannot read request")?)?,None=>"Determine whether this exact registered Implementation satisfies every binding requirement of this exact adopted Reconciled Discovery. Assess the full text, acceptance and conditions; technical suggestions are advisory.".into() };
+    let request = match &config.request {
+        Some(path) => String::from_utf8(fs::read(path).context("cannot read request")?)?,
+        None => "Determine whether this exact registered Implementation satisfies every binding requirement of this exact adopted Reconciled Discovery. Assess the full text, acceptance and conditions; technical suggestions are advisory. Use inspection only; executable verification requires authorization in a supplied request.".into(),
+    };
     ensure!(!request.trim().is_empty(), "request cannot be empty");
     let inputs = config
         .inputs
@@ -422,11 +432,12 @@ fn freeze(
         let source = root.join("source");
         prepare_source_checkout(repo, &source, commit, tree)?;
         let inventory = storage::inventory(&source, commit)?;
-        files.extend(inventory.keys().map(|p| format!("source/{p}")));
+        files.extend(inventory.files.keys().map(|p| format!("source/{p}")));
         Some(RepositoryIdentity {
             commit: commit.clone(),
             tree: tree.clone(),
-            files: inventory,
+            files: inventory.files,
+            submodules: inventory.submodules,
         })
     } else {
         None
@@ -521,7 +532,9 @@ fn assess_lane(
     } else {
         vec![]
     };
-    let plan = prepare_invocation(provider, &prompt, root, None, &policy)?.with_stdin_prompt()?;
+    let plan = prepare_invocation(provider, &prompt, root, None, &policy)?
+        .with_stdin_prompt()?
+        .with_timeout(Duration::from_secs(config.provider_timeout_seconds));
     storage::json(&root.join("invocation.json"), &plan.record)?;
     let mut state = LaneState::Failed;
     let detail;
@@ -544,7 +557,14 @@ fn assess_lane(
             let captured = evidence::receipts(&outcome.stdout);
             storage::json(&root.join("receipts.json"), &captured)?;
             if !outcome.success {
-                detail = format!("provider failed with exit code {:?}", outcome.exit_code);
+                detail = if outcome.timed_out {
+                    format!(
+                        "provider timed out after {} seconds; retained output is partial and contributes no vote",
+                        config.provider_timeout_seconds
+                    )
+                } else {
+                    format!("provider failed with exit code {:?}", outcome.exit_code)
+                };
             } else {
                 let validation = (|| -> Result<LaneGraph> {
                     let response = outcome
@@ -597,7 +617,7 @@ fn assess_lane(
     }
     storage::json(
         &root.join("validation.json"),
-        &serde_json::json!({"eligible":state==LaneState::Completed,"state":state,"detail":detail,"limitations":notes}),
+        &serde_json::json!({"stage":"lane_graph","graph_valid":state==LaneState::Completed,"state":state,"detail":detail,"limitations":notes}),
     )?;
     let mut files = vec![
         "lane-input.json".into(),
@@ -705,7 +725,10 @@ fn reconcile(
             ))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    let evidence = serde_json::json!({"input_digest":frozen.digest,"request":frozen.request,"authority":authority,"lanes":lane_evidence});
+    let repository = frozen.identity.repository.as_ref().map(|repository| {
+        serde_json::json!({"commit":repository.commit,"tree":repository.tree,"submodules":repository.submodules})
+    });
+    let evidence = serde_json::json!({"input_digest":frozen.digest,"request":frozen.request,"repository":repository,"authority":authority,"lanes":lane_evidence});
     storage::json(&root.join("evidence.json"), &evidence)?;
     let prompt = format!(
         "{}\n\nInput digest: {}. Frozen request:\n{}\n\nSealed evidence:\n{}\n",
@@ -721,11 +744,17 @@ fn reconcile(
         vec![]
     };
     let plan = prepare_invocation(&config.reconciler, &prompt, &root, None, &policy)?
-        .with_stdin_prompt()?;
+        .with_stdin_prompt()?
+        .with_timeout(Duration::from_secs(config.provider_timeout_seconds));
     storage::json(&root.join("invocation.json"), &plan.record)?;
     let validation = (|| -> Result<Reconciliation> {
         let outcome = invoker.invoke(&plan, &root, &root)?;
         persist_outcome(&root, &outcome)?;
+        ensure!(
+            !outcome.timed_out,
+            "reconciler provider timed out after {} seconds; retained output is partial",
+            config.provider_timeout_seconds
+        );
         ensure!(outcome.success, "reconciler provider failed");
         // Synthesis may read the bounded evidence, but may not execute a new investigation.
         ensure!(
@@ -903,8 +932,13 @@ pub fn inspect(root: &Path, run_id: &str) -> Result<InvestigationResult> {
         let validation: serde_json::Value = decode(&storage::read(&lane, "validation.json")?)?;
         let state: LaneState = serde_json::from_value(validation["state"].clone())?;
         ensure!(
-            validation["eligible"].as_bool() == Some(state == LaneState::Completed),
-            "contradictory lane eligibility"
+            validation
+                .get("graph_valid")
+                .or_else(|| validation.get("eligible"))
+                .and_then(|v| v.as_bool())
+                == Some(state == LaneState::Completed)
+                && validation.get("stage").is_none_or(|v| v == "lane_graph"),
+            "contradictory lane graph validation"
         );
         let graph = if state == LaneState::Completed {
             ensure!(

@@ -33,8 +33,21 @@ pub struct Config {
     pub consensus: Option<ConsensusConfig>,
     #[serde(default)]
     pub max_parallel: Option<usize>,
+    /// Bound each native lane/reconciler attempt; there is no automatic retry.
+    // Omit the default so existing version-1 resolved config digests stay inspectable.
+    #[serde(
+        default = "default_provider_timeout_seconds",
+        skip_serializing_if = "is_default_provider_timeout"
+    )]
+    pub provider_timeout_seconds: u64,
     #[serde(default)]
     pub audit: Option<AuditInputs>,
+}
+fn default_provider_timeout_seconds() -> u64 {
+    30 * 60
+}
+fn is_default_provider_timeout(value: &u64) -> bool {
+    *value == default_provider_timeout_seconds()
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +121,15 @@ impl Config {
         ensure!(
             self.max_parallel.is_none_or(|n| n > 0),
             "max_parallel must be positive"
+        );
+        ensure!(
+            self.provider_timeout_seconds > 0
+                && std::time::Instant::now()
+                    .checked_add(std::time::Duration::from_secs(
+                        self.provider_timeout_seconds
+                    ))
+                    .is_some(),
+            "provider_timeout_seconds must be positive and within the supported clock range"
         );
         ensure!(
             self.audit.is_some() || self.request.is_some(),

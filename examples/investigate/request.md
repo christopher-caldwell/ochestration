@@ -3,3 +3,6 @@ and material verification limits. For a binary request, answer whether the state
 is established sufficiently to GO. For an open-ended request, retain distinct evidence-backed
 findings without inventing a vote. If no product source or verification evidence is supplied,
 report that limitation rather than asserting that an implementation is correct.
+
+This example authorizes source inspection only. To permit execution, replace this paragraph with
+the relevant bounded tests or probes authorized for your actual investigation.

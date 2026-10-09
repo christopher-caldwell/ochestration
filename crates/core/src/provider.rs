@@ -6,6 +6,7 @@ use std::{
     io::Write,
     path::Path,
     process::{Command, Stdio},
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Debug)]
@@ -23,6 +24,8 @@ pub struct InvocationRecord {
     pub argv: Vec<String>,
     pub cwd: String,
     pub session_in: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -33,6 +36,11 @@ pub struct InvocationOutcome {
     pub observed_session: Option<String>,
     pub stdout: String,
     pub stderr: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub timed_out: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +49,7 @@ pub struct InvocationPlan {
     program: &'static str,
     argv: Vec<String>,
     stdin_prompt: Option<String>,
+    timeout: Option<Duration>,
 }
 
 /// The sole provider seam: invoke one prepared call and return process and
@@ -149,12 +158,14 @@ pub fn prepare_invocation(
         argv: argv.clone(),
         cwd: cwd.to_string_lossy().into_owned(),
         session_in: reusable.map(|session| session.id.clone()),
+        timeout_seconds: None,
     };
     Ok(InvocationPlan {
         record,
         program,
         argv,
         stdin_prompt: None,
+        timeout: None,
     })
 }
 
@@ -204,7 +215,8 @@ fn invoke_process(
         .with_context(|| format!("cannot create {}", stdout_path.display()))?;
     let stderr_file = File::create(&stderr_path)
         .with_context(|| format!("cannot create {}", stderr_path.display()))?;
-    let mut child = Command::new(plan.program)
+    let mut command = Command::new(plan.program);
+    command
         .args(&plan.argv)
         .current_dir(cwd)
         .stdin(if plan.stdin_prompt.is_some() {
@@ -213,36 +225,121 @@ fn invoke_process(
             Stdio::inherit()
         })
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file))
+        .stderr(Stdio::from(stderr_file));
+    // Only bounded investigation calls own a process group. Build's process policy is unchanged.
+    #[cfg(unix)]
+    if plan.timeout.is_some() {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let deadline = plan
+        .timeout
+        .map(|timeout| {
+            Instant::now()
+                .checked_add(timeout)
+                .context("provider timeout exceeds the supported clock range")
+        })
+        .transpose()?;
+    let mut child = command
         .spawn()
         .with_context(|| format!("could not start {}", plan.program))?;
-    let stdin_result = if let Some(prompt) = &plan.stdin_prompt {
-        child
-            .stdin
-            .take()
-            .context("provider stdin missing")?
-            .write_all(prompt.as_bytes())
+    let (status, stdin_result, timed_out) = if let Some(deadline) = deadline {
+        // Delivering a large prompt must not block the deadline if the provider stops reading stdin.
+        let writer = plan.stdin_prompt.as_ref().map(|prompt| {
+            let mut stdin = child.stdin.take().expect("piped provider stdin");
+            let prompt = prompt.clone();
+            std::thread::spawn(move || stdin.write_all(prompt.as_bytes()))
+        });
+        let mut status = None;
+        let timed_out = loop {
+            if status.is_none() {
+                status = child
+                    .try_wait()
+                    .with_context(|| format!("could not wait for {}", plan.program))?;
+            }
+            if status.is_some() && writer.as_ref().is_none_or(|w| w.is_finished()) {
+                break false;
+            }
+            if Instant::now() >= deadline {
+                #[cfg(unix)]
+                {
+                    use nix::{
+                        sys::signal::{Signal, killpg},
+                        unistd::Pid,
+                    };
+                    // Kill the invocation's group so its ordinary tool subprocesses cannot keep running.
+                    let pid = i32::try_from(child.id())
+                        .context("provider PID exceeds supported range")?;
+                    if let Err(error) = killpg(Pid::from_raw(pid), Signal::SIGKILL)
+                        && error != nix::errno::Errno::ESRCH
+                    {
+                        return Err(error)
+                            .context("could not stop timed-out provider process group");
+                    }
+                }
+                #[cfg(not(unix))]
+                if status.is_none() {
+                    child.kill().context("could not stop timed-out provider")?;
+                }
+                if status.is_none() {
+                    status = Some(child.wait().context("could not reap timed-out provider")?);
+                }
+                break true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let stdin_result = if let Some(writer) = writer {
+            // Do not let an escaped descendant holding the pipe defeat a completed deadline.
+            if timed_out {
+                Ok(())
+            } else {
+                writer.join().expect("provider stdin writer panicked")
+            }
+        } else {
+            Ok(())
+        };
+        (
+            status.expect("provider process completed"),
+            stdin_result,
+            timed_out,
+        )
     } else {
-        Ok(())
+        let stdin_result = if let Some(prompt) = &plan.stdin_prompt {
+            child
+                .stdin
+                .take()
+                .context("provider stdin missing")?
+                .write_all(prompt.as_bytes())
+        } else {
+            Ok(())
+        };
+        let status = child
+            .wait()
+            .with_context(|| format!("could not wait for {}", plan.program))?;
+        (status, stdin_result, false)
     };
-    let status = child
-        .wait()
-        .with_context(|| format!("could not wait for {}", plan.program))?;
     stdin_result.context("could not deliver provider prompt on stdin")?;
     let stdout_bytes =
         fs::read(&stdout_path).with_context(|| format!("cannot read {}", stdout_path.display()))?;
     let stderr_bytes =
         fs::read(&stderr_path).with_context(|| format!("cannot read {}", stderr_path.display()))?;
     let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+    let mut stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+    if timed_out {
+        stderr.push_str(&format!(
+            "\norchestrate: provider invocation timed out after {} seconds\n",
+            plan.record.timeout_seconds.expect("bounded invocation")
+        ));
+    }
     let (final_response, observed_session) = extract_response(&stdout);
     Ok(InvocationOutcome {
-        success: status.success(),
+        success: status.success() && !timed_out,
         exit_code: status.code(),
         final_response,
         observed_session,
         stdout,
         stderr,
+        timed_out,
     })
 }
 
@@ -385,6 +482,12 @@ impl InvocationPlan {
     pub fn program(&self) -> &str {
         self.program
     }
+    /// Opt-in per-call bound. Callers without this setting retain the existing unbounded execution.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.record.timeout_seconds = Some(timeout.as_secs());
+        self.timeout = Some(timeout);
+        self
+    }
     /// Investigation packets can exceed native argv limits. Build's existing argv transport stays unchanged.
     pub fn with_stdin_prompt(mut self) -> Result<Self> {
         if matches!(self.record.adapter.as_str(), "codex" | "claude") {
@@ -402,5 +505,49 @@ impl InvocationPlan {
             );
         }
         Ok(self)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn timeout_bounds_blocked_stdin_and_stops_ordinary_tool_children() {
+        let root = std::env::temp_dir().join(format!(
+            "orchestrate-provider-timeout-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let config = ProviderConfig {
+            adapter: "codex".into(),
+            ..Default::default()
+        };
+        let unbounded = prepare_invocation(&config, "prompt", &root, None, &[]).unwrap();
+        assert!(unbounded.timeout.is_none());
+        assert!(unbounded.record.timeout_seconds.is_none());
+        let mut plan = unbounded.with_timeout(Duration::from_secs(1));
+        plan.program = "sh";
+        plan.argv = vec!["-c".into(), "printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"partial-session\"}'; (sleep 2; printf 'leaked' > leaked.txt) & sleep 60".into()];
+        // Larger than the pipe: a provider which never reads cannot stall prompt delivery forever.
+        plan.stdin_prompt = Some("x".repeat(1024 * 1024));
+        let start = Instant::now();
+        let outcome = invoke_process(&plan, &root, &root).unwrap();
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(outcome.timed_out && !outcome.success);
+        assert_eq!(outcome.observed_session.as_deref(), Some("partial-session"));
+        assert!(outcome.final_response.is_none());
+        assert!(outcome.stderr.contains("timed out after 1 seconds"));
+        assert!(root.join("transport.jsonl").exists());
+        std::thread::sleep(Duration::from_millis(1300));
+        assert!(
+            !root.join("leaked.txt").exists(),
+            "timed-out ordinary tool child kept running"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }
