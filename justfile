@@ -9,15 +9,15 @@ install-only-cli:
 # Refresh only the CLI from this checkout.
 update-only-cli: install-only-cli
 
-# Install the six checked-in skills (defaults to Codex's personal skill directory).
+# Install the seven checked-in skills (defaults to Codex's personal skill directory).
 install-skills destination=skill_dir:
     ./scripts/install-skills.sh "$1"
 
-# Refresh the six checked-in skills.
+# Refresh the seven checked-in skills.
 update-skills destination=skill_dir: (install-skills destination)
 
-# Install the CLI and six skills.
+# Install the CLI and seven skills.
 install-cli: install-only-cli install-skills
 
-# Refresh the CLI and six skills.
+# Refresh the CLI and seven skills.
 update-cli: update-only-cli update-skills

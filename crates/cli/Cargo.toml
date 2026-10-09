@@ -12,6 +12,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 orchestrate-audit = { path = "../audit" }
+orchestrate-investigate = { path = "../investigate" }
 orchestrate-build = { path = "../build" }
 orchestrate-reconcile = { path = "../reconcile" }
 orchestrate-contracts = { path = "../contracts" }
@@ -30,3 +31,9 @@ symlink = "0.1.0"
 
 [lints]
 workspace = true
+
+[target."cfg(unix)".dependencies]
+signal-hook = { version = "0.4", default-features = false }
+
+[target."cfg(unix)".dev-dependencies]
+nix = { version = "0.30.1", default-features = false, features = ["signal", "process"] }
