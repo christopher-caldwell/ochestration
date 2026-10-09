@@ -13,8 +13,8 @@ Open the Orchestrate checkout in the model host you want to use — Codex, Claud
 and send:
 
 > Install Orchestrate from this checkout for the model host I am using. Install the CLI and exactly
-> these six checked-in skills: `prep-discovery-ticket`, `prep-discovery-freeform`,
-> `discovery`, `reconcile`, `build`, and `audit`. Preserve unrelated existing skills and verify the
+> these seven checked-in skills: `prep-discovery-ticket`, `prep-discovery-freeform`,
+> `discovery`, `reconcile`, `build`, `audit`, and `investigate`. Preserve unrelated existing skills and verify the
 > installation when finished.
 
 The model should follow this guide and perform the commands itself.
@@ -28,6 +28,7 @@ discovery
 reconcile
 build
 audit
+investigate
 ```
 
 That is all you need for normal use. The standalone `audit` skill is public and installed. Work,
@@ -54,7 +55,7 @@ Then run the checked-in installer with the current host's personal skill directo
 ./scripts/install-skills.sh "/absolute/path/to/host/skills"
 ```
 
-It replaces exactly these six directories from `skills/`:
+It replaces exactly these seven directories from `skills/`:
 
 ```text
 prep-discovery-ticket
@@ -63,6 +64,7 @@ discovery
 reconcile
 build
 audit
+investigate
 ```
 
 Typical skill directories are:
@@ -74,7 +76,7 @@ Cursor      ~/.cursor/skills
 ```
 
 The installer preserves unrelated skills, replaces existing Orchestrate dispatchers, verifies all
-six, and does not create backup skill directories.
+seven, and does not create backup skill directories.
 
 ## Verification
 

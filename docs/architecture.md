@@ -69,3 +69,22 @@ Every launch records the selected native adapter config and exact argv before at
 Adoption binds one exact Reconciled artifact. Implementation records the start and target commits/trees and names Adoption and Reconciled ancestry; it may be registered by the Build controller or through the public registration workflow. Audit publishes immutable assessment plus derived verdict. Bundle manifests hash payloads and record parent refs; the journal is diagnostic, while artifacts and Build state are authoritative. Store format and artifact schema version 6 remain independent of the breaking Build-local schemas.
 
 `orchestrate lineage` walks artifact parentage: Discovery artifacts → Reconciled Discovery → Adoption → Implementation → Audit. The Effort separately holds the original request, frozen context/constraints, and baseline. Together these provide traceability from user intent to the reviewed implementation; the original request is not an additional artifact in the lineage command’s graph.
+
+## Opt-in investigations
+
+`investigate run --config <path>` freezes one request/config/input identity, launches a fixed cohort
+of fresh provider sessions in separate source/scratch workspaces, validates and seals each review
+evidence graph, then calls one fresh evidence reconciler. Consensus votes are calculated by Rust
+against the configured cohort; evidence recommendations separately preserve material objections.
+Wide retains distinct supported, contested, insufficient and rejected findings with provenance.
+
+Run-local version-1 manifests and results live under `<root>/investigations/<run-id>` and do not
+change store/artifact schema 6 or canonical Audit lineage. Exact conformance refs use the existing
+all-requirement coverage contract and verdict derivation without publishing an Audit. Generic
+prompt/artifact reviews need no Effort or Build state. Inspect is offline and read-only.
+
+Native transport and argv mechanics live in core's provider module; Build retains its own gate
+policy and worker session continuity. Lanes are concurrent, single-invocation trusted local agents
+following Discovery's source/scratch instructions. There is no new OS sandbox, file-lock system,
+automatic retry or resume. Retained native receipts establish actual execution facts where the
+adapter supplies them; missing facts remain testimony/unknown.

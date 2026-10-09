@@ -1,0 +1,25 @@
+schema_version = 1
+mode = "consensus"
+question_kind = "binary"
+request = "./request.md"
+# Repository input is optional; supply a full commit ID when enabling it.
+# target = "../repository"
+# revision = "FULL_COMMIT_ID"
+max_parallel = 5
+
+[[lanes]]
+adapter = "codex"
+count = 3
+
+[[lanes]]
+adapter = "claude"
+count = 2
+
+[reconciler]
+adapter = "codex"
+
+[completion]
+min_completed = 5
+
+[consensus]
+min_go_votes = 4

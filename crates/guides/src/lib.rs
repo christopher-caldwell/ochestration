@@ -11,6 +11,10 @@ pub const PREP_DISCOVERY_FREEFORM: &str =
 pub const DISCOVERY: &str = include_str!("../resources/guides/discovery.md");
 pub const RECONCILE: &str = include_str!("../resources/guides/reconcile.md");
 pub const BUILD: &str = include_str!("../resources/guides/build.md");
+pub const INVESTIGATE: &str = include_str!("../resources/guides/investigate.md");
+pub const INVESTIGATOR: &str = include_str!("../resources/guides/investigator.md");
+pub const INVESTIGATION_RECONCILER: &str =
+    include_str!("../resources/guides/investigation-reconciler.md");
 pub const AUDIT: &str = include_str!("../resources/guides/audit.md");
 
 /// Internal Build-controller roles. They are not installed skills.
@@ -26,6 +30,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("audit", AUDIT),
     ("build", BUILD),
     ("discovery", DISCOVERY),
+    ("investigate", INVESTIGATE),
     ("prep-discovery-freeform", PREP_DISCOVERY_FREEFORM),
     ("prep-discovery-ticket", PREP_DISCOVERY_TICKET),
     ("reconcile", RECONCILE),

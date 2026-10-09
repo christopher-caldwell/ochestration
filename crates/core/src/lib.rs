@@ -481,26 +481,12 @@ impl Store {
         let source = root.join("source");
         let project = self.project_for(effort)?;
         fs::create_dir_all(&root)?;
-        let cloned = Command::new("git")
-            .args(["clone", "--shared", "--no-checkout"])
-            .arg(&project.canonical_locator)
-            .arg(&source)
-            .output()?;
-        ensure!(
-            cloned.status.success(),
-            "git clone failed: {}",
-            String::from_utf8_lossy(&cloned.stderr)
-        );
-        let checkout = Command::new("git")
-            .args(["checkout", "--detach", &run.baseline_commit])
-            .current_dir(&source)
-            .output()?;
-        ensure!(
-            checkout.status.success(),
-            "git checkout failed: {}",
-            String::from_utf8_lossy(&checkout.stderr)
-        );
-        verify_git_checkout(&source, &run.baseline_commit, &run.baseline_tree)?;
+        prepare_source_checkout(
+            &project.canonical_locator,
+            &source,
+            &run.baseline_commit,
+            &run.baseline_tree,
+        )?;
         write_json_atomic(&root.join("run.json"), run)?;
         write_bytes_sync(&root.join("request.md"), effort.context.request.as_bytes())?;
         write_json_atomic(
@@ -1152,4 +1138,32 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
+}
+
+/// Native provider transport shared by explicitly invoked workflows.
+pub mod provider;
+
+/// Prepare an independent pinned checkout; agents put generated work in sibling scratch directories.
+pub fn prepare_source_checkout(repo: &Path, source: &Path, commit: &str, tree: &str) -> Result<()> {
+    let cloned = Command::new("git")
+        .args(["clone", "--shared", "--no-checkout"])
+        .arg(repo)
+        .arg(source)
+        .output()?;
+    ensure!(
+        cloned.status.success(),
+        "git clone failed: {}",
+        String::from_utf8_lossy(&cloned.stderr)
+    );
+    let checkout = Command::new("git")
+        .args(["checkout", "--detach", commit])
+        .current_dir(source)
+        .output()?;
+    ensure!(
+        checkout.status.success(),
+        "git checkout failed: {}",
+        String::from_utf8_lossy(&checkout.stderr)
+    );
+    verify_git_checkout(source, commit, tree)?;
+    Ok(())
 }

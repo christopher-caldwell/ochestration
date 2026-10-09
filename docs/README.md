@@ -11,11 +11,13 @@
 - [Discovery](guides/discovery.md) — run independent investigations and collect their outputs.
 - [Reconcile](guides/reconcile.md) — turn selected Discovery outputs into one final contract.
 - [Build and Audit](guides/build-and-audit.md) — run Build through Implementation registration, then independent Audit; also covers standalone Audit.
+- [Investigations](guides/investigate.md) — opt-in consensus and wide evidence-backed reviews.
 - [Ticket workflow](guides/ticket-workflow.md) — compact ticket-specific checklist.
 
 ## Reference
 
 - [Architecture](architecture.md) — authority boundaries, artifacts, and deterministic rules.
+- [Investigation verification](evaluations/investigate/README.md) — scripted coverage and the bounded live multi-provider smoke, including transport limitations.
 - [Build reliability lessons](evaluations/build-reliability/lessons.md) — why the controller is checkpointed and historical state is not migrated.
 - [Discovery/Reconcile and guidance evaluation procedure](evaluations/discovery-reconcile/README.md) — output-only evaluations for Discovery, Reconcile, Planner, Chat Discovery, and bounded Work/Review/Audit evidence cases, with an operator-only rubric. Raw evaluation inputs and records remain external; the issue-29 effort has a sanitized checked-in status summary.
 

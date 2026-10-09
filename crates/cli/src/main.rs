@@ -54,6 +54,10 @@ enum Command {
         #[command(subcommand)]
         command: ImplementationCommand,
     },
+    Investigate {
+        #[command(subcommand)]
+        command: InvestigateCommand,
+    },
     Audit {
         #[command(subcommand)]
         command: AuditCommand,
@@ -242,6 +246,25 @@ enum ImplementationCommand {
     },
 }
 #[derive(Subcommand)]
+enum InvestigateCommand {
+    /// Print the embedded investigation guide without initializing storage.
+    Guide,
+    /// Launch one explicit, fixed-cohort investigation from a versioned config.
+    Run {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify retained artifacts and inspect a run offline; never resumes it.
+    Inspect {
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+#[derive(Subcommand)]
 enum AuditCommand {
     /// Print the current embedded Audit guide and exit.
     Guide,
@@ -285,6 +308,28 @@ fn run() -> Result<()> {
         return Ok(());
     }
     match command {
+        Command::Investigate { command } => {
+            let root = normalized_absolute_path(&root.unwrap_or_else(default_root))?;
+            let (result, as_json) = match command {
+                InvestigateCommand::Run { config, json } => {
+                    (orchestrate_investigate::run(&root, &config)?, json)
+                }
+                InvestigateCommand::Inspect { run, json } => {
+                    (orchestrate_investigate::inspect(&root, &run)?, json)
+                }
+                InvestigateCommand::Guide => unreachable!("guide handled before storage"),
+            };
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                print!("{}", orchestrate_investigate::aggregation::render(&result));
+                println!(
+                    "\nArtifacts: {}",
+                    root.join("investigations").join(&result.run_id).display()
+                );
+            }
+            Ok(())
+        }
         Command::Import { bundle, json } => {
             let repo = std::env::current_dir()?;
             let canonical_repo = fs::canonicalize(&repo)?;
@@ -420,7 +465,8 @@ fn initialize(store: &Store, input: InitInput) -> Result<()> {
 
 fn execute(store: Store, command: Command, include_store_root: bool) -> Result<()> {
     match command {
-        Command::Init(_)
+        Command::Investigate { .. }
+        | Command::Init(_)
         | Command::Import { .. }
         | Command::Discovery {
             command: Discovery::Guide,
@@ -782,6 +828,9 @@ impl Command {
     /// Guide lookup must not open a store, so `run` handles it before any other work.
     fn guide_action(&self) -> Option<&'static str> {
         match self {
+            Command::Investigate {
+                command: InvestigateCommand::Guide,
+            } => Some("investigate"),
             Command::Discovery {
                 command: Discovery::Guide,
             } => Some("discovery"),

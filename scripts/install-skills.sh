@@ -20,14 +20,14 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository=$(CDPATH= cd -- "$script_dir/.." && pwd)
 mkdir -p "$destination"
 
-for skill in prep-discovery-ticket prep-discovery-freeform discovery reconcile build audit; do
+for skill in prep-discovery-ticket prep-discovery-freeform discovery reconcile build audit investigate; do
   target="$destination/$skill"
   rm -rf -- "$target"
   cp -R "$repository/skills/$skill" "$target"
 done
 
-for skill in prep-discovery-ticket prep-discovery-freeform discovery reconcile build audit; do
+for skill in prep-discovery-ticket prep-discovery-freeform discovery reconcile build audit investigate; do
   test -f "$destination/$skill/SKILL.md"
 done
 
-echo "Installed six Orchestrate dispatchers in $destination"
+echo "Installed seven Orchestrate dispatchers in $destination"

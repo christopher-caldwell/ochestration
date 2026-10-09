@@ -1,0 +1,12 @@
+schema_version = 1
+mode = "wide"
+question_kind = "open_ended"
+request = "./request.md"
+# inputs = ["./captured-evidence.txt"]
+
+[[lanes]]
+adapter = "codex"
+count = 3
+
+[reconciler]
+adapter = "codex"

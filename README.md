@@ -57,7 +57,7 @@ its embedded guidance; reinstall skills when dispatcher behavior changes.
 Open this checkout in Codex, Claude Code, or Cursor and tell the model:
 
 > Install Orchestrate from this checkout for the model host I am using. Follow
-> `docs/guides/agent-installation.md`, install the CLI and all six checked-in user-facing skills, and verify
+> `docs/guides/agent-installation.md`, install the CLI and all seven checked-in user-facing skills, and verify
 > the installation.
 
 The user-facing skills are:
@@ -73,7 +73,7 @@ build
 
 See the [installation guide](docs/guides/agent-installation.md) for the manual fallback.
 
-With `just` installed, run `just install-cli` from this checkout to install the CLI and six skills
+With `just` installed, run `just install-cli` from this checkout to install the CLI and seven skills
 for Codex. Run `just update-cli` to refresh both from the current checkout, including CLI changes
 that keep the same version number. Use `just install-only-cli` or `just update-only-cli` for the
 binary alone, and `just install-skills` or `just update-skills` for the skills alone. Skill recipes
@@ -109,3 +109,10 @@ schema versions; historical Build state is intentionally not migrated.
 
 For deeper details, see the [documentation index](docs/README.md) and
 [architecture](docs/architecture.md).
+
+## Opt-in multi-lane investigations
+
+Run `orchestrate investigate guide` to prepare concurrent independent reviews in consensus or wide
+mode. [The investigation guide](docs/guides/investigate.md) describes pinned inputs, evidence graphs,
+minority objections and retained local artifacts. This workflow preserves existing Audit and Build
+authority and is never inserted into Build automatically.
