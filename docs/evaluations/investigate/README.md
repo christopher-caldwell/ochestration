@@ -91,3 +91,53 @@ returned an identical structured result, without rewriting its records. No fresh
 was performed in this correction pass. Unix timeout cleanup was exercised on macOS; Windows
 termination and descendants deliberately escaping their process group were not exercised or
 claimed as an isolation guarantee. No remaining merge blocker was identified by these checks.
+
+## Interrupted provider cleanup correction
+
+The finding was independently reproduced against `2f61ab061d1de15ac8dc4e5ba69c76d77284a1e9`
+with the actual CLI and a scripted native provider, without live models or external services.
+Two concurrent providers each launched an ordinary tool child; both continuously wrote heartbeat
+files. Sending SIGINT to the controller's process group, SIGINT directly to the controller, or
+SIGTERM directly to the controller terminated Orchestrate while both providers and both tools
+continued writing during the observation window. A one-second provider deadline stopped the same
+process groups correctly. Retained partial transport survived, and offline inspection already
+reported the interrupted runs as INCOMPLETE/INCONCLUSIVE.
+
+The regression mechanism was the separate Unix process group introduced for bounded investigation
+calls: terminal SIGINT targets the controller's foreground group, and controller termination does
+not invoke the provider's timeout loop or automatically terminate its children. There was no
+SIGINT/SIGTERM handler. Literal pseudo-terminal Ctrl+C probes were inconclusive on this host;
+controller-group SIGINT supplies the confirmed signal-delivery reproduction.
+
+Only the CLI's Unix `investigate run` branch now installs SIGINT/SIGTERM flag handlers, before lane
+threads start. An explicitly supplied shared signal flag reaches bounded provider plans through
+the existing invocation seam. Each active call polls it and reuses timeout's group SIGKILL and
+direct-child reaping, without joining a blocked stdin writer. Interruption is a failed attempt;
+raw transport/stderr remain on disk. The coordinator joins active lanes, stops further batches and
+reconciliation, and leaves the run without a final manifest. Previously sealed lane evidence is
+retained, and existing offline inspection returns INCOMPLETE/INCONCLUSIVE. A typed interruption
+error identifies the signal and available artifact directory; the CLI returns 130 or 143.
+Repeated signals update the flag without bypassing cleanup. Existing entry points, invocation
+traits, artifact schemas, Build execution/session behavior and canonical Audit authority remain
+unchanged. Library entry points do not install process-global signal handlers.
+
+Verification on macOS with Rust/Cargo 1.94.0:
+
+- `cargo test --locked --workspace`: 177 tests passed, zero failures or ignored tests; doc-tests
+  also passed. This includes the existing Build/Audit regressions and unchanged successful native
+  investigation/evidence round-trip and timeout assertions.
+- Five new CLI regression tests exercise controller-group SIGINT, direct SIGINT/SIGTERM, concurrent
+  lanes, blocked stdin, repeated signals, reconciliation interruption, completed evidence plus
+  queued lanes with `min_completed` already met, and isolation between two running investigations.
+  Assertions verify conventional exits, reaped providers, stopped tool heartbeats, retained raw
+  transport/stderr, absent final manifests, skipped launches, and honest offline inspection.
+- A new core test interrupts after the direct provider has exited and been reaped while an ordinary
+  child still holds stdin open; the child cannot perform its scheduled write. An already-set flag
+  also prevents a later provider launch.
+- `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`,
+  and `git diff --check`: passed.
+
+No automatic retry, resume, process supervisor or persistent registry was added. SIGKILL, OS
+crashes, SIGHUP and descendants deliberately escaping their process group remain outside the
+cleanup guarantee. Windows termination behavior is unchanged and was not exercised. No live
+provider billing was incurred.

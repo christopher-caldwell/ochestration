@@ -5,7 +5,11 @@ use std::{
     fs::{self, File},
     io::Write,
     path::Path,
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -50,6 +54,7 @@ pub struct InvocationPlan {
     argv: Vec<String>,
     stdin_prompt: Option<String>,
     timeout: Option<Duration>,
+    interrupt_signal: Option<Arc<AtomicUsize>>,
 }
 
 /// The sole provider seam: invoke one prepared call and return process and
@@ -166,6 +171,7 @@ pub fn prepare_invocation(
         argv,
         stdin_prompt: None,
         timeout: None,
+        interrupt_signal: None,
     })
 }
 
@@ -240,6 +246,17 @@ fn invoke_process(
                 .context("provider timeout exceeds the supported clock range")
         })
         .transpose()?;
+    let interrupted = || {
+        plan.interrupt_signal
+            .as_ref()
+            .map_or(0, |signal| signal.load(Ordering::Relaxed))
+    };
+    if deadline.is_some() {
+        ensure!(
+            interrupted() == 0,
+            "provider invocation interrupted before launch"
+        );
+    }
     let mut child = command
         .spawn()
         .with_context(|| format!("could not start {}", plan.program))?;
@@ -252,6 +269,14 @@ fn invoke_process(
         });
         let mut status = None;
         let timed_out = loop {
+            let signal = interrupted();
+            if signal != 0 {
+                stop_bounded_provider(&mut child, &mut status)?;
+                // Raw transport is already on disk. Do not join a blocked stdin writer.
+                bail!(
+                    "provider invocation interrupted by signal {signal}; retained output is partial"
+                );
+            }
             if status.is_none() {
                 status = child
                     .try_wait()
@@ -261,29 +286,7 @@ fn invoke_process(
                 break false;
             }
             if Instant::now() >= deadline {
-                #[cfg(unix)]
-                {
-                    use nix::{
-                        sys::signal::{Signal, killpg},
-                        unistd::Pid,
-                    };
-                    // Kill the invocation's group so its ordinary tool subprocesses cannot keep running.
-                    let pid = i32::try_from(child.id())
-                        .context("provider PID exceeds supported range")?;
-                    if let Err(error) = killpg(Pid::from_raw(pid), Signal::SIGKILL)
-                        && error != nix::errno::Errno::ESRCH
-                    {
-                        return Err(error)
-                            .context("could not stop timed-out provider process group");
-                    }
-                }
-                #[cfg(not(unix))]
-                if status.is_none() {
-                    child.kill().context("could not stop timed-out provider")?;
-                }
-                if status.is_none() {
-                    status = Some(child.wait().context("could not reap timed-out provider")?);
-                }
+                stop_bounded_provider(&mut child, &mut status)?;
                 break true;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -341,6 +344,31 @@ fn invoke_process(
         stderr,
         timed_out,
     })
+}
+
+fn stop_bounded_provider(child: &mut Child, status: &mut Option<ExitStatus>) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use nix::{
+            sys::signal::{Signal, killpg},
+            unistd::Pid,
+        };
+        // The group can still own tools after the direct provider has exited.
+        let pid = i32::try_from(child.id()).context("provider PID exceeds supported range")?;
+        if let Err(error) = killpg(Pid::from_raw(pid), Signal::SIGKILL)
+            && error != nix::errno::Errno::ESRCH
+        {
+            return Err(error).context("could not stop bounded provider process group");
+        }
+    }
+    #[cfg(not(unix))]
+    if status.is_none() {
+        child.kill().context("could not stop bounded provider")?;
+    }
+    if status.is_none() {
+        *status = Some(child.wait().context("could not reap bounded provider")?);
+    }
+    Ok(())
 }
 
 pub fn validate_native_args(adapter: &str, args: &[String]) -> Result<()> {
@@ -479,6 +507,11 @@ pub struct ProviderConfig {
     pub args: Option<Vec<String>>,
 }
 impl InvocationPlan {
+    /// Poll an explicitly supplied signal flag during bounded calls only.
+    pub fn with_interrupt_signal(mut self, signal: Arc<AtomicUsize>) -> Self {
+        self.interrupt_signal = Some(signal);
+        self
+    }
     pub fn program(&self) -> &str {
         self.program
     }
@@ -548,6 +581,76 @@ mod tests {
             !root.join("leaked.txt").exists(),
             "timed-out ordinary tool child kept running"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interruption_stops_tools_even_after_provider_exit_and_prevents_later_launch() {
+        use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
+        let root = std::env::temp_dir().join(format!(
+            "orchestrate-provider-interrupt-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let signal = Arc::new(AtomicUsize::new(0));
+        let mut plan = prepare_invocation(
+            &ProviderConfig {
+                adapter: "codex".into(),
+                ..Default::default()
+            },
+            "prompt",
+            &root,
+            None,
+            &[],
+        )
+        .unwrap()
+        .with_timeout(Duration::from_secs(5))
+        .with_interrupt_signal(Arc::clone(&signal));
+        plan.program = "sh";
+        plan.argv = vec!["-c".into(), "printf '%s' $$ > provider.pid; printf 'partial transport'; (sleep 1; printf leaked > leaked.txt) <&0 & exit 0".into()];
+        plan.stdin_prompt = Some("x".repeat(1024 * 1024));
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                loop {
+                    if let Ok(pid) = fs::read_to_string(root.join("provider.pid"))
+                        && let Ok(pid) = pid.parse::<i32>()
+                        && kill(Pid::from_raw(pid), None) == Err(Errno::ESRCH)
+                    {
+                        signal.store(2, Ordering::Relaxed);
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "direct provider was not reaped");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            });
+            let error = invoke_process(&plan, &root, &root).unwrap_err();
+            assert!(
+                error.to_string().contains("interrupted by signal 2"),
+                "{error:#}"
+            );
+        });
+        assert_eq!(
+            fs::read_to_string(root.join("transport.jsonl")).unwrap(),
+            "partial transport"
+        );
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(
+            !root.join("leaked.txt").exists(),
+            "ordinary child outlived interruption"
+        );
+        plan.argv = vec!["-c".into(), "printf launched > launched.txt".into()];
+        assert!(
+            invoke_process(&plan, &root, &root)
+                .unwrap_err()
+                .to_string()
+                .contains("before launch")
+        );
+        assert!(!root.join("launched.txt").exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

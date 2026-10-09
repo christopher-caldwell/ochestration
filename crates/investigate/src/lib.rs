@@ -22,6 +22,10 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -69,11 +73,86 @@ struct LaneInput<'a> {
 pub fn run(root: &Path, config_path: &Path) -> Result<InvestigationResult> {
     run_with_invoker(root, config_path, &ProcessInvocationApi)
 }
+
+/// An explicit interruption request; signal handlers belong to the executable, not this library.
+#[derive(Debug)]
+pub struct InvestigationInterrupted {
+    pub signal: usize,
+    pub artifact_dir: Option<PathBuf>,
+}
+impl std::fmt::Display for InvestigationInterrupted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "investigation interrupted by signal {}", self.signal)?;
+        if let Some(path) = &self.artifact_dir {
+            write!(f, "; retained incomplete artifacts: {}", path.display())?;
+        }
+        Ok(())
+    }
+}
+impl std::error::Error for InvestigationInterrupted {}
+
+pub fn run_with_interrupt(
+    root: &Path,
+    config_path: &Path,
+    signal: Arc<AtomicUsize>,
+) -> Result<InvestigationResult> {
+    run_inner(root, config_path, &ProcessInvocationApi, Some(signal))
+}
+
+struct InterruptibleInvoker<'a> {
+    inner: &'a dyn InvocationApi,
+    signal: Option<Arc<AtomicUsize>>,
+}
+impl InvocationApi for InterruptibleInvoker<'_> {
+    fn invoke(
+        &self,
+        plan: &orchestrate_core::provider::InvocationPlan,
+        cwd: &Path,
+        action_dir: &Path,
+    ) -> Result<InvocationOutcome> {
+        if let Some(signal) = &self.signal {
+            self.inner.invoke(
+                &plan.clone().with_interrupt_signal(Arc::clone(signal)),
+                cwd,
+                action_dir,
+            )
+        } else {
+            self.inner.invoke(plan, cwd, action_dir)
+        }
+    }
+}
+
 pub fn run_with_invoker(
     root: &Path,
     config_path: &Path,
     invoker: &dyn InvocationApi,
 ) -> Result<InvestigationResult> {
+    run_inner(root, config_path, invoker, None)
+}
+
+fn run_inner(
+    root: &Path,
+    config_path: &Path,
+    invoker: &dyn InvocationApi,
+    signal: Option<Arc<AtomicUsize>>,
+) -> Result<InvestigationResult> {
+    let check_interrupt = |artifact_dir: Option<&Path>| -> Result<()> {
+        let signal = signal.as_ref().map_or(0, |s| s.load(Ordering::Relaxed));
+        if signal != 0 {
+            return Err(InvestigationInterrupted {
+                signal,
+                artifact_dir: artifact_dir.map(Path::to_owned),
+            }
+            .into());
+        }
+        Ok(())
+    };
+    check_interrupt(None)?;
+    let wrapped = InterruptibleInvoker {
+        inner: invoker,
+        signal: signal.clone(),
+    };
+    let invoker: &dyn InvocationApi = &wrapped;
     let (config, raw_config) = config::load(config_path)?;
     ensure!(root.is_absolute(), "orchestration root must be absolute");
     // Check the root boundary before creating any product-local files.
@@ -151,6 +230,7 @@ pub fn run_with_invoker(
         }
     }
     for (batch, group) in providers.chunks(parallel).enumerate() {
+        check_interrupt(Some(&run_dir))?;
         let outcomes = std::thread::scope(|scope| {
             let handles: Vec<_> = group
                 .iter()
@@ -201,6 +281,8 @@ pub fn run_with_invoker(
                 }),
             }
         }
+        // Scoped threads have joined: every active provider has stopped before we abort.
+        check_interrupt(Some(&run_dir))?;
     }
     // Unrecorded attempts are failed, never silently omitted from the cohort.
     for index in 0..providers.len() {
@@ -231,6 +313,7 @@ pub fn run_with_invoker(
         }
         Ok(())
     })();
+    check_interrupt(Some(&run_dir))?;
     let reconciliation = if let Err(error) = barrier {
         limitations.push(format!("integrity barrier rejected aggregation: {error:#}"));
         None
@@ -248,6 +331,7 @@ pub fn run_with_invoker(
             }
         }
     };
+    check_interrupt(Some(&run_dir))?;
     let result = aggregation::result(
         &config,
         &run_id,
@@ -277,7 +361,12 @@ pub fn run_with_invoker(
     if run_dir.join("reconciler/manifest.json").exists() {
         final_files.push("reconciler/manifest.json".into());
     }
+    check_interrupt(Some(&run_dir))?;
     storage::seal(&run_dir, &run_id, &frozen.digest, &final_files, &parents)?;
+    if let Err(error) = check_interrupt(Some(&run_dir)) {
+        fs::remove_file(run_dir.join("manifest.json"))?;
+        return Err(error);
+    }
     Ok(result)
 }
 

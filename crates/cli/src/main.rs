@@ -294,7 +294,10 @@ struct ProvenanceArgs {
 fn main() {
     if let Err(error) = run() {
         eprintln!("orchestrate: {error:#}");
-        std::process::exit(2)
+        let code = error
+            .downcast_ref::<orchestrate_investigate::InvestigationInterrupted>()
+            .map_or(2, |interrupted| 128 + interrupted.signal as i32);
+        std::process::exit(code)
     }
 }
 fn run() -> Result<()> {
@@ -312,7 +315,23 @@ fn run() -> Result<()> {
             let root = normalized_absolute_path(&root.unwrap_or_else(default_root))?;
             let (result, as_json) = match command {
                 InvestigateCommand::Run { config, json } => {
-                    (orchestrate_investigate::run(&root, &config)?, json)
+                    #[cfg(unix)]
+                    let result = {
+                        use signal_hook::{
+                            consts::{SIGINT, SIGTERM},
+                            flag,
+                        };
+                        use std::sync::{Arc, atomic::AtomicUsize};
+                        // This executable runs one command. Build and offline inspection never install these hooks.
+                        let signal = Arc::new(AtomicUsize::new(0));
+                        for number in [SIGINT, SIGTERM] {
+                            flag::register_usize(number, Arc::clone(&signal), number as usize)?;
+                        }
+                        orchestrate_investigate::run_with_interrupt(&root, &config, signal)?
+                    };
+                    #[cfg(not(unix))]
+                    let result = orchestrate_investigate::run(&root, &config)?;
+                    (result, json)
                 }
                 InvestigateCommand::Inspect { run, json } => {
                     (orchestrate_investigate::inspect(&root, &run)?, json)

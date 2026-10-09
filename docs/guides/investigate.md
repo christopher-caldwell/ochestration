@@ -35,6 +35,14 @@ Each lane and reconciler call has a positive `provider_timeout_seconds` limit (d
 Timed-out calls retain partial transport and count as failed attempts, so stalled providers cannot
 indefinitely block aggregation. Build retains its existing execution behavior.
 
+On Unix, `investigate run` handles Ctrl+C (SIGINT) and normal process termination (SIGTERM).
+It stops active provider process groups and their ordinary tool children before returning exit
+status 130 or 143, respectively. Queued lanes and reconciliation are not launched after interruption.
+Partial transport and completed lane evidence remain available; offline inspection reports the
+unfinished run as INCOMPLETE/INCONCLUSIVE. Repeated interrupts do not bypass provider cleanup.
+This does not cover SIGKILL, OS crashes, SIGHUP, or descendants escaping their process group;
+Windows termination behavior is unchanged.
+
 Git submodule paths and pinned commits appear in `repository.submodules`. Dependency contents are
 not fetched or frozen; evidence about those contents remains unavailable.
 
