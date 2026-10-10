@@ -26,6 +26,10 @@ implementation-ready Discoveries.
 If Orchestrate is already installed, use the [run guide](docs/guides/run.md). It is the canonical
 day-to-day workflow.
 
+For a bounded synthetic bug, the [Discovery walkthrough](docs/guides/discovery-walkthrough.md)
+shows the lifecycle, independent information flow, and replay instructions using a disposable
+target repository.
+
 The short version is:
 
 ```text

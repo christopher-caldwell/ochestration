@@ -4,6 +4,8 @@
 
 - [Run guide](guides/run.md) — **the normal workflow; use this first**.
 - [Installation](guides/agent-installation.md) — easiest agent-led install plus manual fallback.
+- [Discovery walkthrough](guides/discovery-walkthrough.md) — a bounded synthetic bug, diagrams,
+  and a manual procedure ending at Reconcile.
 
 ## Phase guides
 
