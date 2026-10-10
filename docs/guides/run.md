@@ -2,6 +2,9 @@
 
 This is the canonical day-to-day workflow.
 
+For a bounded synthetic bug and diagrams of the workflow, read the
+[Discovery walkthrough](discovery-walkthrough.md). Its replay procedure ends at Reconcile.
+
 You normally interact with Orchestrate through model skills. Skills load current guidance from the
 installed CLI when their operation calls for it. `$build` is the exception: it never invokes any
 Orchestrate CLI command by itself. A human must explicitly authorize each Build CLI operation; the
